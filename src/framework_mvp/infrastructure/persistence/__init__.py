@@ -1,0 +1,1 @@
+"""Persistenzadapter der Projektverwaltung."""

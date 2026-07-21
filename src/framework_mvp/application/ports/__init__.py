@@ -1,0 +1,1 @@
+"""Schnittstellen zu technischen Adaptern."""

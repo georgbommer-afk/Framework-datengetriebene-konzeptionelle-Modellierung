@@ -1,0 +1,1 @@
+"""Anwendungsfälle des Framework-MVP."""
