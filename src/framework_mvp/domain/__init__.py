@@ -1,0 +1,1 @@
+"""Domänenlogik des Framework-MVP."""
