@@ -1,0 +1,41 @@
+# Virtuelle Python-Umgebung
+.venv/
+venv/
+
+# Python-Zwischendateien
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test- und Analyseartefakte
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+htmlcov/
+
+# Build- und Paketdateien
+build/
+dist/
+*.egg-info/
+
+# Lokale Konfiguration und Zugangsdaten
+.env
+.env.*
+!.env.example
+
+# Lokale Arbeits- und Fallstudiendaten
+workspace/
+data/private/
+
+# Temporäre Dateien und Protokolle
+*.log
+*.tmp
+*.bak
+
+# macOS
+.DS_Store
+
+# Visual Studio Code
+.vscode/
