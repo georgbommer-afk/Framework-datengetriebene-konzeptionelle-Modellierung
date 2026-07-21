@@ -36,6 +36,50 @@ Das Projekt umfasst die Verarbeitung historischer Ereignisdaten bis zur Erstellu
 
 Das erzeugte konzeptionelle Modell kann jedoch als Grundlage für eine spätere technische Umsetzung in einer Simulationssoftware dienen.
 
+## Anwendung ausführen
+
+### Voraussetzungen
+
+Benötigt werden Python 3.12 bis einschließlich Python 3.14 und eine lokale virtuelle
+Python-Umgebung. Das Repository enthält die Abhängigkeitsdefinitionen in `pyproject.toml`.
+
+### Installation
+
+Unter macOS und Linux kann die Entwicklungsumgebung beispielsweise so eingerichtet werden:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+```
+
+Unter Windows wird die virtuelle Umgebung mit `.venv\Scripts\activate` aktiviert.
+
+### Start
+
+Die deutschsprachige Projektverwaltung wird mit folgendem Befehl gestartet:
+
+```bash
+python -m streamlit run streamlit_app.py
+```
+
+Die Anwendung legt Projektmetadaten standardmäßig in der lokalen SQLite-Datenbank
+`workspace/framework_mvp.sqlite` ab. Ein abweichender Pfad kann über die Umgebungsvariable
+`FRAMEWORK_MVP_DB_PATH` festgelegt werden. Das Verzeichnis `workspace/` wird nicht versioniert und
+muss bei Bedarf separat gesichert werden.
+
+### Tests und Qualitätsprüfungen
+
+Bei aktivierter virtueller Umgebung werden alle automatisierten Prüfungen so ausgeführt:
+
+```bash
+python -m pytest
+python -m ruff check .
+python -m ruff format --check .
+python -m pyright
+git diff --check
+```
+
 ## Geplante Funktionen
 ### Datenimport
 Die Anwendung soll strukturierte historische Daten aus Dateien importieren können. Abhängig vom Entwicklungsstand können später zusätzlich direkte Datenbankverbindungen unterstützt werden.
