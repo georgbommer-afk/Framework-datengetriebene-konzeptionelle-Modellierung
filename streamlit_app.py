@@ -3,7 +3,11 @@
 import streamlit as st
 
 from framework_mvp import __version__
-from framework_mvp.bootstrap import erstelle_datenquelle_service, erstelle_projekt_service
+from framework_mvp.bootstrap import (
+    erstelle_datenimport_service,
+    erstelle_datenquelle_service,
+    erstelle_projekt_service,
+)
 from framework_mvp.ui.pages.etl import zeige_etl_seite
 from framework_mvp.ui.pages.projektverwaltung import zeige_projektverwaltung
 from framework_mvp.workspace import WorkspaceKonfiguration
@@ -25,5 +29,6 @@ else:
     zeige_etl_seite(
         projekt_service,
         erstelle_datenquelle_service(),
+        erstelle_datenimport_service(),
         WorkspaceKonfiguration.ermitteln(),
     )

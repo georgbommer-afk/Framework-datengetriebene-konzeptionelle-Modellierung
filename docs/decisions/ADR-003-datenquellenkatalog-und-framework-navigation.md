@@ -8,8 +8,8 @@ Akzeptiert
 
 Nach der Projektdefinition in Framework-Schritt 1 benötigt die ETL-Phase einen
 projektbezogenen Datenquellenkatalog Q. Gleichzeitig soll der fachliche Zusammenhang der zehn
-Framework-Schritte in jeder Hauptseite sichtbar sein. In diesem Inkrement werden Quellen nur
-registriert; Dateien, Tabellen und Datenprofile werden noch nicht verarbeitet.
+Framework-Schritte in jeder Hauptseite sichtbar sein. Inkrement B ergänzt einen temporären
+Dateiimport bis zur unveränderten Datenvorschau.
 
 ## Entscheidung
 
@@ -21,6 +21,13 @@ erzeugt.
 Der Datenquellenkatalog verwendet das unveränderliche Domänenmodell `Datenquelle`, einen
 Anwendungsservice und ein Repository-Protocol. CSV, Excel und Datenbanken werden fachlich
 modelliert. Eine technische Datenbankanbindung ist noch nicht enthalten.
+
+CSV- und XLSX-Dateien werden ausschließlich im projektbezogenen Streamlit-Sitzungszustand
+verarbeitet. Unveränderliche Importparameter, Datei-Metadaten, technische Leselogik,
+Vorschauaufbereitung und Oberfläche sind getrennt. Cache-Schlüssel kombinieren SHA-256-Prüfsumme
+und Importparameter. Damit lösen nur Datei- oder Parameteränderungen ein erneutes vollständiges
+Einlesen aus. Uploadbytes werden weder in SQLite noch im Workspace gespeichert. Die maximale
+Dateigröße beträgt standardmäßig 50 MB und ist über `FRAMEWORK_MVP_MAX_UPLOAD_MB` konfigurierbar.
 
 ## Persistenz und Migration
 
@@ -45,7 +52,10 @@ Pfad hat Vorrang vor `FRAMEWORK_MVP_WORKSPACE_PATH`; andernfalls wird das Reposi
 - Weitere ETL-Inkremente können auf stabilen Quellen-IDs aufbauen.
 - Die Framework-Navigation ist auf weiteren Seiten wiederverwendbar.
 - Die gemeinsame SQLite-Datei bleibt die eindeutige Metadatenquelle.
-- Dateiupload, Import, Vorschau und Profilierung folgen erst in späteren Inkrementen.
+- CSV- und XLSX-Vorschauen sind ohne persistente Rohdatei möglich.
+- Das SQLite-Schema bleibt in Version 3 unverändert.
+- Datenprofilierung, Datenbereinigung und dauerhafte Importbestätigung bleiben späteren
+  Inkrementen vorbehalten.
 
 ## Verworfene Alternativen
 

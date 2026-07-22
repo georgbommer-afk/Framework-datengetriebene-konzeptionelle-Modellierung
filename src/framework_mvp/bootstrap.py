@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 
+from framework_mvp.application.datenimport_service import DatenimportService
 from framework_mvp.application.datenquelle_service import DatenquelleService
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.infrastructure.persistence.sqlite_datenquelle_repository import (
@@ -35,3 +36,8 @@ def erstelle_datenquelle_service(
 ) -> DatenquelleService:
     """Erzeugt einen Datenquellenservice für die gemeinsame Datenbank."""
     return DatenquelleService(SQLiteDatenquelleRepository(ermittle_datenbankpfad(datenbankpfad)))
+
+
+def erstelle_datenimport_service() -> DatenimportService:
+    """Erzeugt den zustandslosen Service für temporäre Dateiimporte."""
+    return DatenimportService()

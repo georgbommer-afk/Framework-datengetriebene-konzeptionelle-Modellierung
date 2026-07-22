@@ -40,8 +40,8 @@ def test_etl_seite_startet_und_markiert_schritt_zwei(
     assert not anwendung.exception
     assert any(element.value == "2 ETL durchführen" for element in anwendung.header)
     assert anwendung.get("progress")
-    assert any("Teilschritt 1 von 7" in element.value for element in anwendung.caption)
-    assert sum("Noch nicht verfügbar" in element.value for element in anwendung.caption) == 6
+    assert any("Schritt 1 von 7" in element.value for element in anwendung.caption)
+    assert sum("Noch nicht verfügbar" in element.value for element in anwendung.caption) == 2
     svg = "".join(element.value for element in anwendung.markdown)
     assert 'data-step="2" data-status="aktuell"' in svg
     assert 'data-step="1" data-status="abgeschlossen"' in svg
@@ -52,7 +52,7 @@ def test_datenquelle_kann_angelegt_und_erneut_geladen_werden(
 ) -> None:
     """Der aktive Teilschritt speichert und öffnet einen Katalogeintrag."""
     anwendung = _etl_starten(tmp_path, monkeypatch)
-    bezeichnung = next(e for e in anwendung.text_input if e.label == "Bezeichnung")
+    bezeichnung = next(e for e in anwendung.text_input if e.label == "Bezeichnung der Datenquelle")
     bezeichnung.set_value("ERP Tagesexport")
     speichern = next(e for e in anwendung.button if e.label == "Datenquelle speichern")
     speichern.click().run()
@@ -65,6 +65,24 @@ def test_datenquelle_kann_angelegt_und_erneut_geladen_werden(
 
     auswahl = next(e for e in anwendung.selectbox if e.label == "Gespeicherte Datenquelle öffnen")
     auswahl.select_index(1).run()
-    assert next(e for e in anwendung.text_input if e.label == "Bezeichnung").value == (
-        "ERP Tagesexport"
+    assert (
+        next(e for e in anwendung.text_input if e.label == "Bezeichnung der Datenquelle").value
+        == "ERP Tagesexport"
     )
+
+
+def test_weiter_fuehrt_nach_registrierung_zum_upload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Eine gültig gespeicherte Quelle schaltet den zweiten Teilschritt frei."""
+    anwendung = _etl_starten(tmp_path, monkeypatch)
+    next(e for e in anwendung.text_input if e.label == "Bezeichnung der Datenquelle").set_value(
+        "CSV-Quelle"
+    )
+    next(e for e in anwendung.button if e.label == "Datenquelle speichern").click().run()
+    weiter = next(e for e in anwendung.button if e.label == "Weiter")
+    assert not weiter.disabled
+    weiter.click().run()
+    assert not anwendung.exception
+    assert any("Schritt 2 von 7" in element.value for element in anwendung.caption)
+    assert anwendung.get("file_uploader")

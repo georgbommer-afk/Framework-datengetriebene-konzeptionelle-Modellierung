@@ -23,3 +23,7 @@ class UngueltigerZeitstempel(Domaenenfehler):
 
 class ProjektNichtGefunden(Domaenenfehler):
     """Das angeforderte Projekt ist nicht vorhanden."""
+
+
+class Datenimportfehler(Domaenenfehler):
+    """Eine Datei oder ihre Importeinstellungen können nicht verarbeitet werden."""

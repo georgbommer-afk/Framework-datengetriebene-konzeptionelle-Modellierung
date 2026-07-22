@@ -39,18 +39,27 @@ Das erzeugte konzeptionelle Modell kann jedoch als Grundlage für eine spätere 
 ## Aktueller Funktionsumfang
 
 Die Streamlit-Anwendung zeigt das zehnstufige Framework als dynamische Prozessgrafik. Neben der
-Projektverwaltung steht Framework-Schritt 2 als ETL-Hauptseite bereit. Im ersten ETL-Inkrement
-können projektbezogene Datenquellen im Datenquellenkatalog Q registriert und bearbeitet werden.
-Dateiupload, Dateiimport, Vorschau und Datenprofilierung sind noch nicht enthalten.
+Projektverwaltung steht Framework-Schritt 2 als ETL-Hauptseite bereit. Projektbezogene
+Datenquellen werden im Datenquellenkatalog Q registriert. Der ETL-Wizard verarbeitet jeweils eine
+CSV- oder XLSX-Datei temporär, führt durch Importeinstellungen und Tabellenblattauswahl und zeigt
+eine unveränderte Vorschau der ersten maximal 200 Zeilen sowie eine kompakte Spaltenübersicht.
+
+Die Datei und das vollständig eingelesene DataFrame bleiben während dieses Inkrements im
+temporären Streamlit-Sitzungszustand. Weder Uploadbytes noch Vorschauen werden in SQLite oder im
+Workspace gespeichert. Die maximale Uploadgröße beträgt standardmäßig 50 MB und kann mit einer
+positiven Ganzzahl in `FRAMEWORK_MVP_MAX_UPLOAD_MB` angepasst werden. Datenprofilierung,
+Datenbereinigung und die dauerhafte Importbestätigung folgen in späteren Inkrementen.
 
 ## Geplante Funktionen
 ### Datenimport
 Die Anwendung soll strukturierte historische Daten aus Dateien importieren können. Abhängig vom Entwicklungsstand können später zusätzlich direkte Datenbankverbindungen unterstützt werden.
 
-Vorgesehene Formate sind insbesondere:
+Aktuell unterstützte Formate sind:
 - CSV,
 - Excel,
-- gegebenenfalls weitere tabellarische Formate.
+
+Direkte Datenbankverbindungen und weitere tabellarische Formate sind erst für spätere
+Ausbaustufen vorgesehen.
 
 ### Datenzuordnung
 Die anwendende Person soll relevante Spalten den für Process Mining benötigten Informationen zuordnen können, beispielsweise:
