@@ -5,10 +5,13 @@ from pathlib import PurePosixPath
 
 import pandas as pd
 
+from framework_mvp.application.profiling import erstelle_datenprofil, erstelle_diagrammdaten
 from framework_mvp.domain.models import (
     CsvImportparameter,
     DateiMetadaten,
     Dateityp,
+    Datenprofil,
+    DatenprofilDiagramme,
     ExcelImportparameter,
     Quellenart,
     TabellenblattInfo,
@@ -51,6 +54,15 @@ class Datenvorschau:
     pandas_datentypen: tuple[str, ...]
     spaltenuebersicht: tuple[Spaltenuebersicht, ...]
     verwendete_parameter: Importparameter
+    vollstaendige_tabelle: pd.DataFrame
+
+
+@dataclass(frozen=True, slots=True)
+class Profilierungsergebnis:
+    """Temporäres Gesamtprofil mit davon getrennten Diagrammdaten."""
+
+    profil: Datenprofil
+    diagramme: DatenprofilDiagramme
 
 
 def schlage_datenquellenbezeichnung_vor(dateiname: str, vorhandene_bezeichnung: str) -> str:
@@ -90,6 +102,7 @@ def bereite_vorschau_auf(daten: pd.DataFrame, parameter: Importparameter) -> Dat
         pandas_datentypen=tuple(str(typ) for typ in daten.dtypes),
         spaltenuebersicht=tuple(uebersichten),
         verwendete_parameter=parameter,
+        vollstaendige_tabelle=daten.copy(deep=True),
     )
 
 
@@ -121,3 +134,8 @@ class DatenimportService:
     ) -> VorschauCacheSchluessel:
         """Verknüpft Prüfsumme und unveränderliche Importparameter."""
         return (datei_metadaten.sha256, parameter)
+
+    def profil_erstellen(self, daten: pd.DataFrame) -> Profilierungsergebnis:
+        """Berechnet Profilkennzahlen und getrennte aggregierte Diagrammdaten."""
+        profil = erstelle_datenprofil(daten)
+        return Profilierungsergebnis(profil, erstelle_diagrammdaten(daten, profil))

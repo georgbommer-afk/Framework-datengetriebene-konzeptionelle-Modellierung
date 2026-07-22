@@ -9,7 +9,8 @@ Akzeptiert
 Nach der Projektdefinition in Framework-Schritt 1 benötigt die ETL-Phase einen
 projektbezogenen Datenquellenkatalog Q. Gleichzeitig soll der fachliche Zusammenhang der zehn
 Framework-Schritte in jeder Hauptseite sichtbar sein. Inkrement B ergänzt einen temporären
-Dateiimport bis zur unveränderten Datenvorschau.
+Dateiimport bis zur unveränderten Datenvorschau. Inkrement C ergänzt darauf aufbauend die
+technische Datenprofilierung und Qualitätsübersicht.
 
 ## Entscheidung
 
@@ -28,6 +29,13 @@ Vorschauaufbereitung und Oberfläche sind getrennt. Cache-Schlüssel kombinieren
 und Importparameter. Damit lösen nur Datei- oder Parameteränderungen ein erneutes vollständiges
 Einlesen aus. Uploadbytes werden weder in SQLite noch im Workspace gespeichert. Die maximale
 Dateigröße beträgt standardmäßig 50 MB und ist über `FRAMEWORK_MVP_MAX_UPLOAD_MB` konfigurierbar.
+
+Das ebenfalls temporäre Datenprofil trennt Berechnung, unveränderliche Profilmodelle,
+Diagrammdaten und Streamlit-Darstellung. Echte Pandas-Fehlwerte und exakt erkannte textuelle
+Platzhalter werden getrennt ausgewiesen. Numerische Kennzahlen verwenden nur endliche Werte;
+Unendlichkeiten werden separat gezählt. Histogramme, Boxplots, Kategoriehäufigkeiten und
+Zeitverteilungen gelangen ausschließlich aggregiert in die Oberfläche. Sämtliche Kennzahlen
+basieren auf dem vollständigen DataFrame.
 
 ## Persistenz und Migration
 
@@ -54,8 +62,9 @@ Pfad hat Vorrang vor `FRAMEWORK_MVP_WORKSPACE_PATH`; andernfalls wird das Reposi
 - Die gemeinsame SQLite-Datei bleibt die eindeutige Metadatenquelle.
 - CSV- und XLSX-Vorschauen sind ohne persistente Rohdatei möglich.
 - Das SQLite-Schema bleibt in Version 3 unverändert.
-- Datenprofilierung, Datenbereinigung und dauerhafte Importbestätigung bleiben späteren
-  Inkrementen vorbehalten.
+- Technische Datenprofile und Qualitätsdiagramme sind temporär verfügbar.
+- Datenbereinigung, Transformation, dauerhafte Profilspeicherung und Importbestätigung bleiben
+  späteren Inkrementen vorbehalten.
 
 ## Verworfene Alternativen
 

@@ -44,11 +44,17 @@ Datenquellen werden im Datenquellenkatalog Q registriert. Der ETL-Wizard verarbe
 CSV- oder XLSX-Datei temporär, führt durch Importeinstellungen und Tabellenblattauswahl und zeigt
 eine unveränderte Vorschau der ersten maximal 200 Zeilen sowie eine kompakte Spaltenübersicht.
 
-Die Datei und das vollständig eingelesene DataFrame bleiben während dieses Inkrements im
-temporären Streamlit-Sitzungszustand. Weder Uploadbytes noch Vorschauen werden in SQLite oder im
-Workspace gespeichert. Die maximale Uploadgröße beträgt standardmäßig 50 MB und kann mit einer
-positiven Ganzzahl in `FRAMEWORK_MVP_MAX_UPLOAD_MB` angepasst werden. Datenprofilierung,
-Datenbereinigung und die dauerhafte Importbestätigung folgen in späteren Inkrementen.
+Die Datei, das vollständig eingelesene DataFrame und das technische Datenprofil bleiben im
+temporären Streamlit-Sitzungszustand. Weder Uploadbytes, Vorschauen noch Profile werden in SQLite
+oder im Workspace gespeichert. Die maximale Uploadgröße beträgt standardmäßig 50 MB und kann mit
+einer positiven Ganzzahl in `FRAMEWORK_MVP_MAX_UPLOAD_MB` angepasst werden.
+
+Die technische Profilierung berechnet Gesamtkennzahlen, echte Pandas-Fehlwerte, getrennte
+textuelle Fehlwertplatzhalter sowie numerische, kategoriale und zeitbezogene Spaltenprofile auf
+der vollständigen Tabelle. Aggregierte Histogramme, Boxplots, Kategoriehäufigkeiten und
+Zeitintervalle unterstützen die visuelle Prüfung, ohne die Quelldaten zu verändern. Eine
+Datenbereinigung, Transformation, dauerhafte Speicherung oder Importbestätigung findet noch nicht
+statt.
 
 ## Geplante Funktionen
 ### Datenimport

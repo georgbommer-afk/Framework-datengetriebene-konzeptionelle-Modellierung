@@ -10,6 +10,7 @@ import streamlit as st
 from framework_mvp.application.datenimport_service import (
     DatenimportService,
     Datenvorschau,
+    Profilierungsergebnis,
     schlage_datenquellenbezeichnung_vor,
     schlage_quellenart_vor,
 )
@@ -31,6 +32,7 @@ from framework_mvp.domain.models import (
     Zeichenkodierung,
 )
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
+from framework_mvp.ui.components.datenprofil_visualisierung import zeige_datenprofil
 from framework_mvp.ui.components.framework_navigation import zeige_framework_navigation
 from framework_mvp.workspace import WorkspaceKonfiguration
 
@@ -90,7 +92,7 @@ def _zeige_etl_fortschritt(schritt: int) -> None:
                 status = "Aktuell"
             elif nummer < schritt:
                 status = "Erledigt"
-            elif nummer <= 5:
+            elif nummer <= 6:
                 status = "Verfügbar"
             else:
                 status = "Noch nicht verfügbar"
@@ -205,6 +207,8 @@ def _upload(import_service: DatenimportService, projekt_id: UUID, zustand: dict[
             "tabellenblatt",
             "vorschau",
             "vorschau_schluessel",
+            "profil",
+            "profil_schluessel",
         ):
             zustand.pop(schluessel, None)
         zustand["dateiinhalt"] = dateiinhalt
@@ -307,6 +311,8 @@ def _csv_einstellungen(
     if zustand.get("csv_parameter") != parameter:
         zustand.pop("vorschau", None)
         zustand.pop("vorschau_schluessel", None)
+        zustand.pop("profil", None)
+        zustand.pop("profil_schluessel", None)
         zustand["csv_parameter"] = parameter
 
 
@@ -315,6 +321,8 @@ def _excel_einstellungen(projekt_id: UUID, zustand: dict[str, Any]) -> None:
     if zustand.get("excel_kopfzeile") != kopfzeile:
         zustand.pop("vorschau", None)
         zustand.pop("vorschau_schluessel", None)
+        zustand.pop("profil", None)
+        zustand.pop("profil_schluessel", None)
         zustand["excel_kopfzeile"] = kopfzeile
 
 
@@ -354,6 +362,8 @@ def _tabellenauswahl(
         zustand["tabellenblatt"] = auswahl
         zustand.pop("vorschau", None)
         zustand.pop("vorschau_schluessel", None)
+        zustand.pop("profil", None)
+        zustand.pop("profil_schluessel", None)
 
 
 def _parameter(zustand: dict[str, Any]) -> CsvImportparameter | ExcelImportparameter:
@@ -396,6 +406,22 @@ def _vorschau(import_service: DatenimportService, zustand: dict[str, Any]) -> No
     )
 
 
+def _datenprofil(
+    import_service: DatenimportService, projekt_id: UUID, zustand: dict[str, Any]
+) -> None:
+    vorschau: Datenvorschau = zustand["vorschau"]
+    profilschluessel = zustand["vorschau_schluessel"]
+    if zustand.get("profil_schluessel") != profilschluessel:
+        zustand["profil"] = import_service.profil_erstellen(vorschau.vollstaendige_tabelle)
+        zustand["profil_schluessel"] = profilschluessel
+    ergebnis: Profilierungsergebnis = zustand["profil"]
+    metadaten = zustand["datei_metadaten"]
+    zeige_datenprofil(
+        ergebnis,
+        session_key=f"etl_profildetail_{projekt_id}_{metadaten.sha256}",
+    )
+
+
 def _kann_weiter(zustand: dict[str, Any]) -> bool:
     schritt = zustand["schritt"]
     if schritt == 1:
@@ -414,6 +440,8 @@ def _kann_weiter(zustand: dict[str, Any]) -> bool:
     if schritt == 4:
         metadaten = zustand["datei_metadaten"]
         return metadaten.dateityp is Dateityp.CSV or bool(zustand.get("tabellenblatt"))
+    if schritt == 5:
+        return "vorschau" in zustand
     return False
 
 
@@ -424,7 +452,7 @@ def _navigation(zustand: dict[str, Any]) -> None:
         st.rerun()
     if weiter.button(
         "Weiter",
-        disabled=zustand["schritt"] >= 5 or not _kann_weiter(zustand),
+        disabled=zustand["schritt"] >= 6 or not _kann_weiter(zustand),
         type="primary",
         use_container_width=True,
     ):
@@ -438,7 +466,7 @@ def zeige_etl_seite(
     datenimport_service: DatenimportService,
     workspace: WorkspaceKonfiguration,
 ) -> None:
-    """Zeigt Framework-Schritt 2 und die aktiven ETL-Teilschritte eins bis fünf."""
+    """Zeigt Framework-Schritt 2 und die aktiven ETL-Teilschritte eins bis sechs."""
     st.header("2 ETL durchführen")
     if meldung := st.session_state.pop("etl_erfolgsmeldung", None):
         st.success(meldung)
@@ -461,8 +489,10 @@ def zeige_etl_seite(
             _importeinstellungen(datenimport_service, projekt_id, zustand)
         elif zustand["schritt"] == 4:
             _tabellenauswahl(datenimport_service, projekt_id, zustand)
-        else:
+        elif zustand["schritt"] == 5:
             _vorschau(datenimport_service, zustand)
+        else:
+            _datenprofil(datenimport_service, projekt_id, zustand)
         _navigation(zustand)
     except (Domaenenfehler, Datenimportfehler) as fehler:
         st.error(str(fehler))
