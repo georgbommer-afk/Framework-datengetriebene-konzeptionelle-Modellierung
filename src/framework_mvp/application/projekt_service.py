@@ -4,7 +4,12 @@ from uuid import UUID
 
 from framework_mvp.application.ports.projekt_repository import ProjektRepository
 from framework_mvp.domain.exceptions import ProjektNichtGefunden
-from framework_mvp.domain.models import Projekt, Projektstatus, Untersuchungsauftrag
+from framework_mvp.domain.models import (
+    BeteiligtePerson,
+    Projekt,
+    Projektstatus,
+    Untersuchungsauftrag,
+)
 
 
 class ProjektService:
@@ -20,7 +25,7 @@ class ProjektService:
         bezeichnung: str,
         untersuchungsauftrag: Untersuchungsauftrag,
         status: Projektstatus = Projektstatus.ENTWURF,
-        beteiligte_personen: tuple[str, ...] = (),
+        beteiligte_personen: tuple[BeteiligtePerson, ...] = (),
     ) -> Projekt:
         """Erzeugt und speichert ein neues Projekt."""
         projekt = Projekt.neu(
@@ -47,7 +52,7 @@ class ProjektService:
         bezeichnung: str,
         untersuchungsauftrag: Untersuchungsauftrag,
         status: Projektstatus,
-        beteiligte_personen: tuple[str, ...] = (),
+        beteiligte_personen: tuple[BeteiligtePerson, ...] = (),
     ) -> Projekt:
         """Aktualisiert ein vorhandenes Projekt kontrolliert und speichert die Kopie."""
         projekt = self._repository.laden(projekt_id)

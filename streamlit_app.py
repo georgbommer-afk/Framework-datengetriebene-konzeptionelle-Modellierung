@@ -1,8 +1,12 @@
-"""Einstiegspunkt der Streamlit-Anwendung."""
+"""Schlanker Einstiegspunkt der Streamlit-Anwendung."""
 
 import streamlit as st
 
 from framework_mvp import __version__
+from framework_mvp.bootstrap import erstelle_datenquelle_service, erstelle_projekt_service
+from framework_mvp.ui.pages.etl import zeige_etl_seite
+from framework_mvp.ui.pages.projektverwaltung import zeige_projektverwaltung
+from framework_mvp.workspace import WorkspaceKonfiguration
 
 st.set_page_config(
     page_title="Framework-MVP",
@@ -13,7 +17,13 @@ st.set_page_config(
 st.title("Datengetriebene konzeptionelle Modellierung")
 st.caption(f"Framework-MVP · Version {__version__}")
 
-st.info(
-    "Die Anwendung wird schrittweise als softwaretechnische "
-    "Instanziierung des in der Masterarbeit entwickelten Frameworks aufgebaut."
-)
+seite = st.sidebar.radio("Framework-Bereich", ("1 Projektverwaltung", "2 ETL durchführen"))
+projekt_service = erstelle_projekt_service()
+if seite == "1 Projektverwaltung":
+    zeige_projektverwaltung(projekt_service)
+else:
+    zeige_etl_seite(
+        projekt_service,
+        erstelle_datenquelle_service(),
+        WorkspaceKonfiguration.ermitteln(),
+    )

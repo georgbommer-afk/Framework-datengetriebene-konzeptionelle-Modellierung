@@ -36,6 +36,13 @@ Das Projekt umfasst die Verarbeitung historischer Ereignisdaten bis zur Erstellu
 
 Das erzeugte konzeptionelle Modell kann jedoch als Grundlage für eine spätere technische Umsetzung in einer Simulationssoftware dienen.
 
+## Aktueller Funktionsumfang
+
+Die Streamlit-Anwendung zeigt das zehnstufige Framework als dynamische Prozessgrafik. Neben der
+Projektverwaltung steht Framework-Schritt 2 als ETL-Hauptseite bereit. Im ersten ETL-Inkrement
+können projektbezogene Datenquellen im Datenquellenkatalog Q registriert und bearbeitet werden.
+Dateiupload, Dateiimport, Vorschau und Datenprofilierung sind noch nicht enthalten.
+
 ## Geplante Funktionen
 ### Datenimport
 Die Anwendung soll strukturierte historische Daten aus Dateien importieren können. Abhängig vom Entwicklungsstand können später zusätzlich direkte Datenbankverbindungen unterstützt werden.
