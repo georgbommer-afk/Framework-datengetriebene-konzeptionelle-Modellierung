@@ -107,10 +107,10 @@ def test_fehlgeschlagene_migration_wird_zurueckgerollt(tmp_path: Path) -> None:
         assert verbindung.execute("SELECT COUNT(*) FROM projekte").fetchone()[0] == 1
 
 
-def test_version_groesser_drei_wird_abgelehnt(tmp_path: Path) -> None:
+def test_version_groesser_vier_wird_abgelehnt(tmp_path: Path) -> None:
     """Eine unbekannte neuere Schemaversion bleibt unangetastet."""
     pfad = tmp_path / "neu.sqlite"
     with sqlite3.connect(pfad) as verbindung:
-        verbindung.execute("PRAGMA user_version = 4")
+        verbindung.execute("PRAGMA user_version = 5")
     with pytest.raises(NichtUnterstuetzteSchemaversion):
         SQLiteProjektRepository(pfad).auflisten()

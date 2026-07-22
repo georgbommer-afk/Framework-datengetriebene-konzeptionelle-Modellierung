@@ -2,7 +2,7 @@
 
 import logging
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pandas as pd
 import streamlit as st
@@ -15,6 +15,7 @@ from framework_mvp.application.datenimport_service import (
     schlage_quellenart_vor,
 )
 from framework_mvp.application.datenquelle_service import DatenquelleService
+from framework_mvp.application.importvorgang_service import ImportvorgangService
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.domain.exceptions import Datenimportfehler, Domaenenfehler
 from framework_mvp.domain.models import (
@@ -31,8 +32,14 @@ from framework_mvp.domain.models import (
     Trennzeichenwahl,
     Zeichenkodierung,
 )
-from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
-from framework_mvp.ui.components.datenprofil_visualisierung import zeige_datenprofil
+from framework_mvp.infrastructure.exceptions import (
+    Importintegritaetsfehler,
+    NichtUnterstuetzteSchemaversion,
+)
+from framework_mvp.ui.components.datenprofil_visualisierung import (
+    zeige_datenprofil,
+    zeige_gespeichertes_datenprofil,
+)
 from framework_mvp.ui.components.framework_navigation import zeige_framework_navigation
 from framework_mvp.workspace import WorkspaceKonfiguration
 
@@ -92,7 +99,7 @@ def _zeige_etl_fortschritt(schritt: int) -> None:
                 status = "Aktuell"
             elif nummer < schritt:
                 status = "Erledigt"
-            elif nummer <= 6:
+            elif nummer <= 7:
                 status = "Verfügbar"
             else:
                 status = "Noch nicht verfügbar"
@@ -190,7 +197,7 @@ def _upload(import_service: DatenimportService, projekt_id: UUID, zustand: dict[
         "CSV- oder XLSX-Datei",
         type=["csv", "xlsx"],
         accept_multiple_files=False,
-        key=f"etl_upload_{projekt_id}",
+        key=f"etl_upload_{projekt_id}_{zustand.get('durchlauf_version', 0)}",
     )
     if upload is None:
         st.info("Wählen Sie genau eine CSV- oder XLSX-Datei aus.")
@@ -209,6 +216,8 @@ def _upload(import_service: DatenimportService, projekt_id: UUID, zustand: dict[
             "vorschau_schluessel",
             "profil",
             "profil_schluessel",
+            "import_id",
+            "bestaetigter_import",
         ):
             zustand.pop(schluessel, None)
         zustand["dateiinhalt"] = dateiinhalt
@@ -422,6 +431,146 @@ def _datenprofil(
     )
 
 
+def _tabellenbezeichnung(zustand: dict[str, Any]) -> str:
+    metadaten = zustand["datei_metadaten"]
+    if metadaten.dateityp is Dateityp.XLSX:
+        return str(zustand["tabellenblatt"])
+    return metadaten.sicherer_dateiname.rsplit(".", maxsplit=1)[0]
+
+
+def _importpruefung(
+    projekt_service: ProjektService,
+    datenquelle_service: DatenquelleService,
+    importvorgang_service: ImportvorgangService,
+    projekt_id: UUID,
+    zustand: dict[str, Any],
+) -> None:
+    profilierung: Profilierungsergebnis = zustand["profil"]
+    profil = profilierung.profil
+    metadaten = zustand["datei_metadaten"]
+    datenquelle = datenquelle_service.datenquelle_laden(UUID(zustand["datenquellen_id"]))
+    projekt = projekt_service.projekt_laden(projekt_id)
+    if datenquelle is None or projekt is None:
+        raise Domaenenfehler("Projekt oder Datenquelle des Imports wurde nicht gefunden.")
+    st.subheader("Import prüfen und bestätigen")
+    st.write(f"**Projekt:** {projekt.bezeichnung}")
+    st.write(f"**Datenquelle:** {datenquelle.bezeichnung}")
+    st.write(f"**Originaldateiname:** {metadaten.urspruenglicher_dateiname}")
+    st.write(
+        f"**Dateityp und Größe:** {metadaten.dateityp.value} · "
+        f"{metadaten.dateigroesse_bytes:,} Bytes"
+    )
+    st.write(f"**Prüfsumme:** `{metadaten.sha256[:12]}…`")
+    with st.expander("Vollständige SHA-256-Prüfsumme"):
+        st.code(metadaten.sha256, language=None)
+    st.write(f"**Importparameter:** {zustand['vorschau'].verwendete_parameter}")
+    st.write(f"**Tabelle beziehungsweise Blatt:** {_tabellenbezeichnung(zustand)}")
+    kennzahlen = st.columns(5)
+    for spalte, (name, wert) in zip(
+        kennzahlen,
+        (
+            ("Zeilen", profil.zeilen),
+            ("Spalten", profil.spalten),
+            ("Echte Fehlwerte", profil.echte_fehlwerte),
+            ("Textuelle Platzhalter", profil.textuelle_platzhalter),
+            ("Exakte Duplikate", profil.exakte_duplikate),
+        ),
+        strict=True,
+    ):
+        spalte.metric(name, wert)
+    warnungen = importvorgang_service.import_warnings(profil)
+    if warnungen:
+        for warnung in warnungen:
+            st.warning(warnung)
+    else:
+        st.success("Die technische Profilierung hat keine Qualitätswarnungen erzeugt.")
+    st.info(
+        "Die Originaldatei wird unverändert gespeichert. Erkannte Fehlwerte, Platzhalter, "
+        "Duplikate und Ausreißer werden nicht automatisch korrigiert."
+    )
+    bestaetigt = zustand.get("bestaetigter_import")
+    if bestaetigt is not None:
+        st.success("Der Import wurde verbindlich bestätigt.")
+        st.write(f"**Import-ID:** `{bestaetigt.import_id}`")
+        st.write(f"**Bestätigt am:** {bestaetigt.bestaetigt_am}")
+        st.write(f"**Gespeicherte Datenquelle:** {datenquelle.bezeichnung}")
+        st.write(f"**Relativer Raw-Pfad:** `{bestaetigt.relativer_raw_pfad}`")
+        st.write(f"**Relativer Profil-Pfad:** `{bestaetigt.relativer_profil_pfad}`")
+        if st.button("Neuen Import beginnen", type="primary"):
+            version = zustand.get("durchlauf_version", 0) + 1
+            zustand.clear()
+            zustand.update({"schritt": 1, "durchlauf_version": version})
+            st.rerun()
+        return
+    import_id = zustand.setdefault("import_id", uuid4())
+    laeuft = bool(zustand.get("bestaetigung_laeuft"))
+    angefordert = st.button("Import verbindlich bestätigen", type="primary", disabled=laeuft)
+    if angefordert:
+        zustand["bestaetigung_laeuft"] = True
+        st.rerun()
+    if laeuft:
+        try:
+            zustand["bestaetigter_import"] = importvorgang_service.import_bestaetigen(
+                import_id=import_id,
+                projekt_id=projekt_id,
+                datenquellen_id=datenquelle.datenquellen_id,
+                datei_metadaten=metadaten,
+                dateiinhalt=zustand["dateiinhalt"],
+                importparameter=zustand["vorschau"].verwendete_parameter,
+                tabellenbezeichnung=_tabellenbezeichnung(zustand),
+                profil=profil,
+            )
+        finally:
+            zustand["bestaetigung_laeuft"] = False
+        st.rerun()
+
+
+def _gespeicherte_importe(
+    service: ImportvorgangService,
+    datenquelle_service: DatenquelleService,
+    projekt_id: UUID,
+) -> None:
+    with st.expander("Gespeicherte Importe des Projekts"):
+        importe = service.importe_fuer_projekt(projekt_id)
+        if not importe:
+            st.caption("Für dieses Projekt wurden noch keine Importe bestätigt.")
+            return
+        quellen = {
+            quelle.datenquellen_id: quelle.bezeichnung
+            for quelle in datenquelle_service.datenquellen_fuer_projekt(projekt_id)
+        }
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Zeitpunkt": wert.bestaetigt_am,
+                        "Datenquelle": quellen.get(wert.datenquellen_id, "Unbekannt"),
+                        "Datei": wert.originaldateiname,
+                        "Tabelle/Blatt": wert.tabellenbezeichnung,
+                        "Zeilen": wert.zeilenanzahl,
+                        "Spalten": wert.spaltenanzahl,
+                        "Status": wert.status.value,
+                        "Prüfsumme": f"{wert.sha256[:12]}…",
+                    }
+                    for wert in importe
+                ]
+            ),
+            hide_index=True,
+        )
+        optionen = ["", *(str(wert.import_id) for wert in importe)]
+        auswahl = st.selectbox("Gespeicherten Import öffnen", optionen)
+        if not auswahl:
+            return
+        geladen = service.import_laden(UUID(auswahl))
+        if geladen is None:
+            st.error("Der ausgewählte Import wurde nicht gefunden.")
+            return
+        st.success("Raw-Datei, Prüfsumme und Profil-JSON sind konsistent.")
+        st.write("**Gespeicherte Importparameter:**")
+        st.json(geladen.profil.importparameter)
+        zeige_gespeichertes_datenprofil(geladen.profil.gesamtprofil)
+
+
 def _kann_weiter(zustand: dict[str, Any]) -> bool:
     schritt = zustand["schritt"]
     if schritt == 1:
@@ -442,6 +591,8 @@ def _kann_weiter(zustand: dict[str, Any]) -> bool:
         return metadaten.dateityp is Dateityp.CSV or bool(zustand.get("tabellenblatt"))
     if schritt == 5:
         return "vorschau" in zustand
+    if schritt == 6:
+        return "profil" in zustand
     return False
 
 
@@ -452,7 +603,7 @@ def _navigation(zustand: dict[str, Any]) -> None:
         st.rerun()
     if weiter.button(
         "Weiter",
-        disabled=zustand["schritt"] >= 6 or not _kann_weiter(zustand),
+        disabled=zustand["schritt"] >= 7 or not _kann_weiter(zustand),
         type="primary",
         use_container_width=True,
     ):
@@ -464,9 +615,10 @@ def zeige_etl_seite(
     projekt_service: ProjektService,
     datenquelle_service: DatenquelleService,
     datenimport_service: DatenimportService,
+    importvorgang_service: ImportvorgangService,
     workspace: WorkspaceKonfiguration,
 ) -> None:
-    """Zeigt Framework-Schritt 2 und die aktiven ETL-Teilschritte eins bis sechs."""
+    """Zeigt Framework-Schritt 2 und den vollständigen siebenstufigen ETL-Wizard."""
     st.header("2 ETL durchführen")
     if meldung := st.session_state.pop("etl_erfolgsmeldung", None):
         st.success(meldung)
@@ -491,12 +643,24 @@ def zeige_etl_seite(
             _tabellenauswahl(datenimport_service, projekt_id, zustand)
         elif zustand["schritt"] == 5:
             _vorschau(datenimport_service, zustand)
-        else:
+        elif zustand["schritt"] == 6:
             _datenprofil(datenimport_service, projekt_id, zustand)
+        else:
+            _importpruefung(
+                projekt_service,
+                datenquelle_service,
+                importvorgang_service,
+                projekt_id,
+                zustand,
+            )
         _navigation(zustand)
+        _gespeicherte_importe(importvorgang_service, datenquelle_service, projekt_id)
     except (Domaenenfehler, Datenimportfehler) as fehler:
         st.error(str(fehler))
     except NichtUnterstuetzteSchemaversion as fehler:
+        st.error(str(fehler))
+    except Importintegritaetsfehler as fehler:
+        LOGGER.exception("Integritätsfehler beim Laden oder Speichern eines Imports.")
         st.error(str(fehler))
     except Exception:
         LOGGER.exception("Unerwarteter Fehler auf der ETL-Seite.")

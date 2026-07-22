@@ -38,6 +38,11 @@ from framework_mvp.domain.models.importauftrag import (
     Trennzeichenwahl,
     Zeichenkodierung,
 )
+from framework_mvp.domain.models.importvorgang import (
+    Importstatus,
+    Importvorgang,
+    Profilzusammenfassung,
+)
 from framework_mvp.domain.models.projekt import (
     BeteiligtePerson,
     Betrachtungszeitraum,
@@ -73,6 +78,8 @@ __all__ = [
     "Fehlwertprofil",
     "GestaltDerGueter",
     "Intralogistikklassifikation",
+    "Importstatus",
+    "Importvorgang",
     "HistogrammDaten",
     "HistogrammKlasse",
     "KategorieHaeufigkeit",
@@ -86,6 +93,7 @@ __all__ = [
     "NumerischesSpaltenprofil",
     "PlatzhalterAnzahl",
     "Profiltyp",
+    "Profilzusammenfassung",
     "Produktionsklassifikation",
     "Projekt",
     "Projektstatus",

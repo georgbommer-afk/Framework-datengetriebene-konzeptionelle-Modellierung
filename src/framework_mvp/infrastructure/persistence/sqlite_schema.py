@@ -6,7 +6,7 @@ from typing import Any
 
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
 
-SCHEMAVERSION = 3
+SCHEMAVERSION = 4
 
 PROJEKT_SCHEMA_VERSION_2 = """
 CREATE TABLE IF NOT EXISTS projekte (
@@ -36,6 +36,39 @@ CREATE TABLE IF NOT EXISTS datenquellen (
     geaendert_am_utc TEXT NOT NULL,
     FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id)
 )
+"""
+
+IMPORTVORGAENGE_SCHEMA_VERSION_4 = """
+CREATE TABLE IF NOT EXISTS importvorgaenge (
+    import_id TEXT PRIMARY KEY NOT NULL,
+    projekt_id TEXT NOT NULL,
+    datenquellen_id TEXT NOT NULL,
+    originaldateiname TEXT NOT NULL,
+    sicherer_dateiname TEXT NOT NULL,
+    dateityp TEXT NOT NULL CHECK (dateityp IN ('CSV', 'XLSX')),
+    dateigroesse_bytes INTEGER NOT NULL CHECK (dateigroesse_bytes >= 0),
+    sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+    importparameter_json TEXT NOT NULL,
+    tabellenbezeichnung TEXT NOT NULL,
+    zeilenanzahl INTEGER NOT NULL CHECK (zeilenanzahl >= 0),
+    spaltenanzahl INTEGER NOT NULL CHECK (spaltenanzahl >= 0),
+    profil_version INTEGER NOT NULL CHECK (profil_version >= 1),
+    relativer_raw_pfad TEXT NOT NULL,
+    relativer_profil_pfad TEXT NOT NULL,
+    profilzusammenfassung_json TEXT NOT NULL,
+    warnungen_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('entwurf', 'bestaetigt', 'fehlgeschlagen')),
+    erstellt_am_utc TEXT NOT NULL,
+    bestaetigt_am_utc TEXT,
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id),
+    FOREIGN KEY (datenquellen_id) REFERENCES datenquellen(datenquellen_id)
+);
+CREATE INDEX IF NOT EXISTS idx_importvorgaenge_projekt_id
+    ON importvorgaenge(projekt_id);
+CREATE INDEX IF NOT EXISTS idx_importvorgaenge_datenquellen_id
+    ON importvorgaenge(datenquellen_id);
+CREATE INDEX IF NOT EXISTS idx_importvorgaenge_sha256
+    ON importvorgaenge(sha256);
 """
 
 _PROJEKTSPALTEN_VERSION_2 = """
@@ -114,7 +147,7 @@ def _migriere_version_1_auf_2(verbindung: sqlite3.Connection) -> None:
 
 
 def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
-    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 3."""
+    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 4."""
     version = int(verbindung.execute("PRAGMA user_version").fetchone()[0])
     if version > SCHEMAVERSION:
         raise NichtUnterstuetzteSchemaversion(
@@ -128,6 +161,9 @@ def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
         elif version == 1:
             _migriere_version_1_auf_2(verbindung)
         verbindung.execute(DATENQUELLEN_SCHEMA_VERSION_3)
+        for anweisung in IMPORTVORGAENGE_SCHEMA_VERSION_4.split(";"):
+            if anweisung.strip():
+                verbindung.execute(anweisung)
         if version < SCHEMAVERSION:
             verbindung.execute(f"PRAGMA user_version = {SCHEMAVERSION}")
     except Exception:

@@ -34,6 +34,8 @@ def lese_excel(dateiinhalt: bytes, parameter: ExcelImportparameter) -> pd.DataFr
             sheet_name=parameter.tabellenblatt,
             header=parameter.kopfzeile.pandas_header,
             engine="openpyxl",
+            keep_default_na=False,
+            na_values=[""],
         )
     except ValueError as fehler:
         meldung = str(fehler)

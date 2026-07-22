@@ -38,6 +38,8 @@ def lese_csv(dateiinhalt: bytes, parameter: CsvImportparameter) -> pd.DataFrame:
             decimal=parameter.dezimaltrennzeichen.value,
             thousands=parameter.tausendertrennzeichen.value or None,
             header=parameter.kopfzeile.pandas_header,
+            keep_default_na=False,
+            na_values=[""],
         )
     except UnicodeDecodeError as fehler:
         raise Datenimportfehler(

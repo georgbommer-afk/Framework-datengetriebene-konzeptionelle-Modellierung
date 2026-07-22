@@ -130,7 +130,7 @@ def test_vollstaendiges_schema_2_projekt_wird_unveraendert_auf_3_migriert(
 
     assert geladen == erwartet
     with sqlite3.connect(pfad) as verbindung:
-        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 4
         spalten = {zeile[1] for zeile in verbindung.execute("PRAGMA table_info(projekte)")}
         tabellen = {
             zeile[0]
@@ -197,10 +197,10 @@ def test_nicht_unterstuetzte_version_zeigt_fehlermeldung_statt_traceback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Ein erwartbarer Migrationsfehler bleibt innerhalb der kontrollierten UI-Fehleranzeige."""
-    pfad = tmp_path / "version-4.sqlite"
+    pfad = tmp_path / "version-5.sqlite"
     with sqlite3.connect(pfad) as verbindung:
-        verbindung.execute("PRAGMA user_version = 4")
+        verbindung.execute("PRAGMA user_version = 5")
     monkeypatch.setenv(DATENBANKPFAD_UMGEBUNGSVARIABLE, str(pfad))
     anwendung = AppTest.from_file(ANWENDUNGSPFAD).run()
     assert not anwendung.exception
-    assert any("neuere Schemaversion 4" in element.value for element in anwendung.error)
+    assert any("neuere Schemaversion 5" in element.value for element in anwendung.error)

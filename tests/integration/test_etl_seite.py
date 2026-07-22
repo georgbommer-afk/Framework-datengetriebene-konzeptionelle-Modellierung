@@ -41,7 +41,7 @@ def test_etl_seite_startet_und_markiert_schritt_zwei(
     assert any(element.value == "2 ETL durchführen" for element in anwendung.header)
     assert anwendung.get("progress")
     assert any("Schritt 1 von 7" in element.value for element in anwendung.caption)
-    assert sum("Noch nicht verfügbar" in element.value for element in anwendung.caption) == 1
+    assert sum("Noch nicht verfügbar" in element.value for element in anwendung.caption) == 0
     svg = "".join(element.value for element in anwendung.markdown)
     assert 'data-step="2" data-status="aktuell"' in svg
     assert 'data-step="1" data-status="abgeschlossen"' in svg

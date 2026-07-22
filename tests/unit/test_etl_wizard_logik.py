@@ -15,6 +15,11 @@ def test_vorschau_schaltet_datenprofil_frei() -> None:
     assert _kann_weiter({"schritt": 5, "vorschau": object()})
 
 
-def test_schritt_sieben_bleibt_gesperrt() -> None:
-    """Nach dem Datenprofil gibt es noch keine Importbestätigung."""
-    assert not _kann_weiter({"schritt": 6})
+def test_datenprofil_schaltet_importpruefung_frei() -> None:
+    """Ein berechnetes Profil macht Teilschritt sieben erreichbar."""
+    assert _kann_weiter({"schritt": 6, "profil": object()})
+
+
+def test_nach_schritt_sieben_gibt_es_keinen_weiteren_schritt() -> None:
+    """Der vollständige Wizard endet mit der verbindlichen Bestätigung."""
+    assert not _kann_weiter({"schritt": 7})

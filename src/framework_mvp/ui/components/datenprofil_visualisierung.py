@@ -29,7 +29,7 @@ def _gesamtuebersicht(ergebnis: Profilierungsergebnis) -> None:
         ("Vollständig leere Spalten", profil.vollstaendig_leere_spalten),
     )
     for spalte, (name, wert) in zip(kennzahlen, werte, strict=True):
-        spalte.metric(name, wert)
+        spalte.metric(name, str(wert))
     st.caption(
         f"Die Kennzahlen basieren auf {profil.zeilen:,} Zeilen. "
         f"Speicherbedarf des DataFrames: {profil.speicherbedarf_bytes:,} Bytes."
@@ -274,3 +274,75 @@ def zeige_datenprofil(ergebnis: Profilierungsergebnis, *, session_key: str) -> N
         _zeit_details(spaltenprofil, diagramm)
     else:
         st.info("Für den erkannten Datentyp ist keine technische Detailanalyse verfügbar.")
+
+
+def zeige_gespeichertes_datenprofil(struktur: dict[str, object]) -> None:
+    """Visualisiert ein validiertes Profil-JSON ohne erneute Profilberechnung."""
+    kennzahlen = st.columns(6)
+    werte = (
+        ("Zeilen", struktur["zeilen"]),
+        ("Spalten", struktur["spalten"]),
+        ("Echte Fehlwerte", struktur["echte_fehlwerte"]),
+        ("Textuelle Platzhalter", struktur["textuelle_platzhalter"]),
+        ("Exakte Duplikate", struktur["exakte_duplikate"]),
+        ("Vollständig leere Spalten", struktur["vollstaendig_leere_spalten"]),
+    )
+    for spalte, (name, wert) in zip(kennzahlen, werte, strict=True):
+        spalte.metric(name, str(wert))
+    spaltenprofile = struktur["spaltenprofile"]
+    if not isinstance(spaltenprofile, list):
+        st.warning("Das gespeicherte Profil enthält keine darstellbaren Spaltenprofile.")
+        return
+    tabellendaten = []
+    diagrammdaten = []
+    for spaltenprofil in spaltenprofile:
+        if not isinstance(spaltenprofil, dict):
+            continue
+        fehlwerte = spaltenprofil.get("fehlwerte", {})
+        if not isinstance(fehlwerte, dict):
+            continue
+        name = str(spaltenprofil.get("spaltenname", ""))
+        tabellendaten.append(
+            {
+                "Spaltenname": name,
+                "Originaldatentyp": spaltenprofil.get("originaldatentyp"),
+                "Profiltyp": spaltenprofil.get("profiltyp"),
+                "Gültige Werte": fehlwerte.get("gueltige_regulaere_werte", 0),
+                "Echte Fehlwerte": fehlwerte.get("echte_fehlwerte", 0),
+                "Textuelle Platzhalter": fehlwerte.get("platzhalter", 0),
+                "Eindeutige Werte": spaltenprofil.get("eindeutige_werte", 0),
+            }
+        )
+        diagrammdaten.extend(
+            (
+                {
+                    "spaltenname": name,
+                    "art": "Echte Fehlwerte",
+                    "anteil": fehlwerte.get("anteil_echter_fehlwerte", 0),
+                },
+                {
+                    "spaltenname": name,
+                    "art": "Textuelle Platzhalter",
+                    "anteil": fehlwerte.get("anteil_platzhalter", 0),
+                },
+            )
+        )
+    st.dataframe(pd.DataFrame(tabellendaten), hide_index=True)
+    st.vega_lite_chart(
+        {"values": diagrammdaten},
+        {
+            "mark": "bar",
+            "encoding": {
+                "y": {"field": "spaltenname", "type": "nominal", "title": "Spalte"},
+                "x": {
+                    "field": "anteil",
+                    "type": "quantitative",
+                    "stack": "zero",
+                    "axis": {"format": ".1%"},
+                    "title": "Anteil",
+                },
+                "color": {"field": "art", "type": "nominal", "title": "Art"},
+            },
+        },
+        use_container_width=True,
+    )

@@ -53,8 +53,25 @@ Die technische Profilierung berechnet Gesamtkennzahlen, echte Pandas-Fehlwerte, 
 textuelle Fehlwertplatzhalter sowie numerische, kategoriale und zeitbezogene Spaltenprofile auf
 der vollständigen Tabelle. Aggregierte Histogramme, Boxplots, Kategoriehäufigkeiten und
 Zeitintervalle unterstützen die visuelle Prüfung, ohne die Quelldaten zu verändern. Eine
-Datenbereinigung, Transformation, dauerhafte Speicherung oder Importbestätigung findet noch nicht
-statt.
+Datenbereinigung oder Transformation findet dabei nicht statt.
+
+Der vollständige ETL-Wizard umfasst außerdem die verbindliche Importprüfung. Nach Bestätigung
+wird die Originaldatei bytegenau und inhaltsadressiert gespeichert, das vollständige technische
+Profil als versioniertes JSON abgelegt und der Importvorgang mit Schema 4 in SQLite dokumentiert.
+Gespeicherte Importe können projektbezogen geöffnet und erneut auf Pfad-, Prüfsummen- und
+Profilintegrität geprüft werden.
+
+Die lokale Artefaktstruktur lautet:
+
+```text
+workspace/projects/<projekt-id>/
+├── raw/<sha256>/<sicherer-dateiname>
+├── profiles/<import-id>.json
+└── interim/
+```
+
+Der Ordner `interim` bleibt für spätere konsolidierte Zwischendatensätze reserviert. Eine
+Bestätigung verändert, bereinigt oder transformiert die importierten Inhalte nicht.
 
 ## Geplante Funktionen
 ### Datenimport
