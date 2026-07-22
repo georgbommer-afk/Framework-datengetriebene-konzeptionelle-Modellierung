@@ -57,16 +57,21 @@ Unter Windows wird die virtuelle Umgebung mit `.venv\Scripts\activate` aktiviert
 
 ### Start
 
-Die deutschsprachige Projektverwaltung wird mit folgendem Befehl gestartet:
+Die deutschsprachige Projektverwaltung mit ihrem siebenschrittigen Wizard wird mit folgendem
+Befehl gestartet:
 
 ```bash
 python -m streamlit run streamlit_app.py
 ```
 
-Die Anwendung legt Projektmetadaten standardmäßig in der lokalen SQLite-Datenbank
+Die Anwendung legt strukturierte Projektmetadaten im aktuellen Schema 2 standardmäßig in der lokalen SQLite-Datenbank
 `workspace/framework_mvp.sqlite` ab. Ein abweichender Pfad kann über die Umgebungsvariable
 `FRAMEWORK_MVP_DB_PATH` festgelegt werden. Das Verzeichnis `workspace/` wird nicht versioniert und
 muss bei Bedarf separat gesichert werden.
+
+Beim ersten Zugriff werden vorhandene Datenbanken der Schemaversion 1 automatisch und
+transaktional auf Version 2 migriert. Alte Personenangaben, Zielsetzungen und frei erfasste
+Leistungskennzahlen bleiben dabei erhalten.
 
 ### Tests und Qualitätsprüfungen
 
