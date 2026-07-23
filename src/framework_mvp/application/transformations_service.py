@@ -123,6 +123,10 @@ class TransformationsService:
         """Persistiert die aktuelle Plankonfiguration."""
         self._repository.plan_speichern(plan)
 
+    def plan_laden(self, plan_id: UUID) -> Transformationsplan | None:
+        """Lädt einen persistierten Transformationsplan."""
+        return self._repository.plan_laden(plan_id)
+
     def import_dataframe_laden(self, import_id: UUID) -> pd.DataFrame:
         """Rekonstruiert die importierte Tabelle aus Raw-Datei und Importparametern."""
         importvorgang, inhalt = self._import_service.originaldatei_laden(import_id)

@@ -20,11 +20,22 @@ from framework_mvp.domain.models.datenprofil import (
     Zeitgranularitaet,
     ZeitintervallAggregation,
 )
+from framework_mvp.domain.models.datenqualitaet import (
+    Massnahmenaktion,
+    Qualitaetsbefund,
+    Qualitaetsdimension,
+    Qualitaetsmassnahme,
+    Qualitaetsmassnahmenplan,
+    QualitaetspruefungArtefakt,
+    Qualitaetsregel,
+    Schweregrad,
+)
 from framework_mvp.domain.models.datenquelle import (
     Datenquelle,
     Quellenart,
     Quellsystemtyp,
 )
+from framework_mvp.domain.models.event_log import EventLogArtefakt, EventLogStatus
 from framework_mvp.domain.models.importauftrag import (
     CsvImportparameter,
     DateiMetadaten,
@@ -90,6 +101,8 @@ __all__ = [
     "Datenquelle",
     "Datenprofil",
     "DatenprofilDiagramme",
+    "EventLogArtefakt",
+    "EventLogStatus",
     "CsvImportparameter",
     "DateiMetadaten",
     "Dateityp",
@@ -115,6 +128,7 @@ __all__ = [
     "Mappingstatus",
     "MappingValidierung",
     "MappingWarnung",
+    "Massnahmenaktion",
     "NumerischeDiagrammdaten",
     "NumerischesSpaltenprofil",
     "PlatzhalterAnzahl",
@@ -123,11 +137,18 @@ __all__ = [
     "Produktionsklassifikation",
     "Projekt",
     "Projektstatus",
+    "Qualitaetsbefund",
+    "Qualitaetsdimension",
+    "Qualitaetsmassnahme",
+    "Qualitaetsmassnahmenplan",
+    "QualitaetspruefungArtefakt",
+    "Qualitaetsregel",
     "Quellenart",
     "Quellsystemtyp",
     "Rahmenbedingungen",
     "Systemklassifikation",
     "Systemtyp",
+    "Schweregrad",
     "SemantischesMapping",
     "Spaltenzuordnung",
     "SpaltenDiagrammdaten",

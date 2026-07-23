@@ -38,8 +38,8 @@ Das erzeugte konzeptionelle Modell kann jedoch als Grundlage für eine spätere 
 
 ## Aktueller Funktionsumfang
 
-Die Streamlit-Anwendung besitzt drei Hauptbereiche: Projektverwaltung, ETL und semantisches
-Mapping. Projektbezogene
+Die Streamlit-Anwendung besitzt fünf Hauptbereiche: Projektverwaltung, ETL, semantisches
+Mapping, Event-Log-Aufbau und Datenqualitätsprüfung. Projektbezogene
 Datenquellen werden im Datenquellenkatalog Q registriert. Der ETL-Wizard verarbeitet jeweils eine
 CSV- oder XLSX-Datei temporär, führt durch Importeinstellungen und Tabellenblattauswahl und zeigt
 eine unveränderte Vorschau der ersten maximal 200 Zeilen sowie eine kompakte Spaltenübersicht.
@@ -70,7 +70,13 @@ workspace/projects/<projekt-id>/
 ├── interim/<zwischendatensatz-id>.csv.gz
 ├── interim/<zwischendatensatz-id>.schema.json
 ├── interim/<zwischendatensatz-id>.transformation.json
-└── mappings/<mapping-id>.json
+├── mappings/<mapping-id>.json
+├── event_logs/<event-log-id>.csv.gz
+├── event_logs/<event-log-id>.schema.json
+├── event_logs/<event-log-id>.lineage.json
+├── quality/<quality-run-id>.report.json
+├── quality/<quality-run-id>.measures.json
+└── quality/<quality-run-id>.csv.gz
 ```
 
 Nach der Importbestätigung können geordnete, aktivierbare Transformationspläne erstellt werden.
@@ -85,6 +91,14 @@ Ereignisrollen zu. Ereignisorientierte und breite Zeitstempeldatensätze werden 
 Validierung, Warnungen und eine standardisierte temporäre Ereignisvorschau helfen bei der
 fachlichen Prüfung; ein Event Log wird in diesem Schritt noch nicht erzeugt. Mappingdateien
 liegen projektbezogen unter `mappings/`.
+
+Framework-Schritt 4 wendet ein validiertes Mapping reproduzierbar an und erzeugt ein kanonisches
+Event Log mit `case_id`, `activity`, `timestamp`, stabiler `event_id`, zusätzlichen Attributen
+und technischer Herkunft. CSV.GZ ist das führende Artefakt; Schema und Lineage werden als JSON
+gespeichert. Framework-Schritt 5 prüft dieses Event Log regelbasiert auf Vollständigkeit,
+Validität, Konsistenz, Eindeutigkeit und zeitliche Plausibilität. Maßnahmen werden ausschließlich
+explizit auf einer Arbeitskopie angewendet und gemeinsam mit Bericht und Vorher-Nachher-Vergleich
+gespeichert. Das ursprüngliche Event Log bleibt unverändert.
 
 ## Geplante Funktionen
 ### Datenimport

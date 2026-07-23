@@ -6,7 +6,7 @@ from typing import Any
 
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
 
-SCHEMAVERSION = 4
+SCHEMAVERSION = 5
 
 PROJEKT_SCHEMA_VERSION_2 = """
 CREATE TABLE IF NOT EXISTS projekte (
@@ -123,6 +123,63 @@ CREATE INDEX IF NOT EXISTS idx_semantische_mappings_datensatz_id
     ON semantische_mappings(zwischendatensatz_id);
 """
 
+EVENT_LOG_QUALITAET_SCHEMA_VERSION_5 = """
+CREATE TABLE IF NOT EXISTS event_logs (
+    event_log_id TEXT PRIMARY KEY NOT NULL,
+    projekt_id TEXT NOT NULL,
+    zwischendatensatz_id TEXT NOT NULL,
+    mapping_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('entwurf', 'erzeugt', 'ungueltig')),
+    ereignisanzahl INTEGER NOT NULL,
+    fallanzahl INTEGER NOT NULL,
+    aktivitaetsanzahl INTEGER NOT NULL,
+    zeitraum_von TEXT,
+    zeitraum_bis TEXT,
+    relativer_csv_pfad TEXT NOT NULL,
+    relativer_schema_pfad TEXT NOT NULL,
+    relativer_lineage_pfad TEXT NOT NULL,
+    relativer_xes_pfad TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    erstellt_am_utc TEXT NOT NULL,
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id),
+    FOREIGN KEY (zwischendatensatz_id)
+        REFERENCES zwischendatensaetze(zwischendatensatz_id),
+    FOREIGN KEY (mapping_id) REFERENCES semantische_mappings(mapping_id)
+);
+CREATE INDEX IF NOT EXISTS idx_event_logs_projekt_id ON event_logs(projekt_id);
+CREATE TABLE IF NOT EXISTS qualitaetspruefungen (
+    quality_run_id TEXT PRIMARY KEY NOT NULL,
+    projekt_id TEXT NOT NULL,
+    event_log_id TEXT NOT NULL,
+    report_json TEXT NOT NULL,
+    vergleich_json TEXT NOT NULL,
+    relativer_report_pfad TEXT NOT NULL,
+    relativer_massnahmen_pfad TEXT NOT NULL,
+    relativer_csv_pfad TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    erstellt_am_utc TEXT NOT NULL,
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id),
+    FOREIGN KEY (event_log_id) REFERENCES event_logs(event_log_id)
+);
+CREATE INDEX IF NOT EXISTS idx_qualitaetspruefungen_projekt_id
+    ON qualitaetspruefungen(projekt_id);
+CREATE TABLE IF NOT EXISTS qualitaetsregeln (
+    quality_run_id TEXT NOT NULL,
+    regel_id TEXT NOT NULL,
+    regel_json TEXT NOT NULL,
+    PRIMARY KEY (quality_run_id, regel_id),
+    FOREIGN KEY (quality_run_id) REFERENCES qualitaetspruefungen(quality_run_id)
+);
+CREATE TABLE IF NOT EXISTS qualitaetsmassnahmen (
+    quality_run_id TEXT NOT NULL,
+    massnahme_id TEXT NOT NULL,
+    massnahme_json TEXT NOT NULL,
+    reihenfolge INTEGER NOT NULL,
+    PRIMARY KEY (quality_run_id, massnahme_id),
+    FOREIGN KEY (quality_run_id) REFERENCES qualitaetspruefungen(quality_run_id)
+);
+"""
+
 _PROJEKTSPALTEN_VERSION_2 = """
     projekt_id, bezeichnung, beteiligte_personen_json, status,
     erstellt_am_utc, geaendert_am_utc, untersuchungsauftrag_json
@@ -217,6 +274,9 @@ def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
             if anweisung.strip():
                 verbindung.execute(anweisung)
         for anweisung in WEITERE_ETL_TABELLEN_SCHEMA_VERSION_4.split(";"):
+            if anweisung.strip():
+                verbindung.execute(anweisung)
+        for anweisung in EVENT_LOG_QUALITAET_SCHEMA_VERSION_5.split(";"):
             if anweisung.strip():
                 verbindung.execute(anweisung)
         if version < SCHEMAVERSION:

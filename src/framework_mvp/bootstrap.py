@@ -4,7 +4,9 @@ import os
 from pathlib import Path
 
 from framework_mvp.application.datenimport_service import DatenimportService
+from framework_mvp.application.datenqualitaet_service import DatenqualitaetService
 from framework_mvp.application.datenquelle_service import DatenquelleService
+from framework_mvp.application.event_log_service import EventLogService
 from framework_mvp.application.importvorgang_service import ImportvorgangService
 from framework_mvp.application.mapping_service import MappingService
 from framework_mvp.application.projekt_service import ProjektService
@@ -14,6 +16,9 @@ from framework_mvp.infrastructure.persistence.sqlite_datenquelle_repository impo
     SQLiteDatenquelleRepository,
 )
 from framework_mvp.infrastructure.persistence.sqlite_etl_repository import SQLiteETLRepository
+from framework_mvp.infrastructure.persistence.sqlite_event_log_repository import (
+    SQLiteEventLogRepository,
+)
 from framework_mvp.infrastructure.persistence.sqlite_importvorgang_repository import (
     SQLiteImportvorgangRepository,
 )
@@ -22,6 +27,9 @@ from framework_mvp.infrastructure.persistence.sqlite_mapping_repository import (
 )
 from framework_mvp.infrastructure.persistence.sqlite_projekt_repository import (
     SQLiteProjektRepository,
+)
+from framework_mvp.infrastructure.persistence.sqlite_qualitaet_repository import (
+    SQLiteQualitaetRepository,
 )
 from framework_mvp.workspace import WorkspaceKonfiguration
 
@@ -95,5 +103,40 @@ def erstelle_mapping_service(
     return MappingService(
         SQLiteMappingRepository(pfad),
         transformations_service,
+        ImportartefaktSpeicher(workspace_konfiguration),
+    )
+
+
+def erstelle_event_log_service(
+    datenbankpfad: Path | str | None = None,
+    workspace: WorkspaceKonfiguration | None = None,
+) -> EventLogService:
+    """Erzeugt den Service für kanonische Event Logs."""
+    pfad = ermittle_datenbankpfad(datenbankpfad)
+    workspace_konfiguration = workspace or WorkspaceKonfiguration.ermitteln()
+    transformation = erstelle_transformations_service(pfad, workspace_konfiguration)
+    mapping = MappingService(
+        SQLiteMappingRepository(pfad),
+        transformation,
+        ImportartefaktSpeicher(workspace_konfiguration),
+    )
+    return EventLogService(
+        SQLiteEventLogRepository(pfad),
+        mapping,
+        transformation,
+        ImportartefaktSpeicher(workspace_konfiguration),
+    )
+
+
+def erstelle_datenqualitaet_service(
+    datenbankpfad: Path | str | None = None,
+    workspace: WorkspaceKonfiguration | None = None,
+) -> DatenqualitaetService:
+    """Erzeugt den Service für Qualitätsprüfungen und Maßnahmen."""
+    pfad = ermittle_datenbankpfad(datenbankpfad)
+    workspace_konfiguration = workspace or WorkspaceKonfiguration.ermitteln()
+    return DatenqualitaetService(
+        SQLiteQualitaetRepository(pfad),
+        erstelle_event_log_service(pfad, workspace_konfiguration),
         ImportartefaktSpeicher(workspace_konfiguration),
     )
