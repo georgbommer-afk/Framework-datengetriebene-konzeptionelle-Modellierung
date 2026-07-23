@@ -46,5 +46,6 @@ def test_projektverzeichnisse_werden_beim_ersten_bedarf_angelegt(tmp_path: Path)
             pfade.mappings,
             pfade.event_logs,
             pfade.quality,
+            pfade.process_mining,
         )
     )

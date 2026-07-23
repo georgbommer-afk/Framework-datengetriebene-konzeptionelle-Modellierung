@@ -90,8 +90,20 @@ class SQLiteQualitaetRepository:
                 "SELECT * FROM qualitaetspruefungen WHERE quality_run_id=?",
                 (str(quality_run_id),),
             ).fetchone()
-        if zeile is None:
-            return None
+        return None if zeile is None else self._artefakt(zeile)
+
+    def fuer_projekt(self, projekt_id: UUID) -> list[QualitaetspruefungArtefakt]:
+        """Listet Qualitätsprüfungen eines Projekts stabil auf."""
+        with self._verbindung() as verbindung:
+            zeilen = verbindung.execute(
+                "SELECT * FROM qualitaetspruefungen WHERE projekt_id=? "
+                "ORDER BY erstellt_am_utc, quality_run_id",
+                (str(projekt_id),),
+            ).fetchall()
+        return [self._artefakt(zeile) for zeile in zeilen]
+
+    @staticmethod
+    def _artefakt(zeile: sqlite3.Row) -> QualitaetspruefungArtefakt:
         return QualitaetspruefungArtefakt(
             UUID(zeile["quality_run_id"]),
             UUID(zeile["projekt_id"]),

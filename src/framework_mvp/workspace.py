@@ -20,6 +20,7 @@ class ProjektWorkspace:
     mappings: Path
     event_logs: Path
     quality: Path
+    process_mining: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +49,24 @@ class WorkspaceKonfiguration:
         mappings = projektpfad / "mappings"
         event_logs = projektpfad / "event_logs"
         quality = projektpfad / "quality"
-        for verzeichnis in (raw, profiles, interim, mappings, event_logs, quality):
+        process_mining = projektpfad / "process_mining"
+        for verzeichnis in (
+            raw,
+            profiles,
+            interim,
+            mappings,
+            event_logs,
+            quality,
+            process_mining,
+        ):
             verzeichnis.mkdir(parents=True, exist_ok=True)
-        return ProjektWorkspace(projektpfad, raw, profiles, interim, mappings, event_logs, quality)
+        return ProjektWorkspace(
+            projektpfad,
+            raw,
+            profiles,
+            interim,
+            mappings,
+            event_logs,
+            quality,
+            process_mining,
+        )

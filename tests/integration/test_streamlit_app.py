@@ -172,3 +172,14 @@ def test_manueller_zeitraum_zeigt_beide_datumsfelder(
     anwendung.session_state["wizard_schritt"] = 6
     anwendung.run()
     assert {element.label for element in anwendung.date_input} == {"Beginn", "Ende"}
+
+
+def test_process_mining_seite_ist_in_der_navigation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Framework-Schritt 6 ist erreichbar und zeigt keine Framework-Grafik."""
+    anwendung = _anwendung_starten(tmp_path, monkeypatch)
+    anwendung.radio[0].set_value("6 Process Mining durchführen").run()
+    assert not anwendung.exception
+    assert any(element.value == "6 Process Mining durchführen" for element in anwendung.header)
+    assert not anwendung.get("html")
