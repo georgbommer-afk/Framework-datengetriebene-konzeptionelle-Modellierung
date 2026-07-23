@@ -33,8 +33,18 @@ def test_umgebungsvariable_und_expliziter_pfad(
 
 
 def test_projektverzeichnisse_werden_beim_ersten_bedarf_angelegt(tmp_path: Path) -> None:
-    """Raw-, Profil- und Interim-Verzeichnis werden projektbezogen erzeugt."""
+    """Alle Artefaktverzeichnisse werden projektbezogen erzeugt."""
     projekt_id = uuid4()
     pfade = WorkspaceKonfiguration.ermitteln(tmp_path).fuer_projekt_anlegen(projekt_id)
     assert pfade.projekt == tmp_path / "projects" / str(projekt_id)
-    assert all(pfad.is_dir() for pfad in (pfade.raw, pfade.profiles, pfade.interim))
+    assert all(
+        pfad.is_dir()
+        for pfad in (
+            pfade.raw,
+            pfade.profiles,
+            pfade.interim,
+            pfade.mappings,
+            pfade.event_logs,
+            pfade.quality,
+        )
+    )
