@@ -36,14 +36,71 @@ Das Projekt umfasst die Verarbeitung historischer Ereignisdaten bis zur Erstellu
 
 Das erzeugte konzeptionelle Modell kann jedoch als Grundlage für eine spätere technische Umsetzung in einer Simulationssoftware dienen.
 
+## Aktueller Funktionsumfang
+
+Die Streamlit-Anwendung besitzt drei Hauptbereiche: Projektverwaltung, ETL und semantisches
+Mapping. Projektbezogene
+Datenquellen werden im Datenquellenkatalog Q registriert. Der ETL-Wizard verarbeitet jeweils eine
+CSV- oder XLSX-Datei temporär, führt durch Importeinstellungen und Tabellenblattauswahl und zeigt
+eine unveränderte Vorschau der ersten maximal 200 Zeilen sowie eine kompakte Spaltenübersicht.
+
+Die Datei, das vollständig eingelesene DataFrame und das technische Datenprofil bleiben im
+temporären Streamlit-Sitzungszustand. Weder Uploadbytes, Vorschauen noch Profile werden in SQLite
+oder im Workspace gespeichert. Die maximale Uploadgröße beträgt standardmäßig 50 MB und kann mit
+einer positiven Ganzzahl in `FRAMEWORK_MVP_MAX_UPLOAD_MB` angepasst werden.
+
+Die technische Profilierung berechnet Gesamtkennzahlen, echte Pandas-Fehlwerte, getrennte
+textuelle Fehlwertplatzhalter sowie numerische, kategoriale und zeitbezogene Spaltenprofile auf
+der vollständigen Tabelle. Aggregierte Histogramme, Boxplots, Kategoriehäufigkeiten und
+Zeitintervalle unterstützen die visuelle Prüfung, ohne die Quelldaten zu verändern. Eine
+Datenbereinigung oder Transformation findet dabei nicht statt.
+
+Der vollständige ETL-Wizard umfasst außerdem die verbindliche Importprüfung. Nach Bestätigung
+wird die Originaldatei bytegenau und inhaltsadressiert gespeichert, das vollständige technische
+Profil als versioniertes JSON abgelegt und der Importvorgang mit Schema 4 in SQLite dokumentiert.
+Gespeicherte Importe können projektbezogen geöffnet und erneut auf Pfad-, Prüfsummen- und
+Profilintegrität geprüft werden.
+
+Die lokale Artefaktstruktur lautet:
+
+```text
+workspace/projects/<projekt-id>/
+├── raw/<sha256>/<sicherer-dateiname>
+├── profiles/<import-id>.json
+├── interim/<zwischendatensatz-id>.csv.gz
+├── interim/<zwischendatensatz-id>.schema.json
+├── interim/<zwischendatensatz-id>.transformation.json
+└── mappings/<mapping-id>.json
+```
+
+Nach der Importbestätigung können geordnete, aktivierbare Transformationspläne erstellt werden.
+Sie unterstützen Spaltenauswahl und -umbenennung, Typkonvertierung, explizite Behandlung von
+Platzhaltern, Fehlwerten, Duplikaten und Ausreißern, Filter sowie abgeleitete Spalten.
+Kontrollierte Joins prüfen Schlüssel und Kardinalität vor der Ausführung. Raw-Dateien bleiben
+unverändert. Ein erzeugter Zwischendatensatz wird als `CSV.GZ`, Schema-JSON und
+Transformation-JSON im Ordner `interim` gespeichert.
+
+Framework-Schritt 3 ordnet anschließend Spalten eines Zwischendatensatzes semantischen
+Ereignisrollen zu. Ereignisorientierte und breite Zeitstempeldatensätze werden unterstützt.
+Validierung, Warnungen und eine standardisierte temporäre Ereignisvorschau helfen bei der
+fachlichen Prüfung; ein Event Log wird in diesem Schritt noch nicht erzeugt. Mappingdateien
+liegen projektbezogen unter `mappings/`.
+
 ## Geplante Funktionen
 ### Datenimport
 Die Anwendung soll strukturierte historische Daten aus Dateien importieren können. Abhängig vom Entwicklungsstand können später zusätzlich direkte Datenbankverbindungen unterstützt werden.
 
-Vorgesehene Formate sind insbesondere:
+Aktuell unterstützte Formate sind:
 - CSV,
 - Excel,
-- gegebenenfalls weitere tabellarische Formate.
+
+Direkte Datenbankverbindungen und weitere tabellarische Formate sind erst für spätere
+Ausbaustufen vorgesehen.
+
+Bekannte Einschränkung: Beim Lesen einzelner XLSX-Dateien kann Openpyxl auf unbekannte oder
+bedingte Formatierungserweiterungen hinweisen. Diese Warnungen betreffen die Darstellung der
+Arbeitsmappe, werden nicht global unterdrückt und verändern weder die hochgeladene Originaldatei
+noch die importierten Zellwerte.
 
 ### Datenzuordnung
 Die anwendende Person soll relevante Spalten den für Process Mining benötigten Informationen zuordnen können, beispielsweise:

@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 
 from framework_mvp.domain.models import (
+    BeteiligtePerson,
+    Betrachtungszeitraum,
+    BetrachtungszeitraumModus,
     Projekt,
     Projektstatus,
     Systemtyp,
@@ -22,24 +25,26 @@ from framework_mvp.infrastructure.persistence.sqlite_projekt_repository import (
 def _projekt(bezeichnung: str) -> Projekt:
     auftrag = Untersuchungsauftrag(
         problemstellung="Material wartet zu lange",
-        zielsetzung="Wartezeiten reduzieren",
+        untersuchungszweck="System analysieren",
         systemtyp=Systemtyp.KOMBINIERT,
         systemgrenze="Wareneingang bis Montage",
-        input_beschreibung="Aufträge und Material",
-        transformation_beschreibung="Transport und Bearbeitung",
-        output_beschreibung="Fertiges Produkt",
         detaillierungsgrad="Arbeitsstation",
-        leistungskennzahlen=("Durchlaufzeit", "Bestand"),
-        rahmenbedingungen="Bestehende Anlagen",
-        betrachtungszeitraum_beginn=date(2026, 1, 1),
-        betrachtungszeitraum_ende=date(2026, 3, 31),
+        legacy_leistungskennzahlen=("Durchlaufzeit", "Bestand"),
+        betrachtungszeitraum=Betrachtungszeitraum(
+            BetrachtungszeitraumModus.MANUELL,
+            date(2026, 1, 1),
+            date(2026, 3, 31),
+        ),
         anmerkungen="Erste Untersuchung",
     )
     return Projekt.neu(
         bezeichnung,
         auftrag,
         status=Projektstatus.AKTIV,
-        beteiligte_personen=("Ada Lovelace", "Grace Hopper"),
+        beteiligte_personen=(
+            BeteiligtePerson("Ada", "Lovelace"),
+            BeteiligtePerson("Grace", "Hopper"),
+        ),
     )
 
 
@@ -65,7 +70,7 @@ def test_aktualisieren_eines_bestehenden_projekts(tmp_path: Path) -> None:
         bezeichnung="Analyse B",
         untersuchungsauftrag=ursprung.untersuchungsauftrag,
         status=Projektstatus.ABGESCHLOSSEN,
-        beteiligte_personen=("Ada Lovelace",),
+        beteiligte_personen=(BeteiligtePerson("Ada", "Lovelace"),),
     )
 
     repository.speichern(aktualisiert)
@@ -104,7 +109,7 @@ def test_laden_eines_unbekannten_projekts(tmp_path: Path) -> None:
     assert repository.laden(projekt.projekt_id) is None
 
 
-def test_schemaversion_ist_eins(tmp_path: Path) -> None:
+def test_schemaversion_ist_vier(tmp_path: Path) -> None:
     """Nach der Schemaerstellung ist die SQLite-Schemaversion gesetzt."""
     datenbankpfad = tmp_path / "projekte.sqlite"
     repository = SQLiteProjektRepository(datenbankpfad)
@@ -113,7 +118,7 @@ def test_schemaversion_ist_eins(tmp_path: Path) -> None:
     with sqlite3.connect(datenbankpfad) as verbindung:
         schemaversion = verbindung.execute("PRAGMA user_version").fetchone()[0]
 
-    assert schemaversion == 1
+    assert schemaversion == 4
 
 
 def test_neuere_schemaversion_wird_abgelehnt_und_nicht_zurueckgesetzt(
@@ -122,7 +127,7 @@ def test_neuere_schemaversion_wird_abgelehnt_und_nicht_zurueckgesetzt(
     """Eine neuere Datenbankversion bleibt unverändert und verhindert den Zugriff."""
     datenbankpfad = tmp_path / "projekte.sqlite"
     with sqlite3.connect(datenbankpfad) as verbindung:
-        verbindung.execute("PRAGMA user_version = 2")
+        verbindung.execute("PRAGMA user_version = 5")
     repository = SQLiteProjektRepository(datenbankpfad)
 
     with pytest.raises(NichtUnterstuetzteSchemaversion):
@@ -131,7 +136,7 @@ def test_neuere_schemaversion_wird_abgelehnt_und_nicht_zurueckgesetzt(
     with sqlite3.connect(datenbankpfad) as verbindung:
         schemaversion = verbindung.execute("PRAGMA user_version").fetchone()[0]
 
-    assert schemaversion == 2
+    assert schemaversion == 5
 
 
 def test_upsert_erhaelt_urspruenglichen_erstellungszeitpunkt(tmp_path: Path) -> None:
@@ -143,7 +148,7 @@ def test_upsert_erhaelt_urspruenglichen_erstellungszeitpunkt(tmp_path: Path) -> 
     aktualisiert = replace(
         ursprung,
         bezeichnung="Analyse mit neuen Fachwerten",
-        beteiligte_personen=("Neue Person",),
+        beteiligte_personen=(BeteiligtePerson("Neue", "Person"),),
         erstellt_am=abweichender_zeitpunkt,
     )
 

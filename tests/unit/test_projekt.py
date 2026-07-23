@@ -11,6 +11,9 @@ from framework_mvp.domain.exceptions import (
     UngueltigerZeitstempel,
 )
 from framework_mvp.domain.models import (
+    BeteiligtePerson,
+    Betrachtungszeitraum,
+    BetrachtungszeitraumModus,
     Projekt,
     Projektstatus,
     Systemtyp,
@@ -21,7 +24,7 @@ from framework_mvp.domain.models import (
 def _vollstaendiger_auftrag() -> Untersuchungsauftrag:
     return Untersuchungsauftrag(
         problemstellung="  Lange Durchlaufzeiten  ",
-        zielsetzung=" Durchlaufzeit reduzieren ",
+        untersuchungszweck=" System analysieren ",
         systemtyp=Systemtyp.PRODUKTION,
         systemgrenze=" Montagelinie ",
     )
@@ -43,7 +46,7 @@ def test_unvollstaendiger_untersuchungsauftrag() -> None:
     """Ein fehlendes Mindestfeld ergibt einen unvollständigen Auftrag."""
     auftrag = Untersuchungsauftrag(
         problemstellung="Problem",
-        zielsetzung="   ",
+        untersuchungszweck="   ",
         systemtyp=Systemtyp.INTRALOGISTIK,
         systemgrenze="Lager",
     )
@@ -57,11 +60,14 @@ def test_ungueltiger_betrachtungszeitraum() -> None:
     with pytest.raises(UngueltigerBetrachtungszeitraum):
         Untersuchungsauftrag(
             problemstellung="Problem",
-            zielsetzung="Ziel",
+            untersuchungszweck="Ziel",
             systemtyp=Systemtyp.KOMBINIERT,
             systemgrenze="Werk",
-            betrachtungszeitraum_beginn=date(2026, 2, 1),
-            betrachtungszeitraum_ende=date(2026, 1, 31),
+            betrachtungszeitraum=Betrachtungszeitraum(
+                BetrachtungszeitraumModus.MANUELL,
+                date(2026, 2, 1),
+                date(2026, 1, 31),
+            ),
         )
 
 
@@ -102,14 +108,18 @@ def test_texte_und_listeneintraege_werden_bereinigt() -> None:
     """Rand-Leerzeichen und leere Listeneinträge werden normalisiert."""
     auftrag = Untersuchungsauftrag(
         problemstellung=" Problem ",
-        zielsetzung=" Ziel ",
+        untersuchungszweck=" Ziel ",
         systemtyp=Systemtyp.PRODUKTION,
         systemgrenze=" Grenze ",
-        leistungskennzahlen=(" Durchlaufzeit ", " ", "Auslastung"),
+        legacy_leistungskennzahlen=(" Durchlaufzeit ", " ", "Auslastung"),
     )
-    projekt = Projekt.neu(" Projekt ", auftrag, beteiligte_personen=(" Ada ", "", " Linus"))
+    projekt = Projekt.neu(
+        " Projekt ",
+        auftrag,
+        beteiligte_personen=(BeteiligtePerson(" Ada ", " Lovelace ", " Analyse "),),
+    )
 
     assert projekt.bezeichnung == "Projekt"
-    assert projekt.beteiligte_personen == ("Ada", "Linus")
+    assert projekt.beteiligte_personen[0] == BeteiligtePerson("Ada", "Lovelace", "Analyse")
     assert auftrag.problemstellung == "Problem"
-    assert auftrag.leistungskennzahlen == ("Durchlaufzeit", "Auslastung")
+    assert auftrag.legacy_leistungskennzahlen == ("Durchlaufzeit", "Auslastung")

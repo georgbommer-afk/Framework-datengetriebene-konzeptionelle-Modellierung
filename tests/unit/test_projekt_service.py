@@ -10,6 +10,7 @@ from framework_mvp.domain.exceptions import (
     UnvollstaendigerUntersuchungsauftrag,
 )
 from framework_mvp.domain.models import (
+    BeteiligtePerson,
     Projekt,
     Projektstatus,
     Systemtyp,
@@ -40,7 +41,7 @@ class InMemoryProjektRepository:
 def _auftrag(*, vollstaendig: bool = True) -> Untersuchungsauftrag:
     return Untersuchungsauftrag(
         problemstellung="Problem" if vollstaendig else "",
-        zielsetzung="Ziel",
+        untersuchungszweck="Ziel",
         systemtyp=Systemtyp.PRODUKTION,
         systemgrenze="Systemgrenze",
     )
@@ -54,7 +55,7 @@ def test_projekt_anlegen_und_speichern() -> None:
     projekt = service.projekt_anlegen(
         bezeichnung="Projekt A",
         untersuchungsauftrag=_auftrag(),
-        beteiligte_personen=("Ada",),
+        beteiligte_personen=(BeteiligtePerson("Ada"),),
     )
 
     assert repository.laden(projekt.projekt_id) == projekt
@@ -99,7 +100,7 @@ def test_aktualisierung_erhaelt_id_und_erstellungszeitpunkt() -> None:
         bezeichnung="Projekt B",
         untersuchungsauftrag=_auftrag(),
         status=Projektstatus.AKTIV,
-        beteiligte_personen=("Grace",),
+        beteiligte_personen=(BeteiligtePerson("Grace"),),
     )
 
     assert aktualisiert is not ursprung

@@ -1,0 +1,178 @@
+"""Unveränderliche Modelle des semantischen Mappings."""
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+from uuid import UUID
+
+from framework_mvp.domain.exceptions import Domaenenfehler
+
+
+class MappingModus(StrEnum):
+    """Unterstützte strukturelle Ausgangsformen."""
+
+    EREIGNISORIENTIERT = "ereignisorientiert"
+    BREITER_ZEITSTEMPELDATENSATZ = "breiter_zeitstempeldatensatz"
+
+
+class Mappingstatus(StrEnum):
+    """Validierungsstatus eines semantischen Mappings."""
+
+    ENTWURF = "entwurf"
+    VALIDIERT = "validiert"
+    UNGUELTIG = "ungueltig"
+
+
+class Ereignisrolle(StrEnum):
+    """Standardisierte Rollen eines möglichen Ereignisses."""
+
+    FALL_ID = "Fall-ID"
+    AKTIVITAET = "Aktivität"
+    EREIGNISZEITPUNKT = "Ereigniszeitpunkt"
+    STARTZEITPUNKT = "Startzeitpunkt"
+    ENDZEITPUNKT = "Endzeitpunkt"
+    LIFECYCLE = "Lifecycle-Status"
+    RESSOURCE = "Ressource"
+    MENGE = "Menge"
+    KOSTEN = "Kosten"
+    STANDORT = "Standort"
+    AUFTRAGSART = "Auftragsart"
+    PRODUKT = "Produkt"
+    MATERIAL = "Material"
+    MASCHINE = "Maschine"
+    TRANSPORTMITTEL = "Transportmittel"
+
+
+class Attributrolle(StrEnum):
+    """Rolle weiterer nicht standardisierter Spalten."""
+
+    EREIGNISATTRIBUT = "Ereignisattribut"
+    FALLATTRIBUT = "Fallattribut"
+    RESSOURCENATTRIBUT = "Ressourcenattribut"
+    OBJEKTIDENTIFIKATOR = "Objektidentifikator"
+    IGNORIERT = "Ignorierte Spalte"
+
+
+class Warnungsstufe(StrEnum):
+    """Schweregrad einer Mappingwarnung."""
+
+    FEHLER = "Fehler"
+    WARNUNG = "Warnung"
+    HINWEIS = "Hinweis"
+
+
+@dataclass(frozen=True, slots=True)
+class Spaltenzuordnung:
+    """Semantische oder attributbezogene Rolle einer technischen Spalte."""
+
+    spaltenname: str
+    rolle: Ereignisrolle | Attributrolle
+
+    def __post_init__(self) -> None:
+        """Bereinigt den technischen Spaltennamen."""
+        object.__setattr__(self, "spaltenname", self.spaltenname.strip())
+
+
+@dataclass(frozen=True, slots=True)
+class ZusammengesetzteFallId:
+    """Geordnete Fall-ID-Spalten und ihr explizites Trennzeichen."""
+
+    spalten: tuple[str, ...]
+    trennzeichen: str = "|"
+
+    def __post_init__(self) -> None:
+        """Bereinigt Fall-ID-Spalten und verlangt ein sichtbares Trennzeichen."""
+        object.__setattr__(
+            self, "spalten", tuple(wert.strip() for wert in self.spalten if wert.strip())
+        )
+        if not self.trennzeichen:
+            raise Domaenenfehler(
+                "Das Trennzeichen einer zusammengesetzten Fall-ID darf nicht leer sein."
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class ZeitstempelZuordnung:
+    """Aktivität und optionale Zusatzspalten einer breiten Zeitstempelspalte."""
+
+    zeitstempelspalte: str
+    aktivitaetsbezeichnung: str
+    ressourcenspalte: str = ""
+    statusspalte: str = ""
+
+    def __post_init__(self) -> None:
+        """Bereinigt alle Namen einer breiten Zeitstempelzuordnung."""
+        for feld in (
+            "zeitstempelspalte",
+            "aktivitaetsbezeichnung",
+            "ressourcenspalte",
+            "statusspalte",
+        ):
+            object.__setattr__(self, feld, getattr(self, feld).strip())
+
+
+@dataclass(frozen=True, slots=True)
+class MappingWarnung:
+    """Standardisierte Feststellung einer Mappingvalidierung."""
+
+    stufe: Warnungsstufe
+    code: str
+    meldung: str
+    anzahl: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class MappingValidierung:
+    """Kennzahlen, Warnungen und Gültigkeit der standardisierten Vorschau."""
+
+    gueltig: bool
+    fehlende_fall_ids: int
+    fehlende_aktivitaeten: int
+    nicht_interpretierbare_zeitwerte: int
+    start_nach_ende: int
+    identische_ereigniszeilen: int
+    moegliche_doppelte_ereignisse: int
+    faelle_mit_einem_ereignis: int
+    faelle_mit_vielen_ereignissen: int
+    unterschiedliche_aktivitaeten: int
+    unterschiedliche_faelle: int
+    warnungen: tuple[MappingWarnung, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SemantischesMapping:
+    """Vollständige Konfiguration zwischen Interim-Spalten und semantischen Rollen."""
+
+    mapping_id: UUID
+    projekt_id: UUID
+    zwischendatensatz_id: UUID
+    mapping_modus: MappingModus
+    fall_id: ZusammengesetzteFallId
+    aktivitaetsspalte: str
+    zeitstempelspalte: str
+    startzeitstempelspalte: str
+    endzeitstempelspalte: str
+    lifecycle_spalte: str
+    ressourcen_spalte: str
+    spaltenzuordnungen: tuple[Spaltenzuordnung, ...]
+    zeitstempelzuordnungen: tuple[ZeitstempelZuordnung, ...]
+    validierung: MappingValidierung | None
+    erstellt_am: datetime
+    geaendert_am: datetime
+    status: Mappingstatus
+
+    def __post_init__(self) -> None:
+        """Bereinigt Namen und normalisiert Zeitstempel nach UTC."""
+        for feld in (
+            "aktivitaetsspalte",
+            "zeitstempelspalte",
+            "startzeitstempelspalte",
+            "endzeitstempelspalte",
+            "lifecycle_spalte",
+            "ressourcen_spalte",
+        ):
+            object.__setattr__(self, feld, getattr(self, feld).strip())
+        if self.erstellt_am.utcoffset() is None or self.geaendert_am.utcoffset() is None:
+            raise Domaenenfehler("Zeitstempel eines Mappings müssen zeitzonenbewusst sein.")
+        object.__setattr__(self, "erstellt_am", self.erstellt_am.astimezone(UTC))
+        object.__setattr__(self, "geaendert_am", self.geaendert_am.astimezone(UTC))
