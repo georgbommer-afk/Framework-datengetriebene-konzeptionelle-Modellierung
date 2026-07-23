@@ -38,8 +38,8 @@ Das erzeugte konzeptionelle Modell kann jedoch als Grundlage für eine spätere 
 
 ## Aktueller Funktionsumfang
 
-Die Streamlit-Anwendung besitzt fünf Hauptbereiche: Projektverwaltung, ETL, semantisches
-Mapping, Event-Log-Aufbau und Datenqualitätsprüfung. Projektbezogene
+Die Streamlit-Anwendung besitzt sechs Hauptbereiche: Projektverwaltung, ETL, semantisches
+Mapping, Event-Log-Aufbau, Datenqualitätsprüfung und Process Mining. Projektbezogene
 Datenquellen werden im Datenquellenkatalog Q registriert. Der ETL-Wizard verarbeitet jeweils eine
 CSV- oder XLSX-Datei temporär, führt durch Importeinstellungen und Tabellenblattauswahl und zeigt
 eine unveränderte Vorschau der ersten maximal 200 Zeilen sowie eine kompakte Spaltenübersicht.
@@ -76,7 +76,11 @@ workspace/projects/<projekt-id>/
 ├── event_logs/<event-log-id>.lineage.json
 ├── quality/<quality-run-id>.report.json
 ├── quality/<quality-run-id>.measures.json
-└── quality/<quality-run-id>.csv.gz
+├── quality/<quality-run-id>.csv.gz
+├── process_mining/<analyse-id>.summary.json
+├── process_mining/<analyse-id>.variants.csv.gz
+├── process_mining/<analyse-id>.dfg.json
+└── process_mining/<analyse-id>.model.pnml
 ```
 
 Nach der Importbestätigung können geordnete, aktivierbare Transformationspläne erstellt werden.
@@ -99,6 +103,14 @@ gespeichert. Framework-Schritt 5 prüft dieses Event Log regelbasiert auf Vollst
 Validität, Konsistenz, Eindeutigkeit und zeitliche Plausibilität. Maßnahmen werden ausschließlich
 explizit auf einer Arbeitskopie angewendet und gemeinsam mit Bericht und Vorher-Nachher-Vergleich
 gespeichert. Das ursprüngliche Event Log bleibt unverändert.
+
+Framework-Schritt 6 berechnet Varianten, Aktivitäts-, Start-, End- und
+Directly-Follows-Häufigkeiten. Filter bilden ausschließlich eine dokumentierte
+Analysesicht. Als Discovery-Verfahren stehen Inductive Miner und Heuristics Miner über
+PM4Py zur Verfügung. Analysen werden als JSON, CSV.GZ und PNML sowie optional als PTML
+und SVG gespeichert; Pickle wird nicht verwendet. Die SQLite-Schemaversion ist 6.
+Conformance Checking, Token Replay, Alignments, Performance- und
+Durchlaufzeitanalysen, Bottleneck-Analyse und KPI-Aggregation sind noch nicht enthalten.
 
 ## Geplante Funktionen
 ### Datenimport

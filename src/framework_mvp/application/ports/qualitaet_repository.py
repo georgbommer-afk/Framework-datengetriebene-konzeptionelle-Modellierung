@@ -27,3 +27,7 @@ class QualitaetRepository(Protocol):
     def laden(self, quality_run_id: UUID) -> QualitaetspruefungArtefakt | None:
         """Lädt eine Qualitätsprüfung."""
         ...
+
+    def fuer_projekt(self, projekt_id: UUID) -> list[QualitaetspruefungArtefakt]:
+        """Listet Qualitätsprüfungen eines Projekts."""
+        ...

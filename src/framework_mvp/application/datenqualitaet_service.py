@@ -158,6 +158,10 @@ class DatenqualitaetService:
         json.loads(self._artefakte.lesen(artefakt.relativer_massnahmen_pfad))
         return artefakt, pd.read_csv(BytesIO(gzip.decompress(inhalt)))
 
+    def fuer_projekt(self, projekt_id: UUID) -> list[QualitaetspruefungArtefakt]:
+        """Listet ausschließlich gespeicherte Qualitätsartefakte eines Projekts."""
+        return self._repository.fuer_projekt(projekt_id)
+
     @staticmethod
     def _vergleich(
         vorher: QualitaetspruefungErgebnis, nachher: QualitaetspruefungErgebnis

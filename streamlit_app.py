@@ -10,12 +10,14 @@ from framework_mvp.bootstrap import (
     erstelle_event_log_service,
     erstelle_importvorgang_service,
     erstelle_mapping_service,
+    erstelle_process_mining_service,
     erstelle_projekt_service,
     erstelle_transformations_service,
 )
 from framework_mvp.ui.pages.datenqualitaet import zeige_datenqualitaet_seite
 from framework_mvp.ui.pages.etl import zeige_etl_seite
 from framework_mvp.ui.pages.event_log import zeige_event_log_seite
+from framework_mvp.ui.pages.process_mining import zeige_process_mining_seite
 from framework_mvp.ui.pages.projektverwaltung import zeige_projektverwaltung
 from framework_mvp.ui.pages.semantisches_mapping import zeige_semantisches_mapping
 from framework_mvp.workspace import WorkspaceKonfiguration
@@ -37,6 +39,7 @@ seite = st.sidebar.radio(
         "3 Semantisches Mapping",
         "4 Event Log aufbauen",
         "5 Datenqualität prüfen",
+        "6 Process Mining durchführen",
     ),
 )
 projekt_service = erstelle_projekt_service()
@@ -65,10 +68,16 @@ elif seite == "4 Event Log aufbauen":
         erstelle_mapping_service(workspace=workspace),
         erstelle_event_log_service(workspace=workspace),
     )
-else:
+elif seite == "5 Datenqualität prüfen":
     event_log_service = erstelle_event_log_service(workspace=workspace)
     zeige_datenqualitaet_seite(
         projekt_service,
         event_log_service,
         erstelle_datenqualitaet_service(workspace=workspace),
+    )
+else:
+    zeige_process_mining_seite(
+        projekt_service,
+        erstelle_datenqualitaet_service(workspace=workspace),
+        erstelle_process_mining_service(workspace=workspace),
     )

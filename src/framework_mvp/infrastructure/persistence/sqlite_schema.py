@@ -6,7 +6,7 @@ from typing import Any
 
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
 
-SCHEMAVERSION = 5
+SCHEMAVERSION = 6
 
 PROJEKT_SCHEMA_VERSION_2 = """
 CREATE TABLE IF NOT EXISTS projekte (
@@ -180,6 +180,49 @@ CREATE TABLE IF NOT EXISTS qualitaetsmassnahmen (
 );
 """
 
+PROCESS_MINING_SCHEMA_VERSION_6 = """
+CREATE TABLE IF NOT EXISTS process_mining_analysen (
+    analyse_id TEXT PRIMARY KEY NOT NULL,
+    projekt_id TEXT NOT NULL,
+    qualitaetspruefung_id TEXT NOT NULL,
+    event_log_id TEXT NOT NULL,
+    konfiguration_json TEXT NOT NULL,
+    filter_json TEXT NOT NULL,
+    discovery_verfahren TEXT NOT NULL
+        CHECK (discovery_verfahren IN ('inductive_miner', 'heuristics_miner')),
+    parameter_json TEXT NOT NULL,
+    ereignisanzahl_vorher INTEGER NOT NULL,
+    fallanzahl_vorher INTEGER NOT NULL,
+    aktivitaetsanzahl_vorher INTEGER NOT NULL,
+    variantenanzahl_vorher INTEGER NOT NULL,
+    ereignisanzahl_nachher INTEGER NOT NULL,
+    fallanzahl_nachher INTEGER NOT NULL,
+    aktivitaetsanzahl_nachher INTEGER NOT NULL,
+    variantenanzahl_nachher INTEGER NOT NULL,
+    modellstatistik_json TEXT NOT NULL,
+    warnungen_json TEXT NOT NULL,
+    pm4py_version TEXT NOT NULL,
+    relativer_ergebnis_pfad TEXT NOT NULL,
+    relativer_varianten_pfad TEXT NOT NULL,
+    relativer_dfg_pfad TEXT NOT NULL,
+    relativer_modell_pfad TEXT NOT NULL,
+    relativer_visualisierung_pfad TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('entwurf', 'ausgefuehrt', 'fehlgeschlagen')),
+    erstellt_am_utc TEXT NOT NULL,
+    geaendert_am_utc TEXT NOT NULL,
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id),
+    FOREIGN KEY (event_log_id) REFERENCES event_logs(event_log_id),
+    FOREIGN KEY (qualitaetspruefung_id)
+        REFERENCES qualitaetspruefungen(quality_run_id)
+);
+CREATE INDEX IF NOT EXISTS idx_process_mining_projekt_id
+    ON process_mining_analysen(projekt_id);
+CREATE INDEX IF NOT EXISTS idx_process_mining_event_log_id
+    ON process_mining_analysen(event_log_id);
+CREATE INDEX IF NOT EXISTS idx_process_mining_qualitaetspruefung_id
+    ON process_mining_analysen(qualitaetspruefung_id);
+"""
+
 _PROJEKTSPALTEN_VERSION_2 = """
     projekt_id, bezeichnung, beteiligte_personen_json, status,
     erstellt_am_utc, geaendert_am_utc, untersuchungsauftrag_json
@@ -256,7 +299,7 @@ def _migriere_version_1_auf_2(verbindung: sqlite3.Connection) -> None:
 
 
 def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
-    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 4."""
+    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 6."""
     version = int(verbindung.execute("PRAGMA user_version").fetchone()[0])
     if version > SCHEMAVERSION:
         raise NichtUnterstuetzteSchemaversion(
@@ -277,6 +320,9 @@ def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
             if anweisung.strip():
                 verbindung.execute(anweisung)
         for anweisung in EVENT_LOG_QUALITAET_SCHEMA_VERSION_5.split(";"):
+            if anweisung.strip():
+                verbindung.execute(anweisung)
+        for anweisung in PROCESS_MINING_SCHEMA_VERSION_6.split(";"):
             if anweisung.strip():
                 verbindung.execute(anweisung)
         if version < SCHEMAVERSION:

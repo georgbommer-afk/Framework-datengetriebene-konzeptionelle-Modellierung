@@ -9,6 +9,7 @@ from framework_mvp.application.datenquelle_service import DatenquelleService
 from framework_mvp.application.event_log_service import EventLogService
 from framework_mvp.application.importvorgang_service import ImportvorgangService
 from framework_mvp.application.mapping_service import MappingService
+from framework_mvp.application.process_mining_service import ProcessMiningService
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.application.transformations_service import TransformationsService
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
@@ -24,6 +25,9 @@ from framework_mvp.infrastructure.persistence.sqlite_importvorgang_repository im
 )
 from framework_mvp.infrastructure.persistence.sqlite_mapping_repository import (
     SQLiteMappingRepository,
+)
+from framework_mvp.infrastructure.persistence.sqlite_process_mining_repository import (
+    SQLiteProcessMiningRepository,
 )
 from framework_mvp.infrastructure.persistence.sqlite_projekt_repository import (
     SQLiteProjektRepository,
@@ -138,5 +142,19 @@ def erstelle_datenqualitaet_service(
     return DatenqualitaetService(
         SQLiteQualitaetRepository(pfad),
         erstelle_event_log_service(pfad, workspace_konfiguration),
+        ImportartefaktSpeicher(workspace_konfiguration),
+    )
+
+
+def erstelle_process_mining_service(
+    datenbankpfad: Path | str | None = None,
+    workspace: WorkspaceKonfiguration | None = None,
+) -> ProcessMiningService:
+    """Erzeugt den Service für Process Discovery mit PM4Py."""
+    pfad = ermittle_datenbankpfad(datenbankpfad)
+    workspace_konfiguration = workspace or WorkspaceKonfiguration.ermitteln()
+    return ProcessMiningService(
+        SQLiteProcessMiningRepository(pfad),
+        erstelle_datenqualitaet_service(pfad, workspace_konfiguration),
         ImportartefaktSpeicher(workspace_konfiguration),
     )
