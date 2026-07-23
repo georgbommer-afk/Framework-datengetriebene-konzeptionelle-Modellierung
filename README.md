@@ -38,8 +38,8 @@ Das erzeugte konzeptionelle Modell kann jedoch als Grundlage für eine spätere 
 
 ## Aktueller Funktionsumfang
 
-Die Streamlit-Anwendung zeigt das zehnstufige Framework als dynamische Prozessgrafik. Neben der
-Projektverwaltung steht Framework-Schritt 2 als ETL-Hauptseite bereit. Projektbezogene
+Die Streamlit-Anwendung besitzt drei Hauptbereiche: Projektverwaltung, ETL und semantisches
+Mapping. Projektbezogene
 Datenquellen werden im Datenquellenkatalog Q registriert. Der ETL-Wizard verarbeitet jeweils eine
 CSV- oder XLSX-Datei temporär, führt durch Importeinstellungen und Tabellenblattauswahl und zeigt
 eine unveränderte Vorschau der ersten maximal 200 Zeilen sowie eine kompakte Spaltenübersicht.
@@ -67,11 +67,24 @@ Die lokale Artefaktstruktur lautet:
 workspace/projects/<projekt-id>/
 ├── raw/<sha256>/<sicherer-dateiname>
 ├── profiles/<import-id>.json
-└── interim/
+├── interim/<zwischendatensatz-id>.csv.gz
+├── interim/<zwischendatensatz-id>.schema.json
+├── interim/<zwischendatensatz-id>.transformation.json
+└── mappings/<mapping-id>.json
 ```
 
-Der Ordner `interim` bleibt für spätere konsolidierte Zwischendatensätze reserviert. Eine
-Bestätigung verändert, bereinigt oder transformiert die importierten Inhalte nicht.
+Nach der Importbestätigung können geordnete, aktivierbare Transformationspläne erstellt werden.
+Sie unterstützen Spaltenauswahl und -umbenennung, Typkonvertierung, explizite Behandlung von
+Platzhaltern, Fehlwerten, Duplikaten und Ausreißern, Filter sowie abgeleitete Spalten.
+Kontrollierte Joins prüfen Schlüssel und Kardinalität vor der Ausführung. Raw-Dateien bleiben
+unverändert. Ein erzeugter Zwischendatensatz wird als `CSV.GZ`, Schema-JSON und
+Transformation-JSON im Ordner `interim` gespeichert.
+
+Framework-Schritt 3 ordnet anschließend Spalten eines Zwischendatensatzes semantischen
+Ereignisrollen zu. Ereignisorientierte und breite Zeitstempeldatensätze werden unterstützt.
+Validierung, Warnungen und eine standardisierte temporäre Ereignisvorschau helfen bei der
+fachlichen Prüfung; ein Event Log wird in diesem Schritt noch nicht erzeugt. Mappingdateien
+liegen projektbezogen unter `mappings/`.
 
 ## Geplante Funktionen
 ### Datenimport
@@ -83,6 +96,11 @@ Aktuell unterstützte Formate sind:
 
 Direkte Datenbankverbindungen und weitere tabellarische Formate sind erst für spätere
 Ausbaustufen vorgesehen.
+
+Bekannte Einschränkung: Beim Lesen einzelner XLSX-Dateien kann Openpyxl auf unbekannte oder
+bedingte Formatierungserweiterungen hinweisen. Diese Warnungen betreffen die Darstellung der
+Arbeitsmappe, werden nicht global unterdrückt und verändern weder die hochgeladene Originaldatei
+noch die importierten Zellwerte.
 
 ### Datenzuordnung
 Die anwendende Person soll relevante Spalten den für Process Mining benötigten Informationen zuordnen können, beispielsweise:

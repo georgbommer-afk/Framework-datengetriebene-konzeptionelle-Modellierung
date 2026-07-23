@@ -17,6 +17,7 @@ class ProjektWorkspace:
     raw: Path
     profiles: Path
     interim: Path
+    mappings: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,11 +38,12 @@ class WorkspaceKonfiguration:
         return cls(pfad.expanduser().resolve())
 
     def fuer_projekt_anlegen(self, projekt_id: UUID) -> ProjektWorkspace:
-        """Legt die drei vorgesehenen projektbezogenen Unterverzeichnisse an."""
+        """Legt die vier vorgesehenen projektbezogenen Unterverzeichnisse an."""
         projektpfad = self.basisverzeichnis / "projects" / str(projekt_id)
         raw = projektpfad / "raw"
         profiles = projektpfad / "profiles"
         interim = projektpfad / "interim"
-        for verzeichnis in (raw, profiles, interim):
+        mappings = projektpfad / "mappings"
+        for verzeichnis in (raw, profiles, interim, mappings):
             verzeichnis.mkdir(parents=True, exist_ok=True)
-        return ProjektWorkspace(projektpfad, raw, profiles, interim)
+        return ProjektWorkspace(projektpfad, raw, profiles, interim, mappings)

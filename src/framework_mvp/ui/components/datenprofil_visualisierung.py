@@ -98,7 +98,7 @@ def _fehlwertdiagramm(ergebnis: Profilierungsergebnis) -> None:
                 ],
             },
         },
-        use_container_width=True,
+        width="stretch",
     )
     st.dataframe(pd.DataFrame(daten), hide_index=True)
 
@@ -151,7 +151,7 @@ def _numerische_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) -
                 },
             ]
         },
-        use_container_width=True,
+        width="stretch",
     )
     box = diagramm.numerisch.boxplot
     st.subheader("Kompakter Boxplot")
@@ -179,7 +179,7 @@ def _numerische_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) -
                 },
             ]
         },
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -208,7 +208,7 @@ def _kategoriale_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) 
                 "tooltip": ["bezeichnung", "anzahl", {"field": "anteil", "format": ".2%"}],
             },
         },
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -244,7 +244,7 @@ def _zeit_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) -> None
                 "tooltip": ["intervallbeginn", "anzahl"],
             },
         },
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -344,5 +344,5 @@ def zeige_gespeichertes_datenprofil(struktur: dict[str, object]) -> None:
                 "color": {"field": "art", "type": "nominal", "title": "Art"},
             },
         },
-        use_container_width=True,
+        width="stretch",
     )

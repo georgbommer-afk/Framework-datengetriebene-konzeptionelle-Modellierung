@@ -32,7 +32,7 @@ from framework_mvp.domain.models import (
     Untersuchungsauftrag,
 )
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
-from framework_mvp.ui.components.framework_navigation import zeige_framework_navigation
+from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
 from framework_mvp.ui.helpers import liste_als_mehrzeiliger_text, mehrzeiliger_text_als_liste
 
 LOGGER = logging.getLogger(__name__)
@@ -45,6 +45,15 @@ SCHRITTE = (
     "Gewünschte Auswertungen und Rahmenbedingungen",
     "Betrachtungszeitraum",
     "Zusammenfassung und Speicherung",
+)
+SCHRITTE_KURZ = (
+    "Projekt",
+    "Problem",
+    "Ziele",
+    "System",
+    "Auswertung",
+    "Zeitraum",
+    "Speichern",
 )
 ROLLEN = (
     "Auftraggeber:in",
@@ -203,7 +212,7 @@ def _seitenleiste(projekte: list[Projekt]) -> Projekt | None:
         )
         st.session_state.wizard_schritt = 1
         st.rerun()
-    if st.sidebar.button("Neues Projekt", use_container_width=True):
+    if st.sidebar.button("Neues Projekt", width="stretch"):
         st.session_state.ausgewaehlte_projekt_id = None
         st.session_state.wizard_entwurf = _neuer_entwurf()
         st.session_state.wizard_schritt = 1
@@ -220,10 +229,12 @@ def _seitenleiste(projekte: list[Projekt]) -> Projekt | None:
 
 
 def _kopf(schritt: int) -> None:
-    st.caption(f"Schritt {schritt} von 7")
+    zeige_kompakten_fortschritt(
+        schritt=schritt,
+        kurze_namen=SCHRITTE_KURZ,
+        lange_namen=SCHRITTE,
+    )
     st.subheader(SCHRITTE[schritt - 1])
-    st.progress(schritt / 7)
-    st.caption("  ·  ".join(f"{i}. {name}" for i, name in enumerate(SCHRITTE, 1)))
 
 
 def _schritt_1(d: dict[str, Any]) -> None:
@@ -738,23 +749,22 @@ def _navigation(
     service: ProjektService, projekt: Projekt | None, d: dict[str, Any], schritt: int
 ) -> None:
     links, mitte, rechts = st.columns(3)
-    if links.button("Zurück", disabled=schritt == 1, use_container_width=True):
+    if links.button("Zurück", disabled=schritt == 1, width="stretch"):
         st.session_state.wizard_schritt = schritt - 1
         st.rerun()
-    if mitte.button("Entwurf speichern", use_container_width=True):
+    if mitte.button("Entwurf speichern", width="stretch"):
         _speichern(service, projekt, d, True)
     if schritt < 7:
-        if rechts.button("Weiter", use_container_width=True):
+        if rechts.button("Weiter", width="stretch"):
             st.session_state.wizard_schritt = schritt + 1
             st.rerun()
-    elif rechts.button("Projekt speichern", type="primary", use_container_width=True):
+    elif rechts.button("Projekt speichern", type="primary", width="stretch"):
         _speichern(service, projekt, d, False)
 
 
 def zeige_projektverwaltung(service: ProjektService) -> None:
     """Zeigt Projektwahl, Fortschritt und den aktuellen Wizard-Schritt."""
     _initialisieren()
-    zeige_framework_navigation(current_step=1)
     if meldung := st.session_state.pop("erfolgsmeldung", None):
         st.success(meldung)
     try:

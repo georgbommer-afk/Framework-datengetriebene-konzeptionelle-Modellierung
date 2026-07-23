@@ -94,6 +94,25 @@ class ImportartefaktSpeicher:
         self._atomar_schreiben(ziel, inhalt)
         return GespeichertesArtefakt(relativer_pfad, True)
 
+    def artefakt_speichern(self, relativer_pfad: str, inhalt: bytes) -> GespeichertesArtefakt:
+        """Speichert ein beliebiges geprüftes Workspace-Artefakt atomar und idempotent."""
+        ziel = self._sicherer_absoluter_pfad(relativer_pfad)
+        if ziel.exists():
+            if ziel.read_bytes() != inhalt:
+                raise Importintegritaetsfehler(
+                    "Am Zielpfad existiert bereits ein abweichendes Artefakt."
+                )
+            return GespeichertesArtefakt(relativer_pfad, False)
+        self._atomar_schreiben(ziel, inhalt)
+        return GespeichertesArtefakt(relativer_pfad, True)
+
+    def artefakt_ersetzen(self, relativer_pfad: str, inhalt: bytes) -> bytes | None:
+        """Ersetzt ein veränderliches Konfigurationsartefakt atomar und liefert den Altstand."""
+        ziel = self._sicherer_absoluter_pfad(relativer_pfad)
+        vorher = ziel.read_bytes() if ziel.exists() else None
+        self._atomar_schreiben(ziel, inhalt)
+        return vorher
+
     def lesen(self, relativer_pfad: str) -> bytes:
         """Liest ein vorhandenes Artefakt nach erneuter Pfadprüfung."""
         pfad = self._sicherer_absoluter_pfad(relativer_pfad)

@@ -71,6 +71,58 @@ CREATE INDEX IF NOT EXISTS idx_importvorgaenge_sha256
     ON importvorgaenge(sha256);
 """
 
+WEITERE_ETL_TABELLEN_SCHEMA_VERSION_4 = """
+CREATE TABLE IF NOT EXISTS transformationsplaene (
+    transformationsplan_id TEXT PRIMARY KEY NOT NULL,
+    projekt_id TEXT NOT NULL,
+    import_ids_json TEXT NOT NULL,
+    plan_json TEXT NOT NULL,
+    erstellt_am_utc TEXT NOT NULL,
+    geaendert_am_utc TEXT NOT NULL,
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id)
+);
+CREATE INDEX IF NOT EXISTS idx_transformationsplaene_projekt_id
+    ON transformationsplaene(projekt_id);
+CREATE TABLE IF NOT EXISTS zwischendatensaetze (
+    zwischendatensatz_id TEXT PRIMARY KEY NOT NULL,
+    projekt_id TEXT NOT NULL,
+    transformationsplan_id TEXT NOT NULL,
+    import_ids_json TEXT NOT NULL,
+    relativer_daten_pfad TEXT NOT NULL,
+    relativer_schema_pfad TEXT NOT NULL,
+    relativer_transformation_pfad TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    zeilenanzahl INTEGER NOT NULL,
+    spaltenanzahl INTEGER NOT NULL,
+    erstellt_am_utc TEXT NOT NULL,
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id),
+    FOREIGN KEY (transformationsplan_id)
+        REFERENCES transformationsplaene(transformationsplan_id)
+);
+CREATE INDEX IF NOT EXISTS idx_zwischendatensaetze_projekt_id
+    ON zwischendatensaetze(projekt_id);
+CREATE INDEX IF NOT EXISTS idx_zwischendatensaetze_plan_id
+    ON zwischendatensaetze(transformationsplan_id);
+CREATE TABLE IF NOT EXISTS semantische_mappings (
+    mapping_id TEXT PRIMARY KEY NOT NULL,
+    projekt_id TEXT NOT NULL,
+    zwischendatensatz_id TEXT NOT NULL,
+    mapping_json TEXT NOT NULL,
+    validierung_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('entwurf', 'validiert', 'ungueltig')),
+    relativer_mapping_pfad TEXT NOT NULL,
+    erstellt_am_utc TEXT NOT NULL,
+    geaendert_am_utc TEXT NOT NULL,
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id),
+    FOREIGN KEY (zwischendatensatz_id)
+        REFERENCES zwischendatensaetze(zwischendatensatz_id)
+);
+CREATE INDEX IF NOT EXISTS idx_semantische_mappings_projekt_id
+    ON semantische_mappings(projekt_id);
+CREATE INDEX IF NOT EXISTS idx_semantische_mappings_datensatz_id
+    ON semantische_mappings(zwischendatensatz_id);
+"""
+
 _PROJEKTSPALTEN_VERSION_2 = """
     projekt_id, bezeichnung, beteiligte_personen_json, status,
     erstellt_am_utc, geaendert_am_utc, untersuchungsauftrag_json
@@ -162,6 +214,9 @@ def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
             _migriere_version_1_auf_2(verbindung)
         verbindung.execute(DATENQUELLEN_SCHEMA_VERSION_3)
         for anweisung in IMPORTVORGAENGE_SCHEMA_VERSION_4.split(";"):
+            if anweisung.strip():
+                verbindung.execute(anweisung)
+        for anweisung in WEITERE_ETL_TABELLEN_SCHEMA_VERSION_4.split(";"):
             if anweisung.strip():
                 verbindung.execute(anweisung)
         if version < SCHEMAVERSION:

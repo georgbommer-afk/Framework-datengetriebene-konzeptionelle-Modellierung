@@ -2,7 +2,7 @@
 
 ## Status
 
-Akzeptiert
+Teilweise abgelöst durch ADR-005
 
 ## Kontext
 
@@ -14,10 +14,9 @@ technische Datenprofilierung und Qualitätsübersicht.
 
 ## Entscheidung
 
-Das zehnstufige Framework wird als programmatisch erzeugtes SVG dargestellt. Es folgt der
-schlangenförmigen Anordnung der Masterarbeit und kennzeichnet aktuelle, abgeschlossene und
-zukünftige Schritte. Das SVG wird ohne Screenshot, globale CSS-Regeln oder externe Bibliothek
-erzeugt.
+Die ursprüngliche Entscheidung für eine globale SVG-Prozessgrafik wurde mit ADR-005 aufgehoben.
+Die Hauptnavigation verwendet seither klar benannte Framework-Bereiche; Wizards besitzen lokale
+Fortschrittsanzeigen.
 
 Der Datenquellenkatalog verwendet das unveränderliche Domänenmodell `Datenquelle`, einen
 Anwendungsservice und ein Repository-Protocol. CSV, Excel und Datenbanken werden fachlich
@@ -58,7 +57,7 @@ Pfad hat Vorrang vor `FRAMEWORK_MVP_WORKSPACE_PATH`; andernfalls wird das Reposi
 
 - Datenquellen sind strukturiert und projektbezogen katalogisiert.
 - Weitere ETL-Inkremente können auf stabilen Quellen-IDs aufbauen.
-- Die Framework-Navigation ist auf weiteren Seiten wiederverwendbar.
+- Die Hauptbereiche sind über die Streamlit-Navigation erreichbar.
 - Die gemeinsame SQLite-Datei bleibt die eindeutige Metadatenquelle.
 - CSV- und XLSX-Vorschauen sind ohne persistente Rohdatei möglich.
 - Das SQLite-Schema bleibt in Version 3 unverändert.
@@ -68,7 +67,6 @@ Pfad hat Vorrang vor `FRAMEWORK_MVP_WORKSPACE_PATH`; andernfalls wird das Reposi
 
 ## Verworfene Alternativen
 
-Ein Screenshot der Framework-Grafik wurde wegen mangelnder Zustandsdarstellung und Skalierbarkeit
-verworfen. Eine getrennte Datenbank für Datenquellen wurde verworfen, weil sie Transaktionen und
+Eine getrennte Datenbank für Datenquellen wurde verworfen, weil sie Transaktionen und
 Projektbezug unnötig erschwert. Eine sofortige technische Datenbankanbindung wurde verworfen, da
 sie nicht zum Umfang dieses Inkrements gehört.

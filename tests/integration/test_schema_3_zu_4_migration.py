@@ -27,7 +27,14 @@ def test_schema_drei_wird_additiv_auf_vier_migriert(tmp_path: Path) -> None:
     with sqlite3.connect(pfad) as verbindung:
         assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 4
         tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master")}
-    assert {"projekte", "datenquellen", "importvorgaenge"} <= tabellen
+    assert {
+        "projekte",
+        "datenquellen",
+        "importvorgaenge",
+        "transformationsplaene",
+        "zwischendatensaetze",
+        "semantische_mappings",
+    } <= tabellen
     assert {
         "idx_importvorgaenge_projekt_id",
         "idx_importvorgaenge_datenquellen_id",

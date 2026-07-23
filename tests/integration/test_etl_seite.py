@@ -35,16 +35,15 @@ def _etl_starten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
 def test_etl_seite_startet_und_markiert_schritt_zwei(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """ETL-Seite, Fortschritt und alle sieben Teilschritte werden angezeigt."""
+    """ETL-Seite, Fortschritt und alle neun Teilschritte werden angezeigt."""
     anwendung = _etl_starten(tmp_path, monkeypatch)
     assert not anwendung.exception
     assert any(element.value == "2 ETL durchführen" for element in anwendung.header)
     assert anwendung.get("progress")
-    assert any("Schritt 1 von 7" in element.value for element in anwendung.caption)
+    assert any("Schritt 1 von 9" in element.value for element in anwendung.caption)
     assert sum("Noch nicht verfügbar" in element.value for element in anwendung.caption) == 0
-    svg = "".join(element.value for element in anwendung.markdown)
-    assert 'data-step="2" data-status="aktuell"' in svg
-    assert 'data-step="1" data-status="abgeschlossen"' in svg
+    assert any("8 Transformation" in element.value for element in anwendung.markdown)
+    assert any(element.label == "Alle Schritte anzeigen" for element in anwendung.expander)
 
 
 def test_datenquelle_kann_angelegt_und_erneut_geladen_werden(
@@ -84,5 +83,5 @@ def test_weiter_fuehrt_nach_registrierung_zum_upload(
     assert not weiter.disabled
     weiter.click().run()
     assert not anwendung.exception
-    assert any("Schritt 2 von 7" in element.value for element in anwendung.caption)
+    assert any("Schritt 2 von 9" in element.value for element in anwendung.caption)
     assert anwendung.get("file_uploader")

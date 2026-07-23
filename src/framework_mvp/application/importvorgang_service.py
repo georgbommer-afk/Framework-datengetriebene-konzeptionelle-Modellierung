@@ -218,3 +218,12 @@ class ImportvorgangService:
     def importe_fuer_datenquelle(self, datenquellen_id: UUID) -> list[Importvorgang]:
         """Listet die Importe einer Datenquelle stabil auf."""
         return self._repository.fuer_datenquelle_auflisten(datenquellen_id)
+
+    def originaldatei_laden(self, import_id: UUID) -> tuple[Importvorgang, bytes]:
+        """Lädt einen integritätsgeprüften Import und seine unveränderten Originalbytes."""
+        geladen = self.import_laden(import_id)
+        if geladen is None:
+            raise Domaenenfehler("Der angeforderte Import wurde nicht gefunden.")
+        return geladen.importvorgang, self._artefakte.lesen(
+            geladen.importvorgang.relativer_raw_pfad
+        )

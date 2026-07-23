@@ -1,6 +1,7 @@
 """ETL-Hauptseite mit Datenquellenkatalog und temporärem Import-Wizard."""
 
 import logging
+from dataclasses import replace
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -17,6 +18,8 @@ from framework_mvp.application.datenimport_service import (
 from framework_mvp.application.datenquelle_service import DatenquelleService
 from framework_mvp.application.importvorgang_service import ImportvorgangService
 from framework_mvp.application.projekt_service import ProjektService
+from framework_mvp.application.transformation import pruefe_join
+from framework_mvp.application.transformations_service import TransformationsService
 from framework_mvp.domain.exceptions import Datenimportfehler, Domaenenfehler
 from framework_mvp.domain.models import (
     CsvImportparameter,
@@ -29,6 +32,9 @@ from framework_mvp.domain.models import (
     Quellenart,
     Quellsystemtyp,
     Tausendertrennzeichen,
+    Transformationsart,
+    Transformationsplan,
+    Transformationsschritt,
     Trennzeichenwahl,
     Zeichenkodierung,
 )
@@ -40,7 +46,8 @@ from framework_mvp.ui.components.datenprofil_visualisierung import (
     zeige_datenprofil,
     zeige_gespeichertes_datenprofil,
 )
-from framework_mvp.ui.components.framework_navigation import zeige_framework_navigation
+from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
+from framework_mvp.ui.components.transformation import zeige_transformationseditor
 from framework_mvp.workspace import WorkspaceKonfiguration
 
 LOGGER = logging.getLogger(__name__)
@@ -53,6 +60,19 @@ ETL_SCHRITTE = (
     "Datenvorschau",
     "Datenprofil und Qualitätsübersicht",
     "Import prüfen und bestätigen",
+    "Daten transformieren",
+    "Zwischendatensatz erzeugen",
+)
+ETL_KURZNAMEN = (
+    "Quelle",
+    "Upload",
+    "Einstellungen",
+    "Tabelle",
+    "Vorschau",
+    "Profil",
+    "Bestätigung",
+    "Transformation",
+    "Datensatz",
 )
 
 
@@ -88,22 +108,11 @@ def _wizard_zustand(projekt_id: UUID) -> dict[str, Any]:
 
 
 def _zeige_etl_fortschritt(schritt: int) -> None:
-    st.subheader("ETL-Wizard")
-    st.caption(f"Schritt {schritt} von 7")
-    st.progress(schritt / 7)
-    spalten = st.columns(7)
-    for nummer, (spalte, name) in enumerate(zip(spalten, ETL_SCHRITTE, strict=True), 1):
-        with spalte.container(border=True):
-            st.markdown(f"**{nummer}. {name}**")
-            if nummer == schritt:
-                status = "Aktuell"
-            elif nummer < schritt:
-                status = "Erledigt"
-            elif nummer <= 7:
-                status = "Verfügbar"
-            else:
-                status = "Noch nicht verfügbar"
-            st.caption(status)
+    zeige_kompakten_fortschritt(
+        schritt=schritt,
+        kurze_namen=ETL_KURZNAMEN,
+        lange_namen=ETL_SCHRITTE,
+    )
 
 
 def _quelle_auswaehlen(
@@ -392,7 +401,7 @@ def _vorschau(import_service: DatenimportService, zustand: dict[str, Any]) -> No
     links.metric("Gesamtzahl Zeilen", vorschau.gesamtzeilen)
     rechts.metric("Gesamtzahl Spalten", vorschau.gesamtspalten)
     st.caption("Die Tabelle zeigt eine unveränderte Vorschau der ersten maximal 200 Zeilen.")
-    st.dataframe(vorschau.tabelle, use_container_width=True)
+    st.dataframe(vorschau.tabelle, width="stretch")
     st.write("**Ursprüngliche Spaltennamen:**", list(vorschau.spaltennamen))
     st.write("**Von Pandas erkannte Datentypen:**", list(vorschau.pandas_datentypen))
     st.write("**Verwendete Importparameter:**", str(vorschau.verwendete_parameter))
@@ -525,6 +534,140 @@ def _importpruefung(
         st.rerun()
 
 
+def _transformation(
+    service: TransformationsService,
+    projekt_id: UUID,
+    zustand: dict[str, Any],
+) -> None:
+    """Zeigt und persistiert den Transformationsplan des bestätigten Imports."""
+    importvorgang = zustand["bestaetigter_import"]
+    plan = zustand.get("transformationsplan")
+    globaler_plan = st.session_state.pop("etl_transformationsplan", None)
+    if globaler_plan is not None and globaler_plan.projekt_id == projekt_id:
+        plan = globaler_plan
+    if plan is None:
+        plan = Transformationsplan.neu(projekt_id, (importvorgang.import_id,))
+        service.plan_speichern(plan)
+    daten = service.import_dataframe_laden(importvorgang.import_id)
+    ausgangsprofil = service.ausgangsprofil_laden(importvorgang.import_id)
+    plan = _join_konfigurieren(service, projekt_id, plan, daten)
+    zustand["transformationsplan"] = zeige_transformationseditor(
+        service, plan, daten, ausgangsprofil.gesamtprofil
+    )
+    if ergebnis := st.session_state.pop("etl_transformationsergebnis", None):
+        zustand["transformationsergebnis"] = ergebnis
+
+
+def _join_konfigurieren(
+    service: TransformationsService,
+    projekt_id: UUID,
+    plan: Transformationsplan,
+    linke_daten: pd.DataFrame,
+) -> Transformationsplan:
+    """Prüft und ergänzt eine explizite Tabellenverknüpfung."""
+    importe = [
+        wert
+        for wert in service.importe_fuer_projekt(projekt_id)
+        if wert.import_id not in plan.import_ids
+    ]
+    with st.expander("Weitere bestätigte Tabelle verknüpfen"):
+        if not importe:
+            st.caption("Für einen Join wird ein weiterer bestätigter Import benötigt.")
+            return plan
+        rechte_id = st.selectbox(
+            "Rechte Importtabelle",
+            [wert.import_id for wert in importe],
+            format_func=lambda wert: next(
+                eintrag.originaldateiname for eintrag in importe if eintrag.import_id == wert
+            ),
+        )
+        rechte_daten = service.import_dataframe_laden(rechte_id)
+        linke_schluessel = st.multiselect(
+            "Schlüsselspalten links", [str(wert) for wert in linke_daten.columns]
+        )
+        rechte_schluessel = st.multiselect(
+            "Passende Schlüsselspalten rechts", [str(wert) for wert in rechte_daten.columns]
+        )
+        join_art = st.selectbox("Join-Art", ("INNER", "LEFT", "RIGHT", "FULL OUTER"))
+        if not linke_schluessel or len(linke_schluessel) != len(rechte_schluessel):
+            st.caption("Wählen Sie gleich viele linke und rechte Schlüsselspalten.")
+            return plan
+        pruefung = pruefe_join(
+            linke_daten, rechte_daten, tuple(linke_schluessel), tuple(rechte_schluessel)
+        )
+        st.write(
+            f"**Kardinalität:** {pruefung.kardinalitaet} · "
+            f"**Erwartete INNER-Zeilen:** {pruefung.erwartete_zeilen}"
+        )
+        st.write(
+            f"Nicht zuordenbare Schlüssel links/rechts: "
+            f"{pruefung.nicht_zuordenbar_links}/{pruefung.nicht_zuordenbar_rechts}"
+        )
+        nm_bestaetigt = st.checkbox(
+            "Ich bestätige die mögliche Zeilenvervielfachung.",
+            disabled=pruefung.kardinalitaet != "n:m",
+        )
+        if pruefung.kardinalitaet == "n:m":
+            st.warning(pruefung.warnungen[0])
+        if st.button(
+            "Join-Schritt hinzufügen",
+            disabled=pruefung.kardinalitaet == "n:m" and not nm_bestaetigt,
+        ):
+            schritt = Transformationsschritt.neu(
+                typ=Transformationsart.TABELLEN_JOIN,
+                betroffene_spalten=tuple(linke_schluessel),
+                parameter={
+                    "rechte_import_id": str(rechte_id),
+                    "linke_schluessel": linke_schluessel,
+                    "rechte_schluessel": rechte_schluessel,
+                    "join_art": join_art,
+                    "suffixe": ["_links", "_rechts"],
+                    "nm_bestaetigt": nm_bestaetigt,
+                    "pruefung": {
+                        "kardinalitaet": pruefung.kardinalitaet,
+                        "erwartete_zeilen": pruefung.erwartete_zeilen,
+                    },
+                },
+                reihenfolge=len(plan.schritte) + 1,
+                beschreibung=f"{join_art}-Join",
+            )
+            plan = service.schritt_hinzufuegen(plan, schritt)
+            plan = replace(plan, import_ids=(*plan.import_ids, rechte_id))
+            service.plan_speichern(plan)
+            st.session_state.etl_transformationsplan = plan
+            st.rerun()
+    return plan
+
+
+def _zwischendatensatz(
+    service: TransformationsService,
+    zustand: dict[str, Any],
+) -> None:
+    """Zeigt die abschließende Prüfung und erzeugt die drei Interim-Artefakte."""
+    st.subheader("Zwischendatensatz erzeugen")
+    plan = zustand["transformationsplan"]
+    ergebnis = service.vorschau(plan)
+    st.write(f"**Aktive Transformationsschritte:** {sum(s.aktiviert for s in plan.schritte)}")
+    st.write(
+        f"**Ergebnisumfang:** {len(ergebnis.daten)} Zeilen, {len(ergebnis.daten.columns)} Spalten"
+    )
+    st.dataframe(ergebnis.vorschau, width="stretch")
+    datensatz = zustand.get("zwischendatensatz")
+    if datensatz is None:
+        datensatz_id = zustand.setdefault("zwischendatensatz_id", uuid4())
+        if st.button("Zwischendatensatz verbindlich erzeugen", type="primary"):
+            zustand["zwischendatensatz"] = service.zwischendatensatz_erzeugen(
+                plan, ergebnis, datensatz_id
+            )
+            st.rerun()
+        return
+    st.success("Der Zwischendatensatz wurde reproduzierbar gespeichert.")
+    st.write(f"**Datensatz-ID:** `{datensatz.zwischendatensatz_id}`")
+    st.write(f"**Daten:** `{datensatz.relativer_daten_pfad}`")
+    st.write(f"**Schema:** `{datensatz.relativer_schema_pfad}`")
+    st.write(f"**Transformation:** `{datensatz.relativer_transformation_pfad}`")
+
+
 def _gespeicherte_importe(
     service: ImportvorgangService,
     datenquelle_service: DatenquelleService,
@@ -593,19 +736,23 @@ def _kann_weiter(zustand: dict[str, Any]) -> bool:
         return "vorschau" in zustand
     if schritt == 6:
         return "profil" in zustand
+    if schritt == 7:
+        return "bestaetigter_import" in zustand
+    if schritt == 8:
+        return "transformationsplan" in zustand
     return False
 
 
 def _navigation(zustand: dict[str, Any]) -> None:
     zurueck, weiter = st.columns(2)
-    if zurueck.button("Zurück", disabled=zustand["schritt"] == 1, use_container_width=True):
+    if zurueck.button("Zurück", disabled=zustand["schritt"] == 1, width="stretch"):
         zustand["schritt"] -= 1
         st.rerun()
     if weiter.button(
         "Weiter",
-        disabled=zustand["schritt"] >= 7 or not _kann_weiter(zustand),
+        disabled=zustand["schritt"] >= len(ETL_SCHRITTE) or not _kann_weiter(zustand),
         type="primary",
-        use_container_width=True,
+        width="stretch",
     ):
         zustand["schritt"] += 1
         st.rerun()
@@ -616,13 +763,13 @@ def zeige_etl_seite(
     datenquelle_service: DatenquelleService,
     datenimport_service: DatenimportService,
     importvorgang_service: ImportvorgangService,
+    transformations_service: TransformationsService,
     workspace: WorkspaceKonfiguration,
 ) -> None:
-    """Zeigt Framework-Schritt 2 und den vollständigen siebenstufigen ETL-Wizard."""
+    """Zeigt Framework-Schritt 2 und den vollständigen neunstufigen ETL-Wizard."""
     st.header("2 ETL durchführen")
     if meldung := st.session_state.pop("etl_erfolgsmeldung", None):
         st.success(meldung)
-    zeige_framework_navigation(current_step=2, completed_steps={1})
     st.write(
         "Eingaben sind die Rohdaten D und der Datenquellenkatalog Q. Spätere Ausgaben sind "
         "Zwischendatensätze T und das Datenprofil R."
@@ -645,7 +792,7 @@ def zeige_etl_seite(
             _vorschau(datenimport_service, zustand)
         elif zustand["schritt"] == 6:
             _datenprofil(datenimport_service, projekt_id, zustand)
-        else:
+        elif zustand["schritt"] == 7:
             _importpruefung(
                 projekt_service,
                 datenquelle_service,
@@ -653,6 +800,10 @@ def zeige_etl_seite(
                 projekt_id,
                 zustand,
             )
+        elif zustand["schritt"] == 8:
+            _transformation(transformations_service, projekt_id, zustand)
+        else:
+            _zwischendatensatz(transformations_service, zustand)
         _navigation(zustand)
         _gespeicherte_importe(importvorgang_service, datenquelle_service, projekt_id)
     except (Domaenenfehler, Datenimportfehler) as fehler:
