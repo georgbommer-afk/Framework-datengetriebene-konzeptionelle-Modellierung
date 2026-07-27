@@ -89,6 +89,8 @@ from framework_mvp.domain.models.projekt import (
     Untersuchungsauftrag,
 )
 from framework_mvp.domain.models.semantisches_mapping import (
+    Aktivitaetsbildungsart,
+    Aktivitaetsdefinition,
     Attributrolle,
     Ereignisrolle,
     MappingModus,
@@ -110,6 +112,8 @@ from framework_mvp.domain.models.transformation import (
 from framework_mvp.domain.models.zwischendatensatz import Zwischendatensatz
 
 __all__ = [
+    "Aktivitaetsbildungsart",
+    "Aktivitaetsdefinition",
     "BeteiligtePerson",
     "Attributrolle",
     "Betrachtungszeitraum",

@@ -22,6 +22,33 @@ from framework_mvp.infrastructure.persistence.sqlite_projekt_repository import (
 )
 
 
+def test_mehrere_untersuchungszwecke_werden_additiv_persistiert(tmp_path: Path) -> None:
+    """Der JSON-Vertrag bewahrt mehrere Zwecke ohne Änderung des SQLite-Schemas."""
+    repository = SQLiteProjektRepository(tmp_path / "zwecke.sqlite")
+    projekt = Projekt.neu(
+        "Mehrere Zwecke",
+        Untersuchungsauftrag(
+            "Problem",
+            "System analysieren",
+            Systemtyp.PRODUKTION,
+            "Grenze",
+            untersuchungszwecke=(
+                "System analysieren",
+                "Materialfluss erklären",
+                "Bestände verstehen",
+            ),
+        ),
+    )
+    repository.speichern(projekt)
+    geladen = repository.laden(projekt.projekt_id)
+    assert geladen is not None
+    assert geladen.untersuchungsauftrag.untersuchungszwecke == (
+        "System analysieren",
+        "Materialfluss erklären",
+        "Bestände verstehen",
+    )
+
+
 def _projekt(bezeichnung: str) -> Projekt:
     auftrag = Untersuchungsauftrag(
         problemstellung="Material wartet zu lange",

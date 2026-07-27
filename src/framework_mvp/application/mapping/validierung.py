@@ -5,7 +5,10 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from framework_mvp.application.transformation import kombiniere_textspalten
 from framework_mvp.domain.models import (
+    Attributrolle,
+    Ereignisrolle,
     MappingModus,
     MappingValidierung,
     MappingWarnung,
@@ -40,11 +43,21 @@ def _fall_id(daten: pd.DataFrame, mapping: SemantischesMapping) -> pd.Series:
 def _ereignisorientiert(daten: pd.DataFrame, mapping: SemantischesMapping) -> pd.DataFrame:
     ereignisse = pd.DataFrame(index=daten.index)
     ereignisse["case_id"] = _fall_id(daten, mapping)
-    ereignisse["activity"] = (
-        daten[mapping.aktivitaetsspalte]
-        if mapping.aktivitaetsspalte in daten
-        else pd.Series(pd.NA, index=daten.index)
-    )
+    definition = mapping.wirksame_aktivitaetsdefinition
+    if definition is None or any(wert not in daten for wert in definition.quellspalten):
+        ereignisse["activity"] = pd.Series(pd.NA, index=daten.index)
+    elif len(definition.quellspalten) == 1:
+        ereignisse["activity"] = daten[definition.quellspalten[0]]
+    else:
+        ereignisse["activity"] = kombiniere_textspalten(
+            daten,
+            definition.quellspalten,
+            trennzeichen=definition.trennzeichen,
+            praefix=definition.praefix,
+            suffix=definition.suffix,
+            fehlwertstrategie=definition.fehlwertstrategie,
+            ersatztext=definition.ersatztext,
+        )
     ereignisse["timestamp"] = (
         daten[mapping.zeitstempelspalte]
         if mapping.zeitstempelspalte in daten
@@ -59,6 +72,15 @@ def _ereignisorientiert(daten: pd.DataFrame, mapping: SemantischesMapping) -> pd
     for ziel, quelle in optionen.items():
         if quelle and quelle in daten:
             ereignisse[ziel] = daten[quelle]
+    for zuordnung in mapping.spaltenzuordnungen:
+        if zuordnung.spaltenname not in daten or zuordnung.rolle is Attributrolle.IGNORIERT:
+            continue
+        ziel = (
+            "source_event_id"
+            if zuordnung.rolle is Ereignisrolle.QUELL_EREIGNIS_ID
+            else zuordnung.spaltenname
+        )
+        ereignisse[ziel] = daten[zuordnung.spaltenname]
     return ereignisse
 
 
@@ -77,6 +99,15 @@ def _breit(daten: pd.DataFrame, mapping: SemantischesMapping) -> pd.DataFrame:
             teil["resource"] = daten[zuordnung.ressourcenspalte]
         if zuordnung.statusspalte:
             teil["lifecycle"] = daten[zuordnung.statusspalte]
+        for attribut in mapping.spaltenzuordnungen:
+            if attribut.spaltenname not in daten or attribut.rolle is Attributrolle.IGNORIERT:
+                continue
+            ziel = (
+                "source_event_id"
+                if attribut.rolle is Ereignisrolle.QUELL_EREIGNIS_ID
+                else attribut.spaltenname
+            )
+            teil[ziel] = daten[attribut.spaltenname]
         teile.append(teil)
     if not teile:
         return pd.DataFrame(columns=["case_id", "activity", "timestamp"])
@@ -96,6 +127,7 @@ def validiere_mapping(daten: pd.DataFrame, mapping: SemantischesMapping) -> Mapp
     fehlende_aktivitaeten = int((activity_text.isna() | activity_text.str.strip().eq("")).sum())
     zeit = pd.to_datetime(ereignisse["timestamp"], errors="coerce")
     nicht_zeit = int(ereignisse["timestamp"].notna().sum() - zeit.notna().sum())
+    fehlende_zeit = int(ereignisse["timestamp"].isna().sum())
     start_nach_ende = 0
     if {"start_timestamp", "end_timestamp"} <= set(ereignisse.columns):
         start = pd.to_datetime(ereignisse["start_timestamp"], errors="coerce")
@@ -110,9 +142,80 @@ def validiere_mapping(daten: pd.DataFrame, mapping: SemantischesMapping) -> Mapp
     viele = int((groessen > VIELE_EREIGNISSE_SCHWELLE).sum())
     unsortiert = sum(not gruppe["_zeit"].dropna().is_monotonic_increasing for _, gruppe in gruppen)
     warnungen: list[MappingWarnung] = []
+    definition = mapping.wirksame_aktivitaetsdefinition
+    referenzen = {
+        *mapping.fall_id.spalten,
+        *(definition.quellspalten if definition else ()),
+        mapping.zeitstempelspalte,
+        mapping.startzeitstempelspalte,
+        mapping.endzeitstempelspalte,
+        mapping.lifecycle_spalte,
+        mapping.ressourcen_spalte,
+        *(wert.zeitstempelspalte for wert in mapping.zeitstempelzuordnungen),
+        *(wert.spaltenname for wert in mapping.spaltenzuordnungen),
+    }
+    fehlende_spalten = sorted(wert for wert in referenzen if wert and wert not in daten)
+    if fehlende_spalten:
+        warnungen.append(
+            MappingWarnung(
+                Warnungsstufe.FEHLER,
+                "FEHLENDE_SPALTEN",
+                f"Referenzierte Spalten fehlen: {', '.join(fehlende_spalten)}.",
+                len(fehlende_spalten),
+            )
+        )
+    rollenbelegungen = [
+        *mapping.fall_id.spalten,
+        *(definition.quellspalten if definition else ()),
+        mapping.zeitstempelspalte,
+        mapping.startzeitstempelspalte,
+        mapping.endzeitstempelspalte,
+        mapping.lifecycle_spalte,
+        mapping.ressourcen_spalte,
+        *(wert.zeitstempelspalte for wert in mapping.zeitstempelzuordnungen),
+        *(wert.spaltenname for wert in mapping.spaltenzuordnungen),
+    ]
+    belegte_spalten = [wert for wert in rollenbelegungen if wert]
+    doppelte_belegungen = len(belegte_spalten) - len(set(belegte_spalten))
+    if doppelte_belegungen:
+        warnungen.append(
+            MappingWarnung(
+                Warnungsstufe.FEHLER,
+                "DOPPELTE_ROLLENBELEGUNG",
+                "Mindestens eine Spalte wurde mehreren Rollen zugeordnet.",
+                doppelte_belegungen,
+            )
+        )
+    if mapping.mapping_modus is MappingModus.BREITER_ZEITSTEMPELDATENSATZ:
+        bezeichnungen = [wert.aktivitaetsbezeichnung for wert in mapping.zeitstempelzuordnungen]
+        if not bezeichnungen or any(not wert for wert in bezeichnungen):
+            warnungen.append(
+                MappingWarnung(
+                    Warnungsstufe.FEHLER,
+                    "LEERE_ZEITSTEMPELDEFINITION",
+                    "Mindestens eine Zeitstempelspalte mit Aktivitätsbezeichnung ist erforderlich.",
+                )
+            )
+        if len(bezeichnungen) != len(set(bezeichnungen)):
+            warnungen.append(
+                MappingWarnung(
+                    Warnungsstufe.FEHLER,
+                    "DOPPELTE_AKTIVITAETSBEZEICHNUNG",
+                    "Aktivitätsbezeichnungen der Zeitstempelspalten müssen eindeutig sein.",
+                )
+            )
+    elif definition is None or not mapping.zeitstempelspalte:
+        warnungen.append(
+            MappingWarnung(
+                Warnungsstufe.FEHLER,
+                "FEHLENDE_PFLICHTROLLE",
+                "Aktivität und Ereigniszeitstempel müssen definiert sein.",
+            )
+        )
     fehler = (
         ("FEHLENDE_FALL_ID", "Fall-IDs fehlen oder sind leer.", fehlende_ids),
         ("FEHLENDE_AKTIVITAET", "Aktivitäten fehlen oder sind leer.", fehlende_aktivitaeten),
+        ("FEHLENDE_ZEIT", "Ereigniszeitstempel fehlen oder sind leer.", fehlende_zeit),
         ("UNGUELTIGE_ZEIT", "Zeitstempel sind nicht interpretierbar.", nicht_zeit),
         ("START_NACH_ENDE", "Startzeitpunkte liegen nach Endzeitpunkten.", start_nach_ende),
     )
@@ -131,6 +234,37 @@ def validiere_mapping(daten: pd.DataFrame, mapping: SemantischesMapping) -> Mapp
     ):
         if anzahl:
             warnungen.append(MappingWarnung(Warnungsstufe.WARNUNG, code, meldung, anzahl))
+    if len(activity_text):
+        kardinalitaet = int(activity_text.dropna().nunique())
+        if kardinalitaet / len(activity_text) > 0.25:
+            warnungen.append(
+                MappingWarnung(
+                    Warnungsstufe.WARNUNG,
+                    "HOHE_AKTIVITAETSVIELFALT",
+                    "Die Aktivitätsdefinition besitzt eine sehr hohe Vielfalt.",
+                    kardinalitaet,
+                )
+            )
+    fall_ids = _fall_id(daten, mapping)
+    for zuordnung in mapping.spaltenzuordnungen:
+        if zuordnung.rolle is not Attributrolle.FALLATTRIBUT:
+            continue
+        wechsel = int(
+            pd.DataFrame({"fall": fall_ids, "wert": daten[zuordnung.spaltenname]})
+            .groupby("fall", dropna=True)["wert"]
+            .nunique(dropna=False)
+            .gt(1)
+            .sum()
+        )
+        if wechsel:
+            warnungen.append(
+                MappingWarnung(
+                    Warnungsstufe.WARNUNG,
+                    "WECHSELNDES_FALLATTRIBUT",
+                    f"Das Fallattribut {zuordnung.spaltenname} wechselt innerhalb von Fällen.",
+                    wechsel,
+                )
+            )
     gueltig = not any(wert.stufe is Warnungsstufe.FEHLER for wert in warnungen)
     validierung = MappingValidierung(
         gueltig,
@@ -148,4 +282,4 @@ def validiere_mapping(daten: pd.DataFrame, mapping: SemantischesMapping) -> Mapp
     )
     standard = ereignisse.copy(deep=True)
     standard["timestamp"] = zeit
-    return MappingErgebnis(standard.head(200).copy(), standard, validierung)
+    return MappingErgebnis(standard.head(100).copy(), standard, validierung)

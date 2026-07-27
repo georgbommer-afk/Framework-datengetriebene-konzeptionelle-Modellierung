@@ -41,6 +41,7 @@ class Ereignisrolle(StrEnum):
     MATERIAL = "Material"
     MASCHINE = "Maschine"
     TRANSPORTMITTEL = "Transportmittel"
+    QUELL_EREIGNIS_ID = "Quell-Ereignis-ID"
 
 
 class Attributrolle(StrEnum):
@@ -51,6 +52,43 @@ class Attributrolle(StrEnum):
     RESSOURCENATTRIBUT = "Ressourcenattribut"
     OBJEKTIDENTIFIKATOR = "Objektidentifikator"
     IGNORIERT = "Ignorierte Spalte"
+
+
+class Aktivitaetsbildungsart(StrEnum):
+    """Unterstützte Definitionen einer fachlichen Aktivität."""
+
+    VORHANDENE_SPALTE = "vorhandene_spalte"
+    ZUSAMMENGESETZT = "zusammengesetzt"
+
+
+@dataclass(frozen=True, slots=True)
+class Aktivitaetsdefinition:
+    """Reproduzierbare Aktivität aus einer Spalte oder mehreren Textbestandteilen."""
+
+    bildungsart: Aktivitaetsbildungsart
+    quellspalten: tuple[str, ...]
+    trennzeichen: str = ""
+    praefix: str = ""
+    suffix: str = ""
+    fehlwertstrategie: str = "Nur vorhandene Bestandteile kombinieren"
+    ersatztext: str = ""
+
+    def __post_init__(self) -> None:
+        """Bereinigt Namen und prüft die zur Bildungsart passende Spaltenanzahl."""
+        spalten = tuple(wert.strip() for wert in self.quellspalten if wert.strip())
+        object.__setattr__(self, "quellspalten", spalten)
+        if self.bildungsart is Aktivitaetsbildungsart.VORHANDENE_SPALTE and len(spalten) != 1:
+            raise Domaenenfehler("Eine vorhandene Aktivität benötigt genau eine Spalte.")
+        if self.bildungsart is Aktivitaetsbildungsart.ZUSAMMENGESETZT and len(spalten) < 2:
+            raise Domaenenfehler(
+                "Eine zusammengesetzte Aktivität benötigt mindestens zwei Spalten."
+            )
+        if self.fehlwertstrategie not in {
+            "Ergebnis leer lassen",
+            "Nur vorhandene Bestandteile kombinieren",
+            "Festen Ersatztext verwenden",
+        }:
+            raise Domaenenfehler("Die Fehlwertstrategie der Aktivität ist ungültig.")
 
 
 class Warnungsstufe(StrEnum):
@@ -160,6 +198,7 @@ class SemantischesMapping:
     erstellt_am: datetime
     geaendert_am: datetime
     status: Mappingstatus
+    aktivitaetsdefinition: Aktivitaetsdefinition | None = None
 
     def __post_init__(self) -> None:
         """Bereinigt Namen und normalisiert Zeitstempel nach UTC."""
@@ -176,3 +215,15 @@ class SemantischesMapping:
             raise Domaenenfehler("Zeitstempel eines Mappings müssen zeitzonenbewusst sein.")
         object.__setattr__(self, "erstellt_am", self.erstellt_am.astimezone(UTC))
         object.__setattr__(self, "geaendert_am", self.geaendert_am.astimezone(UTC))
+
+    @property
+    def wirksame_aktivitaetsdefinition(self) -> Aktivitaetsdefinition | None:
+        """Liefert die neue Definition oder interpretiert ein altes Mapping kompatibel."""
+        if self.aktivitaetsdefinition is not None:
+            return self.aktivitaetsdefinition
+        if self.aktivitaetsspalte:
+            return Aktivitaetsdefinition(
+                Aktivitaetsbildungsart.VORHANDENE_SPALTE,
+                (self.aktivitaetsspalte,),
+            )
+        return None

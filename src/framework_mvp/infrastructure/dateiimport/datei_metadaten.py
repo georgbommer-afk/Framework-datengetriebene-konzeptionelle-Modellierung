@@ -3,7 +3,9 @@
 import hashlib
 import os
 import re
+from io import BytesIO
 from pathlib import PurePosixPath
+from zipfile import BadZipFile, ZipFile
 
 from framework_mvp.domain.exceptions import Datenimportfehler
 from framework_mvp.domain.models import DateiMetadaten, Dateityp
@@ -54,10 +56,25 @@ def ermittle_dateimetadaten(dateiname: str, dateiinhalt: bytes) -> DateiMetadate
         raise Datenimportfehler(
             f"Die Datei überschreitet die maximal erlaubte Größe von {maximum_mb} MB."
         )
+    dateityp = typen[endung]
+    if dateityp is Dateityp.XLSX:
+        try:
+            with ZipFile(BytesIO(dateiinhalt)) as archiv:
+                ist_arbeitsmappe = "xl/workbook.xml" in archiv.namelist()
+        except BadZipFile:
+            ist_arbeitsmappe = False
+        if not ist_arbeitsmappe:
+            raise Datenimportfehler(
+                "Die Datei besitzt die Endung XLSX, enthält aber keine gültige Excel-Arbeitsmappe."
+            )
+    elif dateiinhalt.startswith(b"PK\x03\x04") or b"\x00" in dateiinhalt[:4096]:
+        raise Datenimportfehler(
+            "Die Datei besitzt die Endung CSV, ihr Inhalt ist jedoch keine Textdatei."
+        )
     return DateiMetadaten(
         urspruenglicher_dateiname=dateiname,
         sicherer_dateiname=sicherer_name,
         dateigroesse_bytes=len(dateiinhalt),
-        dateityp=typen[endung],
+        dateityp=dateityp,
         sha256=hashlib.sha256(dateiinhalt).hexdigest(),
     )

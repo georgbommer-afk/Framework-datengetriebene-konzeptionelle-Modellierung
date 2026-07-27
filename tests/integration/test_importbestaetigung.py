@@ -31,6 +31,7 @@ from framework_mvp.infrastructure.persistence.sqlite_importvorgang_repository im
 from framework_mvp.infrastructure.persistence.sqlite_projekt_repository import (
     SQLiteProjektRepository,
 )
+from framework_mvp.ui.pages.etl import _gespeicherten_import_wiederherstellen
 from framework_mvp.workspace import WorkspaceKonfiguration
 
 
@@ -117,6 +118,42 @@ def test_excel_import_blatt_profil_bestaetigung_laden_und_platzhalter(tmp_path: 
         profil=profil,
     )
     assert service.import_laden(import_id) is not None
+
+
+def test_gespeicherter_import_stellt_raw_parameter_vorschau_und_profil_wieder_her(
+    tmp_path: Path,
+) -> None:
+    """Ein bestätigter Import kann ohne erneuten Upload vollständig fortgesetzt werden."""
+    projekt, quelle, service, _ = _services(tmp_path, Quellenart.CSV)
+    inhalt = b"id;wert\n1;A\n2;B\n"
+    datenimport = DatenimportService()
+    metadaten = datenimport.datei_pruefen("wiederaufnahme.csv", inhalt)
+    parameter = CsvImportparameter(trennzeichenwahl=Trennzeichenwahl.SEMIKOLON)
+    vorschau = datenimport.vorschau_erstellen(inhalt, parameter)
+    profil = datenimport.profil_erstellen(vorschau.vollstaendige_tabelle).profil
+    bestaetigt = service.import_bestaetigen(
+        import_id=uuid4(),
+        projekt_id=projekt.projekt_id,
+        datenquellen_id=quelle.datenquellen_id,
+        datei_metadaten=metadaten,
+        dateiinhalt=inhalt,
+        importparameter=parameter,
+        tabellenbezeichnung="wiederaufnahme",
+        profil=profil,
+    )
+    zustand: dict[str, object] = {}
+    wiederhergestellt = _gespeicherten_import_wiederherstellen(
+        importvorgang_service=service,
+        datenimport_service=datenimport,
+        import_id=bestaetigt.import_id,
+        zustand=zustand,
+    )
+    assert wiederhergestellt == bestaetigt
+    assert zustand["dateiinhalt"] == inhalt
+    assert zustand["csv_parameter"] == parameter
+    assert zustand["bestaetigter_import"] == bestaetigt
+    assert zustand["vorschau"].gesamtzeilen == 2  # type: ignore[union-attr]
+    assert zustand["profil"].profil.zeilen == 2  # type: ignore[union-attr]
 
 
 def test_doppelte_ausfuehrung_erzeugt_keinen_zweiten_import(tmp_path: Path) -> None:

@@ -112,6 +112,7 @@ class SQLiteProjektRepository:
         return {
             "problemstellung": auftrag.problemstellung,
             "untersuchungszweck": auftrag.untersuchungszweck,
+            "untersuchungszwecke": list(auftrag.untersuchungszwecke),
             "individuelles_ziel": auftrag.individuelles_ziel,
             "systemtyp": auftrag.systemtyp.value,
             "systemgrenze": auftrag.systemgrenze,
@@ -224,6 +225,9 @@ class SQLiteProjektRepository:
                 bool(zeitraum.get("migrationsbestand", False)),
             ),
             anmerkungen=daten["anmerkungen"],
+            untersuchungszwecke=tuple(
+                daten.get("untersuchungszwecke", (daten["untersuchungszweck"],))
+            ),
         )
         personen = tuple(
             BeteiligtePerson(**person) for person in json.loads(zeile["beteiligte_personen_json"])

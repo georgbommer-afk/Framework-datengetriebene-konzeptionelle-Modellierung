@@ -64,7 +64,19 @@ service.ausgangsprofil_laden = lambda import_id: SimpleNamespace(
 )
 service.import_dataframe_laden = lambda import_id: ergebnis.daten
 zustand = st.session_state.setdefault("schritt_neun", {"transformationsplan": plan})
-_zwischendatensatz(service, zustand)
+zustand.setdefault(
+    "bestaetigter_import",
+    SimpleNamespace(
+        import_id=plan.import_ids[0],
+        datenquellen_id=uuid4(),
+        originaldateiname="regression.csv",
+        tabellenbezeichnung="Regression",
+    ),
+)
+class DatenquelleService:
+    def datenquelle_laden(self, datenquellen_id):
+        return SimpleNamespace(bezeichnung="Regression")
+_zwischendatensatz(service, DatenquelleService(), plan.projekt_id, zustand)
 """
 
 
@@ -78,7 +90,9 @@ def test_schritt_neun_zeigt_alle_artefaktpfade_ohne_attributfehler(
     monkeypatch.setenv(WORKSPACE_UMGEBUNGSVARIABLE, str(workspace))
     anwendung = AppTest.from_string(ANWENDUNG).run()
     next(
-        wert for wert in anwendung.button if wert.label == "Zwischendatensatz verbindlich erzeugen"
+        wert
+        for wert in anwendung.button
+        if wert.label == "Zwischendatensatz erstellen und mit dem semantischen Mapping fortfahren"
     ).click().run()
     assert not anwendung.exception
     ausgabe = "\n".join(wert.value for wert in anwendung.markdown)

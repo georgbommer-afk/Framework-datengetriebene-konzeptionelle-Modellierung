@@ -1,5 +1,5 @@
 # pyright: reportArgumentType=false
-"""Framework-Schritt 3 als eigenständiger Wizard für semantisches Mapping."""
+"""Kompaktes semantisches Mapping des aktiven Zwischendatensatzes T."""
 
 from datetime import UTC, datetime
 from typing import Any
@@ -8,46 +8,77 @@ from uuid import UUID, uuid4
 import pandas as pd
 import streamlit as st
 
+from framework_mvp.application.datenquelle_service import DatenquelleService
 from framework_mvp.application.mapping_service import MappingService
 from framework_mvp.application.projekt_service import ProjektService
+from framework_mvp.application.transformation import kombiniere_textspalten
 from framework_mvp.application.transformations_service import TransformationsService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
+    Aktivitaetsbildungsart,
+    Aktivitaetsdefinition,
     Attributrolle,
+    Ereignisrolle,
     MappingModus,
     Mappingstatus,
     SemantischesMapping,
     Spaltenzuordnung,
+    Warnungsstufe,
     ZeitstempelZuordnung,
     ZusammengesetzteFallId,
+    Zwischendatensatz,
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
+from framework_mvp.ui.navigation import (
+    framework_bereich_oeffnen,
+    schritt_abschliessen_und_weiter,
+)
 
-MAPPING_SCHRITTE = (
-    "Zwischendatensatz auswählen",
-    "Struktur prüfen",
-    "Mappingmodus wählen",
-    "Rollen zuordnen",
-    "Mapping validieren",
-    "Mapping speichern",
+MAPPING_SCHRITTE = ("Datenstruktur", "Rollen und Aktivität", "Prüfen und speichern")
+MAPPING_KURZNAMEN = ("Struktur", "Zuordnung", "Ergebnis")
+
+STANDARDROLLEN = (
+    "Ressource",
+    "Lifecycle",
+    "Startzeitstempel",
+    "Endzeitstempel",
+    "Quell-Ereignis-ID",
 )
-MAPPING_KURZNAMEN = (
-    "Datensatz",
-    "Struktur",
-    "Modus",
-    "Zuordnung",
-    "Validierung",
-    "Speichern",
-)
+ATTRIBUTGRUPPEN = {
+    "ereignisattribute": (
+        "Ereignisattribute",
+        "Werte, die ein einzelnes Ereignis näher beschreiben und sich innerhalb "
+        "eines Falls ändern können.",
+        Attributrolle.EREIGNISATTRIBUT,
+    ),
+    "fallattribute": (
+        "Fallattribute",
+        "Werte, die den gesamten Auftrag oder Fall beschreiben und innerhalb "
+        "eines Falls möglichst gleich bleiben.",
+        Attributrolle.FALLATTRIBUT,
+    ),
+    "ressourcenattribute": (
+        "Ressourcenattribute",
+        "Zusätzliche Angaben über ausführende Personen, Maschinen oder Transporteinheiten.",
+        Attributrolle.RESSOURCENATTRIBUT,
+    ),
+    "objektidentifikatoren": (
+        "Objektidentifikatoren",
+        "Weitere fachliche Objekte wie Ladeeinheit, Material oder Seriennummer.",
+        Attributrolle.OBJEKTIDENTIFIKATOR,
+    ),
+}
 
 
 def _zustand(projekt_id: UUID) -> dict[str, Any]:
+    """Liefert den projektbezogenen Zustand des dreiteiligen Mapping-Ablaufs."""
     zustaende = st.session_state.setdefault("mapping_wizard_zustaende", {})
     return zustaende.setdefault(str(projekt_id), {"schritt": 1})
 
 
 def _fortschritt(schritt: int) -> None:
+    """Zeigt den kompakten dreistufigen Mappingfortschritt."""
     zeige_kompakten_fortschritt(
         schritt=schritt,
         kurze_namen=MAPPING_KURZNAMEN,
@@ -55,191 +86,573 @@ def _fortschritt(schritt: int) -> None:
     )
 
 
-def _projekt_auswaehlen(service: ProjektService) -> UUID | None:
-    projekte = service.projekte_auflisten()
-    if not projekte:
-        st.warning("Für das semantische Mapping muss zuerst ein Projekt angelegt werden.")
+def _projektkontext(service: ProjektService) -> tuple[UUID, str] | None:
+    """Lädt ausschließlich das zentral gewählte Projekt."""
+    try:
+        projekt_id = UUID(str(st.session_state.get("aktuelles_projekt_id")))
+    except (TypeError, ValueError):
+        st.warning("Bitte wählen oder erstellen Sie zuerst in Schritt 1 ein Projekt.")
+        framework_bereich_oeffnen(schritt=1)
         return None
-    ids = [str(wert.projekt_id) for wert in projekte]
-    namen = {str(wert.projekt_id): wert.bezeichnung for wert in projekte}
-    aktuelle_id = st.session_state.get("aktuelles_projekt_id")
-    index = ids.index(aktuelle_id) if aktuelle_id in ids else 0
-    auswahl = st.selectbox(
-        "Aktuelles Projekt",
-        ids,
-        index=index,
-        format_func=lambda wert: namen[wert],
-        key="mapping_projektauswahl",
-    )
-    st.session_state.aktuelles_projekt_id = auswahl
-    return UUID(auswahl)
+    projekt = service.projekt_laden(projekt_id)
+    if projekt is None:
+        st.warning("Das zentral gewählte Projekt ist nicht mehr vorhanden.")
+        framework_bereich_oeffnen(schritt=1)
+        return None
+    st.write(f"**Aktuelles Projekt: {projekt.bezeichnung}**")
+    return projekt_id, projekt.bezeichnung
 
 
-def _datensatz_auswaehlen(
-    service: TransformationsService, projekt_id: UUID, zustand: dict[str, Any]
-) -> None:
+def _aktiven_datensatz_laden(
+    service: TransformationsService, projekt_id: UUID
+) -> tuple[Zwischendatensatz, pd.DataFrame] | None:
+    """Verwendet den Session-Datensatz oder den neuesten konsistenten Projekt-Datensatz."""
     datensaetze = service.datensaetze_fuer_projekt(projekt_id)
-    if not datensaetze:
-        st.warning("In Framework-Schritt 2 muss zuerst ein Zwischendatensatz erzeugt werden.")
-        return
-    ids = [str(wert.zwischendatensatz_id) for wert in datensaetze]
-    auswahl = st.selectbox("Zwischendatensatz", ids)
-    zustand["datensatz_id"] = auswahl
-    datensatz = next(wert for wert in datensaetze if str(wert.zwischendatensatz_id) == auswahl)
-    st.write(f"{datensatz.zeilenanzahl} Zeilen · {datensatz.spaltenanzahl} Spalten")
+    nach_id = {str(wert.zwischendatensatz_id): wert for wert in datensaetze}
+    kandidaten: list[Zwischendatensatz] = []
+    session_id = str(st.session_state.get("aktueller_zwischendatensatz_id", ""))
+    if session_id in nach_id:
+        kandidaten.append(nach_id[session_id])
+    kandidaten.extend(
+        wert
+        for wert in sorted(
+            datensaetze,
+            key=lambda eintrag: (eintrag.erstellt_am, str(eintrag.zwischendatensatz_id)),
+            reverse=True,
+        )
+        if wert not in kandidaten
+    )
+    for datensatz in kandidaten:
+        if datensatz.projekt_id != projekt_id:
+            continue
+        try:
+            geladen, daten = service.zwischendatensatz_laden(datensatz.zwischendatensatz_id)
+        except (Domaenenfehler, Importintegritaetsfehler):
+            continue
+        if geladen.projekt_id == projekt_id:
+            st.session_state.aktueller_zwischendatensatz_id = str(geladen.zwischendatensatz_id)
+            return geladen, daten
+    return None
 
 
-def _daten(service: MappingService, zustand: dict[str, Any]) -> pd.DataFrame:
-    return service.datensatz_laden(UUID(zustand["datensatz_id"]))
+def _datensatzkontext(
+    service: TransformationsService,
+    datenquelle_service: DatenquelleService | None,
+    datensatz: Zwischendatensatz,
+) -> None:
+    """Zeigt Herkunft und technische Identität des aktiven Datensatzes kompakt."""
+    plan = service.plan_laden(datensatz.transformationsplan_id)
+    importe = {wert.import_id: wert for wert in service.importe_fuer_projekt(datensatz.projekt_id)}
+    hauptimport = importe.get(datensatz.import_ids[0])
+    quelle = (
+        datenquelle_service.datenquelle_laden(hauptimport.datenquellen_id)
+        if datenquelle_service is not None and hauptimport is not None
+        else None
+    )
+    bezeichnung = (
+        f"{hauptimport.originaldateiname} · {hauptimport.tabellenbezeichnung}"
+        if hauptimport
+        else f"Zwischendatensatz vom {datensatz.erstellt_am:%d.%m.%Y}"
+    )
+    st.write(f"**Datengrundlage: {bezeichnung}**")
+    st.caption(
+        f"Datenquelle: {quelle.bezeichnung if quelle else 'nicht verfügbar'} · "
+        f"Import: {hauptimport.originaldateiname if hauptimport else 'nicht verfügbar'} · "
+        f"Tabelle: {hauptimport.tabellenbezeichnung if hauptimport else 'nicht verfügbar'} · "
+        f"{datensatz.zeilenanzahl:,} Zeilen · {datensatz.spaltenanzahl:,} Spalten · "
+        f"{sum(s.aktiviert for s in plan.schritte) if plan else 0} Transformationen · "
+        f"erstellt am {datensatz.erstellt_am:%d.%m.%Y um %H:%M Uhr}"
+    )
+    with st.expander("Technische Datensatzinformationen"):
+        st.write(f"Zwischendatensatz-ID: `{datensatz.zwischendatensatz_id}`")
+        st.write(f"Transformationsplan-ID: `{datensatz.transformationsplan_id}`")
+        st.write(f"Prüfsumme: `{datensatz.sha256}`")
+        st.write(f"Schema: `{datensatz.relativer_schema_pfad}`")
+    if st.button("Datengrundlage ändern", width="content"):
+        framework_bereich_oeffnen(schritt=2, projekt_id=datensatz.projekt_id)
 
 
-def _struktur(service: MappingService, zustand: dict[str, Any]) -> None:
-    daten = _daten(service, zustand)
-    st.dataframe(daten.head(200), width="stretch")
-    st.dataframe(
-        pd.DataFrame(
-            {
-                "Spalte": [str(wert) for wert in daten.columns],
-                "Technischer Datentyp": [str(wert) for wert in daten.dtypes],
-                "Fehlende Werte": [int(daten[wert].isna().sum()) for wert in daten.columns],
-            }
-        ),
-        hide_index=True,
+def _zeitspalten(daten: pd.DataFrame) -> list[str]:
+    """Priorisiert Spalten mit überwiegend interpretierbaren Zeitwerten."""
+    bewertungen = []
+    for name in daten.columns:
+        serie = daten[name]
+        interpretierbar = pd.to_datetime(serie, errors="coerce", format="mixed").notna().mean()
+        namensbonus = any(
+            wort in str(name).casefold()
+            for wort in ("zeit", "time", "datum", "date", "timestamp", "beginn", "ende")
+        )
+        bewertungen.append((str(name), float(interpretierbar), namensbonus))
+    return [
+        name
+        for name, _, _ in sorted(
+            bewertungen, key=lambda wert: (wert[2], wert[1], wert[0]), reverse=True
+        )
+    ]
+
+
+def _struktur_vorschlagen(daten: pd.DataFrame) -> MappingModus:
+    """Erzeugt einen unverbindlichen Strukturvorschlag aus Spaltennamen und Werten."""
+    zeitgeeignet = sum(
+        pd.to_datetime(daten[name], errors="coerce", format="mixed").notna().mean() >= 0.8
+        for name in daten.columns
+    )
+    aktivitaet = any(
+        wort in str(name).casefold()
+        for name in daten.columns
+        for wort in ("aktiv", "activity", "vorgang", "ereignis", "status", "transportweg")
+    )
+    return (
+        MappingModus.BREITER_ZEITSTEMPELDATENSATZ
+        if zeitgeeignet >= 2 and not aktivitaet
+        else MappingModus.EREIGNISORIENTIERT
     )
 
 
-def _modus(zustand: dict[str, Any]) -> None:
+def _datenstruktur(daten: pd.DataFrame, zustand: dict[str, Any]) -> None:
+    """Erfasst den Mappingmodus und zeigt ausschließlich die tatsächliche Struktur."""
+    st.subheader("Datenstruktur")
+    st.write("**Wie sind die Ereignisse in den Daten dargestellt?**")
+    vorschlag = _struktur_vorschlagen(daten)
+    st.info(
+        "Vorgeschlagene Datenstruktur: "
+        + (
+            "Eine Zeile entspricht einem Ereignis"
+            if vorschlag is MappingModus.EREIGNISORIENTIERT
+            else "Eine Zeile enthält mehrere Ereigniszeitpunkte"
+        )
+    )
+    optionen = (
+        MappingModus.EREIGNISORIENTIERT,
+        MappingModus.BREITER_ZEITSTEMPELDATENSATZ,
+    )
+    vorhanden = zustand.get("modus", vorschlag)
     modus = st.radio(
-        "Struktur des Zwischendatensatzes",
-        list(MappingModus),
+        "Datenstruktur",
+        optionen,
+        index=optionen.index(vorhanden),
         format_func=lambda wert: (
-            "Ereignisorientiert: eine Zeile entspricht einem Ereignis"
+            "Eine Zeile entspricht einem Ereignis"
             if wert is MappingModus.EREIGNISORIENTIERT
-            else "Breiter Zeitstempeldatensatz: mehrere Ereigniszeitpunkte je Zeile"
+            else "Eine Zeile enthält mehrere Ereigniszeitpunkte"
         ),
     )
     zustand["modus"] = modus
-
-
-def _rollen(service: MappingService, zustand: dict[str, Any]) -> None:
-    daten = _daten(service, zustand)
-    spalten = [str(wert) for wert in daten.columns]
-    fall_id = st.multiselect("Fall-ID-Spalte(n)", spalten)
-    trennzeichen = st.text_input("Trennzeichen für zusammengesetzte Fall-ID", value="|")
-    modus = zustand["modus"]
-    aktivitaet = ""
-    zeitstempel = ""
-    startzeitstempel = ""
-    endzeitstempel = ""
-    lifecycle = ""
-    zeitzuordnungen: tuple[ZeitstempelZuordnung, ...] = ()
     if modus is MappingModus.EREIGNISORIENTIERT:
-        aktivitaet = st.selectbox("Aktivitätsspalte", ["", *spalten])
-        zeitstempel = st.selectbox("Ereigniszeitstempel", ["", *spalten])
-        startzeitstempel = st.selectbox("Startzeitpunkt (optional)", ["", *spalten])
-        endzeitstempel = st.selectbox("Endzeitpunkt (optional)", ["", *spalten])
-        lifecycle = st.selectbox("Lifecycle-Status (optional)", ["", *spalten])
-    else:
-        zeitspalten = st.multiselect("Zeitstempelspalten", spalten)
-        zeitzuordnungen = tuple(
-            ZeitstempelZuordnung(wert, wert.replace("_", " ")) for wert in zeitspalten
+        st.caption(
+            "Jede Datenzeile beschreibt bereits eine Aktivität mit einem zugehörigen "
+            "Zeitstempel (ereignisorientierter Datensatz)."
         )
-    ressourcen = st.selectbox("Ressourcenspalte (optional)", ["", *spalten])
-    standardspalten = {
-        *fall_id,
-        aktivitaet,
-        zeitstempel,
-        startzeitstempel,
-        endzeitstempel,
-        lifecycle,
-        ressourcen,
-    }
-    standardspalten.update(wert.zeitstempelspalte for wert in zeitzuordnungen)
-    zuordnungen = tuple(
-        Spaltenzuordnung(
-            wert,
-            st.selectbox(
-                f"Rolle für {wert}",
-                list(Attributrolle),
-                format_func=lambda rolle: rolle.value,
-                key=f"mapping_rolle_{zustand['datensatz_id']}_{wert}",
+    else:
+        st.caption(
+            "Eine Zeile enthält getrennte Zeitstempel für mehrere Aktivitäten. "
+            "Daraus werden in Schritt 4 mehrere Ereignisse erzeugt "
+            "(breiter Zeitstempeldatensatz)."
+        )
+    st.dataframe(daten.head(100), width="stretch")
+    st.write("**Verfügbare Spalten:** " + ", ".join(str(wert) for wert in daten.columns))
+
+
+def _fallkennzahlen(daten: pd.DataFrame, fall_id: str) -> None:
+    """Zeigt Kardinalität, Leerwerte und Ereignisanzahl einer Fall-ID."""
+    serie = daten[fall_id].astype("string")
+    leer = serie.isna() | serie.str.strip().eq("")
+    groessen = serie.loc[~leer].value_counts()
+    st.caption(
+        f"{serie.loc[~leer].nunique():,} unterschiedliche Fall-IDs · "
+        f"{int(leer.sum()):,} leere Fall-IDs · "
+        f"mindestens {int(groessen.min()) if not groessen.empty else 0:,} · "
+        f"höchstens {int(groessen.max()) if not groessen.empty else 0:,} Ereignisse je Fall"
+    )
+
+
+def _zeitkennzahlen(daten: pd.DataFrame, spalte: str) -> None:
+    """Zeigt die Interpretierbarkeit der gewählten Zeitstempelspalte."""
+    original = daten[spalte]
+    zeit = pd.to_datetime(original, errors="coerce", format="mixed")
+    nicht_leer = original.notna()
+    gueltig = zeit.notna()
+    st.caption(
+        f"{float(gueltig.mean()):.1%} interpretierbar · "
+        f"frühester Zeitpunkt {zeit.min() if gueltig.any() else '–'} · "
+        f"spätester Zeitpunkt {zeit.max() if gueltig.any() else '–'} · "
+        f"{int((nicht_leer & ~gueltig).sum()):,} nicht interpretierbare Werte"
+    )
+
+
+def _aktivitaetskennzahlen(aktivitaeten: pd.Series) -> None:
+    """Zeigt Vorschau und Kardinalität einer Aktivitätsdefinition."""
+    text = aktivitaeten.astype("string")
+    leer = text.isna() | text.str.strip().eq("")
+    regulaer = text.loc[~leer]
+    haeufig = regulaer.value_counts()
+    top5 = int(haeufig.head(5).sum())
+    st.dataframe(pd.DataFrame({"activity": text.head(20)}), hide_index=True)
+    st.caption(
+        f"{len(regulaer):,} erzeugte Aktivitäten · {regulaer.nunique():,} unterschiedliche · "
+        f"{int(leer.sum()):,} leer · Anteil Top 5 "
+        f"{top5 / len(regulaer) if len(regulaer) else 0:.1%} · "
+        f"Eindeutigkeitsanteil "
+        f"{regulaer.nunique() / len(regulaer) if len(regulaer) else 0:.1%}"
+    )
+    if len(regulaer) and regulaer.nunique() / len(regulaer) > 0.25:
+        st.warning(
+            f"Die Definition erzeugt {regulaer.nunique():,} unterschiedliche Aktivitäten "
+            f"aus {len(regulaer):,} Ereignissen. Ein sehr detailliertes Aktivitätsniveau "
+            "kann das spätere Prozessmodell schwer lesbar machen."
+        )
+
+
+def _aktivitaetsdefinition(daten: pd.DataFrame, zustand: dict[str, Any]) -> Aktivitaetsdefinition:
+    """Erfasst eine vorhandene oder virtuelle zusammengesetzte Aktivität."""
+    spalten = [str(wert) for wert in daten.columns]
+    art = st.radio(
+        "Wie wird die Aktivität gebildet?",
+        ("Vorhandene Spalte verwenden", "Aus mehreren Spalten zusammensetzen"),
+    )
+    if art == "Vorhandene Spalte verwenden":
+        priorisiert = sorted(
+            spalten,
+            key=lambda name: (
+                not any(
+                    wort in name.casefold()
+                    for wort in (
+                        "aktiv",
+                        "activity",
+                        "vorgang",
+                        "ereignis",
+                        "status",
+                        "transportweg",
+                    )
+                ),
+                name,
             ),
         )
-        for wert in spalten
-        if wert not in standardspalten
+        name = st.selectbox(
+            "Aktivitätsspalte",
+            priorisiert,
+            help="Die Aktivität beschreibt, was bei einem Ereignis passiert.",
+        )
+        definition = Aktivitaetsdefinition(Aktivitaetsbildungsart.VORHANDENE_SPALTE, (name,))
+        _aktivitaetskennzahlen(daten[name])
+        return definition
+    quellen = st.multiselect("Quellspalten in gewünschter Reihenfolge", spalten)
+    trennzeichen = st.text_input("Text oder Trennzeichen", value=" → ")
+    praefix = st.text_input("Präfix (optional)")
+    suffix = st.text_input("Suffix (optional)")
+    strategien = {
+        "Aktivität leer lassen, wenn ein Bestandteil fehlt": "Ergebnis leer lassen",
+        "Nur vorhandene Bestandteile verwenden": "Nur vorhandene Bestandteile kombinieren",
+        "Fehlende Bestandteile durch festen Text ersetzen": "Festen Ersatztext verwenden",
+    }
+    auswahl = st.selectbox("Verhalten bei leeren Werten", list(strategien))
+    ersatztext = (
+        st.text_input("Ersatztext") if strategien[auswahl] == "Festen Ersatztext verwenden" else ""
     )
-    jetzt = datetime.now(UTC)
+    if len(quellen) < 2:
+        st.info("Wählen Sie mindestens zwei Quellspalten.")
+        return Aktivitaetsdefinition(Aktivitaetsbildungsart.VORHANDENE_SPALTE, (spalten[0],))
+    definition = Aktivitaetsdefinition(
+        Aktivitaetsbildungsart.ZUSAMMENGESETZT,
+        tuple(quellen),
+        trennzeichen,
+        praefix,
+        suffix,
+        strategien[auswahl],
+        ersatztext,
+    )
+    aktivitaeten = kombiniere_textspalten(
+        daten,
+        definition.quellspalten,
+        trennzeichen=definition.trennzeichen,
+        praefix=definition.praefix,
+        suffix=definition.suffix,
+        fehlwertstrategie=definition.fehlwertstrategie,
+        ersatztext=definition.ersatztext,
+    )
+    _aktivitaetskennzahlen(aktivitaeten)
+    return definition
+
+
+def _standardrollen(
+    spalten: list[str], bereits_verwendet: set[str], zustand: dict[str, Any]
+) -> dict[str, str]:
+    """Erfasst optionale Standardrollen nur nach ausdrücklichem Hinzufügen."""
+    rollen: dict[str, str] = zustand.setdefault("standardrollen", {})
+    st.write("**Weitere standardisierte Rollen hinzufügen**")
+    vorschlaege = _standardrollenvorschlaege(spalten)
+    if vorschlaege:
+        st.caption(
+            "Unverbindliche Vorschläge: "
+            + " · ".join(
+                f"{rolle}: {', '.join(werte)}" for rolle, werte in vorschlaege.items() if werte
+            )
+        )
+    verbleibende_rollen = [wert for wert in STANDARDROLLEN if wert not in rollen]
+    if verbleibende_rollen:
+        auswahl = st.selectbox("Rolle hinzufügen", verbleibende_rollen)
+        if st.button("Rolle hinzufügen"):
+            rollen[auswahl] = ""
+            st.rerun()
+    fuer_entfernung: list[str] = []
+    belegt = bereits_verwendet | {wert for wert in rollen.values() if wert}
+    for rolle in list(rollen):
+        aktuell = rollen[rolle]
+        optionen = [wert for wert in spalten if wert not in belegt or wert == aktuell]
+        if optionen:
+            rollen[rolle] = st.selectbox(
+                f"Spalte für {rolle}",
+                optionen,
+                index=optionen.index(aktuell) if aktuell in optionen else 0,
+                key=f"mapping_standardrolle_{rolle}",
+            )
+            belegt.add(rollen[rolle])
+        if st.button("Rolle entfernen", key=f"mapping_rolle_entfernen_{rolle}"):
+            fuer_entfernung.append(rolle)
+    for rolle in fuer_entfernung:
+        rollen.pop(rolle, None)
+        st.rerun()
+    return dict(rollen)
+
+
+def _standardrollenvorschlaege(spalten: list[str]) -> dict[str, tuple[str, ...]]:
+    """Leitet transparente, nicht verbindliche Vorschläge aus Spaltennamen ab."""
+    muster = {
+        "Ressource": ("ressource", "benutzer", "maschine", "arbeitsplatz"),
+        "Lifecycle": ("status", "lifecycle", "transition"),
+        "Startzeitstempel": ("start", "beginn"),
+        "Endzeitstempel": ("ende", "end", "abschluss"),
+        "Quell-Ereignis-ID": ("event_id", "ereignis_id"),
+    }
+    return {
+        rolle: tuple(
+            name for name in spalten if any(wert in name.casefold() for wert in suchwoerter)
+        )
+        for rolle, suchwoerter in muster.items()
+    }
+
+
+def _attribute(
+    spalten: list[str], bereits_verwendet: set[str], zustand: dict[str, Any]
+) -> dict[str, tuple[str, ...]]:
+    """Erfasst vier disjunkte Attributgruppen aus den verbleibenden Spalten."""
+    st.write("**Zusätzliche Attribute**")
+    ergebnis: dict[str, tuple[str, ...]] = {}
+    bisher = {
+        key: tuple(zustand.get("attributgruppen", {}).get(key, ())) for key in ATTRIBUTGRUPPEN
+    }
+    belegt = set(bereits_verwendet)
+    for key, (titel, hilfe, _) in ATTRIBUTGRUPPEN.items():
+        fremde = {
+            wert for anderer_key, werte in bisher.items() if anderer_key != key for wert in werte
+        }
+        optionen = [wert for wert in spalten if wert not in belegt and wert not in fremde]
+        if not optionen:
+            continue
+        auswahl = tuple(
+            st.multiselect(
+                titel,
+                optionen,
+                default=[wert for wert in bisher[key] if wert in optionen],
+                help=hilfe,
+                key=f"mapping_attribute_{key}",
+            )
+        )
+        ergebnis[key] = auswahl
+        belegt.update(auswahl)
+    zustand["attributgruppen"] = ergebnis
+    if not ergebnis:
+        st.caption("Keine weiteren Spalten verfügbar.")
+    return ergebnis
+
+
+def _rollen_und_aktivitaet(
+    daten: pd.DataFrame, projekt_id: UUID, datensatz_id: UUID, zustand: dict[str, Any]
+) -> None:
+    """Erfasst Pflichtrollen, dynamische Standardrollen und Attributgruppen."""
+    st.subheader("Rollen und Aktivität")
+    spalten = [str(wert) for wert in daten.columns]
+    fall_id = st.selectbox(
+        "Fall-ID",
+        spalten,
+        help="Die Fall-ID verbindet Ereignisse desselben Auftrags, Transports oder Prozessfalls.",
+    )
+    zustand["fall_id"] = fall_id
+    _fallkennzahlen(daten, fall_id)
+    modus: MappingModus = zustand["modus"]
+    definition: Aktivitaetsdefinition | None = None
+    zeitstempel = ""
+    zeitzuordnungen: tuple[ZeitstempelZuordnung, ...] = ()
+    verwendet = {fall_id}
+    if modus is MappingModus.EREIGNISORIENTIERT:
+        definition = _aktivitaetsdefinition(daten, zustand)
+        verwendet.update(definition.quellspalten)
+        zeitstempel = st.selectbox(
+            "Ereigniszeitstempel",
+            _zeitspalten(daten),
+            help="Der Zeitstempel bestimmt, wann das Ereignis stattgefunden hat.",
+        )
+        verwendet.add(zeitstempel)
+        _zeitkennzahlen(daten, zeitstempel)
+    else:
+        zeitspalten = st.multiselect("Zeitstempelspalten", _zeitspalten(daten))
+        zuordnungen = []
+        for name in zeitspalten:
+            bezeichnung = st.text_input(
+                f"Resultierende Aktivität für {name}",
+                value=name.replace("_", " ").strip().capitalize(),
+                key=f"mapping_breite_aktivitaet_{datensatz_id}_{name}",
+            )
+            zuordnungen.append(ZeitstempelZuordnung(name, bezeichnung))
+        zeitzuordnungen = tuple(zuordnungen)
+        verwendet.update(zeitspalten)
+        if zeitzuordnungen:
+            vorschau = []
+            for zeile, datenreihe in daten.head(20).iterrows():
+                for zuordnung in zeitzuordnungen:
+                    wert = datenreihe[zuordnung.zeitstempelspalte]
+                    if bool(pd.notna(wert)):
+                        vorschau.append(
+                            {
+                                "Quellzeile": zeile,
+                                "Fall-ID": datenreihe[fall_id],
+                                "Aktivität": zuordnung.aktivitaetsbezeichnung,
+                                "Zeitstempelspalte": zuordnung.zeitstempelspalte,
+                                "Zeitstempelwert": wert,
+                            }
+                        )
+            st.dataframe(pd.DataFrame(vorschau).head(100), hide_index=True)
+    standardrollen = _standardrollen(spalten, verwendet, zustand)
+    verwendet.update(wert for wert in standardrollen.values() if wert)
+    attributgruppen = _attribute(spalten, verwendet, zustand)
     bestehend = zustand.get("mapping")
+    jetzt = datetime.now(UTC)
+    zuordnungen = tuple(
+        Spaltenzuordnung(spalte, ATTRIBUTGRUPPEN[key][2])
+        for key, werte in attributgruppen.items()
+        for spalte in werte
+    )
+    if standardrollen.get("Quell-Ereignis-ID"):
+        zuordnungen = (
+            *zuordnungen,
+            Spaltenzuordnung(
+                standardrollen["Quell-Ereignis-ID"],
+                Ereignisrolle.QUELL_EREIGNIS_ID,
+            ),
+        )
     mapping = SemantischesMapping(
         bestehend.mapping_id if bestehend else uuid4(),
-        UUID(st.session_state.aktuelles_projekt_id),
-        UUID(zustand["datensatz_id"]),
+        projekt_id,
+        datensatz_id,
         modus,
-        ZusammengesetzteFallId(tuple(fall_id), trennzeichen),
-        aktivitaet,
+        ZusammengesetzteFallId((fall_id,)),
+        (
+            definition.quellspalten[0]
+            if definition and definition.bildungsart is Aktivitaetsbildungsart.VORHANDENE_SPALTE
+            else ""
+        ),
         zeitstempel,
-        startzeitstempel,
-        endzeitstempel,
-        lifecycle,
-        ressourcen,
+        standardrollen.get("Startzeitstempel", ""),
+        standardrollen.get("Endzeitstempel", ""),
+        standardrollen.get("Lifecycle", ""),
+        standardrollen.get("Ressource", ""),
         zuordnungen,
         zeitzuordnungen,
         None,
         bestehend.erstellt_am if bestehend else jetzt,
         jetzt,
         Mappingstatus.ENTWURF,
+        definition,
     )
     zustand["mapping"] = mapping
-    st.caption(
-        f"{len(zuordnungen)} weitere Spalten werden zunächst als "
-        f"{Attributrolle.EREIGNISATTRIBUT.value} geführt."
-    )
+    zustand.pop("mapping_ergebnis", None)
+    zustand.pop("mapping_pfad", None)
 
 
-def _validieren(service: MappingService, zustand: dict[str, Any]) -> None:
-    mapping, ergebnis = service.validieren(zustand["mapping"], _daten(service, zustand))
+def _pruefen_und_speichern(
+    service: MappingService,
+    projektname: str,
+    datensatz: Zwischendatensatz,
+    daten: pd.DataFrame,
+    zustand: dict[str, Any],
+) -> None:
+    """Validiert, zeigt eine Vorschau und speichert idempotent vor Navigation."""
+    st.subheader("Ausgabe dieses Schritts")
+    st.write("### Semantisches Mapping")
+    mapping: SemantischesMapping = zustand["mapping"]
+    mapping, ergebnis = service.validieren(mapping, daten)
     zustand["mapping"] = mapping
     zustand["mapping_ergebnis"] = ergebnis
-    for warnung in ergebnis.validierung.warnungen:
-        (st.error if warnung.stufe.value == "Fehler" else st.warning)(warnung.meldung)
-    st.dataframe(ergebnis.vorschau, width="stretch")
+    fehler = [wert for wert in ergebnis.validierung.warnungen if wert.stufe is Warnungsstufe.FEHLER]
+    warnungen = [
+        wert for wert in ergebnis.validierung.warnungen if wert.stufe is Warnungsstufe.WARNUNG
+    ]
+    hinweise = [
+        wert for wert in ergebnis.validierung.warnungen if wert.stufe is Warnungsstufe.HINWEIS
+    ]
+    for titel, werte, ausgabe in (
+        ("Fehler", fehler, st.error),
+        ("Warnungen", warnungen, st.warning),
+        ("Hinweise", hinweise, st.info),
+    ):
+        if werte:
+            st.write(f"**{titel}**")
+            for wert in werte:
+                ausgabe(f"{wert.meldung} ({wert.anzahl:,})")
+    st.dataframe(ergebnis.vorschau.head(100), width="stretch")
+    definition = mapping.wirksame_aktivitaetsdefinition
+    gruppen = zustand.get("attributgruppen", {})
     st.write(
-        f"**Fälle:** {ergebnis.validierung.unterschiedliche_faelle} · "
-        f"**Aktivitäten:** {ergebnis.validierung.unterschiedliche_aktivitaeten}"
+        f"**Projekt:** {projektname}  \n"
+        f"**Datengrundlage:** {datensatz.zeilenanzahl:,} Zeilen · "
+        f"{datensatz.spaltenanzahl:,} Spalten  \n"
+        f"**Datenstruktur:** {mapping.mapping_modus.value}  \n"
+        f"**Fall-ID:** {mapping.fall_id.spalten[0]}  \n"
+        f"**Aktivität:** "
+        f"{' + '.join(definition.quellspalten) if definition else 'nicht definiert'}  \n"
+        f"**Zeitbezug:** "
+        f"{mapping.zeitstempelspalte or f'{len(mapping.zeitstempelzuordnungen)} Zeitspalten'}  \n"
+        f"**Standardisierte Rollen:** "
+        f"{len(zustand.get('standardrollen', {}))}  \n"
+        f"**Attribute:** Ereignis {len(gruppen.get('ereignisattribute', ()))}, "
+        f"Fall {len(gruppen.get('fallattribute', ()))}, "
+        f"Ressource {len(gruppen.get('ressourcenattribute', ()))}, "
+        f"Objekte {len(gruppen.get('objektidentifikatoren', ()))}  \n"
+        f"**Validierungsfehler:** {len(fehler)} · **Warnungen:** {len(warnungen)}"
     )
-
-
-def _speichern(service: MappingService, zustand: dict[str, Any]) -> None:
-    mapping = zustand["mapping"]
-    if mapping.status is not Mappingstatus.VALIDIERT:
-        st.error("Nur ein gültig validiertes Mapping kann gespeichert werden.")
-        return
-    if st.button("Semantisches Mapping speichern", type="primary"):
-        zustand["mapping_pfad"] = service.speichern(mapping)
-    if pfad := zustand.get("mapping_pfad"):
-        st.success("Das semantische Mapping wurde gespeichert.")
-        st.write(f"**Mapping-ID:** `{mapping.mapping_id}`")
-        st.write(f"**Konfigurationsdatei:** `{pfad}`")
+    warnungen_bestaetigt = not warnungen or st.checkbox(
+        "Ich habe die Warnungen geprüft und möchte das Mapping speichern."
+    )
+    if st.button(
+        "Mapping speichern und Event Log aufbauen",
+        type="primary",
+        disabled=bool(fehler) or not warnungen_bestaetigt,
+    ):
+        erneut, erneutes_ergebnis = service.validieren(mapping, daten)
+        if not erneutes_ergebnis.validierung.gueltig:
+            st.error("Das Mapping enthält Validierungsfehler und wurde nicht gespeichert.")
+            return
+        zustand["mapping_pfad"] = service.speichern(erneut)
+        st.session_state.aktuelle_mapping_id = str(erneut.mapping_id)
+        st.session_state.mapping_id = erneut.mapping_id
+        schritt_abschliessen_und_weiter(aktueller_schritt=3, projekt_id=erneut.projekt_id)
 
 
 def _navigation(zustand: dict[str, Any]) -> None:
+    """Navigiert zwischen den drei fachlichen Mappingabschnitten."""
     schritt = zustand["schritt"]
-    voraussetzungen = {
-        1: bool(zustand.get("datensatz_id")),
-        2: bool(zustand.get("datensatz_id")),
-        3: "modus" in zustand,
-        4: "mapping" in zustand,
-        5: getattr(zustand.get("mapping"), "status", None) is Mappingstatus.VALIDIERT,
-    }
-    zurueck, weiter = st.columns(2)
-    if zurueck.button("Zurück", disabled=schritt == 1, width="stretch"):
+    weiter_moeglich = (
+        "modus" in zustand if schritt == 1 else "mapping" in zustand if schritt == 2 else False
+    )
+    links, rechts = st.columns(2)
+    if links.button("Zurück", disabled=schritt == 1, width="content"):
         zustand["schritt"] -= 1
         st.rerun()
-    if weiter.button(
+    if rechts.button(
         "Weiter",
-        disabled=schritt == len(MAPPING_SCHRITTE) or not voraussetzungen.get(schritt, False),
+        disabled=schritt == len(MAPPING_SCHRITTE) or not weiter_moeglich,
         type="primary",
-        width="stretch",
+        width="content",
     ):
         zustand["schritt"] += 1
         st.rerun()
@@ -249,28 +662,41 @@ def zeige_semantisches_mapping(
     projekt_service: ProjektService,
     transformations_service: TransformationsService,
     mapping_service: MappingService,
+    datenquelle_service: DatenquelleService | None = None,
 ) -> None:
-    """Zeigt Framework-Schritt 3 mit projektbezogenem, stabilem Wizard-Zustand."""
+    """Zeigt Framework-Schritt 3 für den zentral aktiven Zwischendatensatz."""
     st.header("3 Semantisches Mapping")
     st.write(
-        "Ordnen Sie die technischen Spalten eines Zwischendatensatzes fachlichen "
-        "Ereignis- und Attributrollen zu. Es wird noch kein Event Log erzeugt."
+        "Der Zwischendatensatz T wird semantisch beschrieben: Fall-ID, Aktivität, "
+        "Zeitbezug und zusätzliche Attribute. Die Daten selbst werden nicht verändert."
     )
     try:
-        projekt_id = _projekt_auswaehlen(projekt_service)
-        if projekt_id is None:
+        projektkontext = _projektkontext(projekt_service)
+        if projektkontext is None:
             return
+        projekt_id, projektname = projektkontext
+        geladen = _aktiven_datensatz_laden(transformations_service, projekt_id)
+        if geladen is None:
+            st.warning(
+                "Für das aktuelle Projekt ist kein konsistenter Zwischendatensatz vorhanden."
+            )
+            if st.button("Zurück zu ETL", type="primary"):
+                framework_bereich_oeffnen(schritt=2, projekt_id=projekt_id)
+            return
+        datensatz, daten = geladen
+        _datensatzkontext(transformations_service, datenquelle_service, datensatz)
         zustand = _zustand(projekt_id)
+        aktive_id = str(datensatz.zwischendatensatz_id)
+        if zustand.get("datensatz_id") != aktive_id:
+            zustand.clear()
+            zustand.update({"schritt": 1, "datensatz_id": aktive_id})
         _fortschritt(zustand["schritt"])
-        aktionen = {
-            1: lambda: _datensatz_auswaehlen(transformations_service, projekt_id, zustand),
-            2: lambda: _struktur(mapping_service, zustand),
-            3: lambda: _modus(zustand),
-            4: lambda: _rollen(mapping_service, zustand),
-            5: lambda: _validieren(mapping_service, zustand),
-            6: lambda: _speichern(mapping_service, zustand),
-        }
-        aktionen[zustand["schritt"]]()
+        if zustand["schritt"] == 1:
+            _datenstruktur(daten, zustand)
+        elif zustand["schritt"] == 2:
+            _rollen_und_aktivitaet(daten, projekt_id, datensatz.zwischendatensatz_id, zustand)
+        else:
+            _pruefen_und_speichern(mapping_service, projektname, datensatz, daten, zustand)
         _navigation(zustand)
     except (Domaenenfehler, Importintegritaetsfehler) as fehler:
         st.error(str(fehler))

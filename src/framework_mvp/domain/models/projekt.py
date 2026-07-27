@@ -129,6 +129,15 @@ class Betrachtungszeitraum:
                 raise UngueltigerBetrachtungszeitraum(
                     "Das Ende des Betrachtungszeitraums darf nicht vor dem Beginn liegen."
                 )
+        elif self.modus is BetrachtungszeitraumModus.AUS_DATEN:
+            if (self.beginn is None) != (self.ende is None):
+                raise UngueltigerBetrachtungszeitraum(
+                    "Ein aus Ereignisdaten ermittelter Zeitraum benötigt Beginn und Ende."
+                )
+            if self.beginn is not None and self.ende is not None and self.ende < self.beginn:
+                raise UngueltigerBetrachtungszeitraum(
+                    "Das Ende des Betrachtungszeitraums darf nicht vor dem Beginn liegen."
+                )
         elif self.beginn is not None or self.ende is not None:
             raise UngueltigerBetrachtungszeitraum(
                 "Datumswerte sind nur bei einem manuellen Betrachtungszeitraum zulässig."
@@ -260,6 +269,7 @@ class Untersuchungsauftrag:
     anmerkungen: str = ""
     legacy_leistungskennzahlen: tuple[str, ...] = ()
     migrationsbestand: bool = False
+    untersuchungszwecke: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Bereinigt Freitexte und entfernt nicht mehr ableitbare KPI-Auswahlen."""
@@ -276,6 +286,19 @@ class Untersuchungsauftrag:
         object.__setattr__(
             self, "legacy_leistungskennzahlen", _texte(self.legacy_leistungskennzahlen)
         )
+        zwecke = _texte(self.untersuchungszwecke)
+        if not zwecke and self.untersuchungszweck:
+            zwecke = (self.untersuchungszweck,)
+        eindeutig: list[str] = []
+        bekannte: set[str] = set()
+        for zweck in zwecke:
+            normalisiert = zweck.casefold()
+            if normalisiert not in bekannte:
+                bekannte.add(normalisiert)
+                eindeutig.append(zweck)
+        object.__setattr__(self, "untersuchungszwecke", tuple(eindeutig))
+        if eindeutig:
+            object.__setattr__(self, "untersuchungszweck", eindeutig[0])
         from framework_mvp.domain.kataloge import bereinige_kpi_auswahl
 
         object.__setattr__(
@@ -286,7 +309,7 @@ class Untersuchungsauftrag:
 
     def ist_vollstaendig(self) -> bool:
         """Prüft Problem, Systemgrenze und Untersuchungszweck."""
-        return bool(self.problemstellung and self.systemgrenze and self.untersuchungszweck)
+        return bool(self.problemstellung and self.systemgrenze and self.untersuchungszwecke)
 
 
 def _utc_jetzt() -> datetime:

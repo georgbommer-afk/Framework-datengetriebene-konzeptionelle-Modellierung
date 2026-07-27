@@ -318,6 +318,16 @@ class TransformationsService:
             raise Domaenenfehler("Die Prüfsumme des Zwischendatensatzes stimmt nicht überein.")
         schema = json.loads(self._artefakte.lesen(datensatz.relativer_schema_pfad))
         daten = pd.read_csv(BytesIO(gzip.decompress(inhalt)), keep_default_na=False, na_values=[""])
+        schema_spalten = [str(spalte["name"]) for spalte in schema["spalten"]]
+        if (
+            len(schema_spalten) != len(set(schema_spalten))
+            or schema_spalten != [str(wert) for wert in daten.columns]
+            or int(schema.get("zeilenanzahl", -1)) != len(daten)
+            or int(schema.get("spaltenanzahl", -1)) != len(daten.columns)
+        ):
+            raise Importintegritaetsfehler(
+                "Schema-JSON und CSV.GZ des Zwischendatensatzes sind inkonsistent."
+            )
         for spalte in schema["spalten"]:
             name, typ = spalte["name"], spalte["technischer_datentyp"]
             if typ.startswith("datetime"):

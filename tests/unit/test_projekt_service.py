@@ -80,13 +80,28 @@ def test_unvollstaendiger_auftrag_wird_fuer_fortgeschrittenen_status_abgelehnt(
 ) -> None:
     """Aktive und abgeschlossene Projekte benötigen einen vollständigen Auftrag."""
     service = ProjektService(InMemoryProjektRepository())
+    projekt = service.projekt_anlegen(
+        bezeichnung="Projekt",
+        untersuchungsauftrag=_auftrag(vollstaendig=False),
+    )
 
     with pytest.raises(UnvollstaendigerUntersuchungsauftrag):
-        service.projekt_anlegen(
-            bezeichnung="Projekt",
+        service.projekt_aktualisieren(
+            projekt.projekt_id,
+            bezeichnung=projekt.bezeichnung,
             untersuchungsauftrag=_auftrag(vollstaendig=False),
             status=status,
         )
+
+
+def test_neues_projekt_ist_immer_entwurf() -> None:
+    """Nur eine spätere explizite Aktualisierung darf den Status ändern."""
+    service = ProjektService(InMemoryProjektRepository())
+    projekt = service.projekt_anlegen(
+        bezeichnung="Projekt",
+        untersuchungsauftrag=_auftrag(),
+    )
+    assert projekt.status is Projektstatus.ENTWURF
 
 
 def test_aktualisierung_erhaelt_id_und_erstellungszeitpunkt() -> None:

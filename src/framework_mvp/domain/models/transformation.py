@@ -15,6 +15,7 @@ class Transformationsart(StrEnum):
 
     SPALTENAUSWAHL = "spaltenauswahl"
     UMBENENNEN = "umbenennen"
+    WERTE_ERSETZEN = "werte_ersetzen"
     DATENTYP_KONVERTIEREN = "datentyp_konvertieren"
     PLATZHALTER_BEHANDELN = "platzhalter_behandeln"
     FEHLWERTE_BEHANDELN = "fehlwerte_behandeln"

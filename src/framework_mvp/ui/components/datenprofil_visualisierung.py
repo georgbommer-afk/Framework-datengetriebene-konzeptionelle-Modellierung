@@ -19,57 +19,98 @@ def _spaltendiagramm(ergebnis: Profilierungsergebnis, spaltenname: str) -> Spalt
 
 def _gesamtuebersicht(ergebnis: Profilierungsergebnis) -> None:
     profil = ergebnis.profil
-    kennzahlen = st.columns(6)
+    ausreisser = sum(
+        wert.numerisch.potenzielle_ausreisser
+        for wert in profil.spaltenprofile
+        if wert.numerisch is not None
+    )
+    kennzahlen = st.columns(4)
     werte = (
         ("Zeilen", profil.zeilen),
         ("Spalten", profil.spalten),
+        ("Vollständig leere Spalten", profil.vollstaendig_leere_spalten),
         ("Echte Fehlwerte", profil.echte_fehlwerte),
         ("Textuelle Platzhalter", profil.textuelle_platzhalter),
         ("Exakte Duplikate", profil.exakte_duplikate),
-        ("Vollständig leere Spalten", profil.vollstaendig_leere_spalten),
+        ("Mögliche Ausreißer", ausreisser),
+        ("Erkannte Zeitspalten", profil.zeitbezogene_spalten),
     )
-    for spalte, (name, wert) in zip(kennzahlen, werte, strict=True):
+    for index, (name, wert) in enumerate(werte):
+        spalte = kennzahlen[index % len(kennzahlen)]
         spalte.metric(name, str(wert))
     st.caption(
         f"Die Kennzahlen basieren auf {profil.zeilen:,} Zeilen. "
         f"Speicherbedarf des DataFrames: {profil.speicherbedarf_bytes:,} Bytes."
     )
-    typen = st.columns(4)
-    for spalte, (name, wert) in zip(
-        typen,
-        (
-            ("Numerische Spalten", profil.numerische_spalten),
-            ("Kategoriale Spalten", profil.kategoriale_spalten),
-            ("Zeitbezogene Spalten", profil.zeitbezogene_spalten),
-            ("Sonstige Spalten", profil.sonstige_spalten),
-        ),
-        strict=True,
-    ):
-        spalte.metric(name, wert)
+
+
+def _verstaendlicher_datentyp(profil: Spaltenprofil) -> str:
+    """Übersetzt Profil und technischen Datentyp in eine fachliche Bezeichnung."""
+    original = profil.originaldatentyp.lower()
+    if "bool" in original:
+        return "Wahr/Falsch"
+    if profil.profiltyp is Profiltyp.ZEITBEZOGEN:
+        return "Datum und Zeit"
+    if profil.profiltyp is Profiltyp.NUMERISCH:
+        return "Ganzzahl" if "int" in original else "Dezimalzahl"
+    if profil.fehlwerte.gueltige_regulaere_werte == 0:
+        return "Leer"
+    if profil.profiltyp is Profiltyp.KATEGORIAL:
+        return "Text"
+    return "Gemischt"
+
+
+def _spaltenuebersicht(ergebnis: Profilierungsergebnis, daten: pd.DataFrame | None) -> None:
+    """Zeigt jede Spalte einmal mit verständlichem Typ und interpretierten Befunden."""
+    profil = ergebnis.profil
     st.subheader("Spaltenübersicht")
+    zeilen = []
+    for wert in profil.spaltenprofile:
+        befunde: list[str] = []
+        if wert.fehlwerte.echte_fehlwerte:
+            befunde.append(f"{wert.fehlwerte.echte_fehlwerte} leere Werte")
+        if wert.fehlwerte.platzhalter:
+            befunde.append(f"{wert.fehlwerte.platzhalter} mögliche Platzhalter")
+        if wert.numerisch is not None and wert.numerisch.potenzielle_ausreisser:
+            befunde.append(f"{wert.numerisch.potenzielle_ausreisser} mögliche Ausreißer")
+        if wert.zeitbezogen is not None and wert.zeitbezogen.nicht_interpretierbare_werte:
+            befunde.append(
+                f"{wert.zeitbezogen.nicht_interpretierbare_werte} nicht lesbare Zeitwerte"
+            )
+        beispiele = "–"
+        if daten is not None and wert.spaltenname in daten.columns:
+            regulaer = daten[wert.spaltenname].dropna().astype("string").drop_duplicates()
+            beispiele = ", ".join(regulaer.head(3)) or "–"
+        zeilen.append(
+            {
+                "Spaltenname": wert.spaltenname,
+                "Datentyp": _verstaendlicher_datentyp(wert),
+                "Ausgefüllte Werte": wert.fehlwerte.gueltige_regulaere_werte,
+                "Leere Werte": wert.fehlwerte.echte_fehlwerte,
+                "Anteil leerer Werte": f"{wert.fehlwerte.anteil_echter_fehlwerte:.1%}",
+                "Unterschiedliche Werte": wert.eindeutige_werte,
+                "Beispielwerte": beispiele,
+                "Erkannte Auffälligkeiten": " · ".join(befunde) or "Keine",
+            }
+        )
     st.dataframe(
-        pd.DataFrame(
-            [
-                {
-                    "Spaltenname": wert.spaltenname,
-                    "Originaldatentyp": wert.originaldatentyp,
-                    "Profiltyp": wert.profiltyp.value,
-                    "Gültige Werte": wert.fehlwerte.gueltige_regulaere_werte,
-                    "Echte Fehlwerte": wert.fehlwerte.echte_fehlwerte,
-                    "Fehlwertanteil": wert.fehlwerte.anteil_echter_fehlwerte,
-                    "Platzhalter": wert.fehlwerte.platzhalter,
-                    "Eindeutige Werte": wert.eindeutige_werte,
-                }
-                for wert in profil.spaltenprofile
-            ]
-        ),
+        pd.DataFrame(zeilen),
         hide_index=True,
-        column_config={"Fehlwertanteil": st.column_config.NumberColumn(format="%.1%%")},
+        width="stretch",
     )
+    auffaellig = [zeile for zeile in zeilen if zeile["Erkannte Auffälligkeiten"] != "Keine"]
+    if auffaellig:
+        st.write("**Auffällige Spalten**")
+        for zeile in auffaellig:
+            st.info(f"{zeile['Spaltenname']}: {zeile['Erkannte Auffälligkeiten']}")
 
 
 def _fehlwertdiagramm(ergebnis: Profilierungsergebnis) -> None:
-    st.subheader("Fehlwerte und textuelle Platzhalter")
+    st.subheader("Leere und auffällige Werte")
+    st.caption(
+        "Leere Zellen sind echte fehlende Werte. Einträge wie NULL, N/A oder - "
+        "können textuelle Platzhalter für fehlende Angaben sein."
+    )
     daten = [asdict(wert) for wert in ergebnis.diagramme.fehlwerte]
     st.vega_lite_chart(
         {"values": daten},
@@ -248,7 +289,12 @@ def _zeit_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) -> None
     )
 
 
-def zeige_datenprofil(ergebnis: Profilierungsergebnis, *, session_key: str) -> None:
+def zeige_datenprofil(
+    ergebnis: Profilierungsergebnis,
+    *,
+    session_key: str,
+    daten: pd.DataFrame | None = None,
+) -> None:
     """Zeigt Gesamtübersicht, Fehlwerte und genau eine Spaltendetailanalyse."""
     profil = ergebnis.profil
     if profil.spalten == 0:
@@ -257,6 +303,7 @@ def zeige_datenprofil(ergebnis: Profilierungsergebnis, *, session_key: str) -> N
     if profil.zeilen == 0:
         st.warning("Die Tabelle enthält keine Datenzeilen; dargestellt wird nur ihre Struktur.")
     _gesamtuebersicht(ergebnis)
+    _spaltenuebersicht(ergebnis, daten)
     _fehlwertdiagramm(ergebnis)
     st.subheader("Detailanalyse")
     namen = [wert.spaltenname for wert in profil.spaltenprofile]
