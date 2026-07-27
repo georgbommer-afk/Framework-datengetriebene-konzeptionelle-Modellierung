@@ -1,23 +1,21 @@
-"""Geführter Streamlit-Wizard für den Untersuchungsauftrag."""
+"""Kompakter Wizard für Untersuchungsauftrag U und Datenquellenkatalog Q."""
 
 import logging
-from datetime import date
+from dataclasses import replace
 from typing import Any
 from uuid import UUID
 
 import streamlit as st
 
+from framework_mvp.application.datenquelle_service import DatenquelleService
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.kataloge import (
     ZIELGROESSEN_BEZEICHNUNGEN,
-    ZIELGRUPPEN,
     leite_kpi_kandidaten_ab,
 )
 from framework_mvp.domain.models import (
-    BeteiligtePerson,
     Betrachtungszeitraum,
-    BetrachtungszeitraumModus,
     GestaltDerGueter,
     Intralogistikklassifikation,
     LogistischeZielgroesse,
@@ -33,50 +31,34 @@ from framework_mvp.domain.models import (
 )
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
 from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
-from framework_mvp.ui.helpers import liste_als_mehrzeiliger_text, mehrzeiliger_text_als_liste
+from framework_mvp.ui.navigation import schritt_abschliessen_und_weiter
 
 LOGGER = logging.getLogger(__name__)
 
 SCHRITTE = (
-    "Projekt und beteiligte Personen",
-    "Problemstellung und Systemgrenze",
-    "Untersuchungszweck und logistische Zielgrößen",
+    "Problem und Systemgrenze",
+    "Untersuchungszweck und Logistikziele",
     "Systemklassifikation",
-    "Gewünschte Auswertungen und Rahmenbedingungen",
-    "Betrachtungszeitraum",
-    "Zusammenfassung und Speicherung",
+    "Auswertungen und KPIs",
+    "Untersuchungsauftrag",
 )
-SCHRITTE_KURZ = (
-    "Projekt",
-    "Problem",
-    "Ziele",
-    "System",
-    "Auswertung",
-    "Zeitraum",
-    "Speichern",
-)
-ROLLEN = (
-    "Auftraggeber:in",
-    "Bearbeiter:in",
-    "Fachexpert:in",
-    "Datenverantwortliche:r",
-    "Prozessverantwortliche:r",
-    "Betreuer:in",
-    "Sonstige",
-    "Weitere Rolle hinzufügen …",
-)
-UNTERSUCHUNGSZWECKE = (
+SCHRITTE_KURZ = ("Problem", "Ziele", "System", "Auswertung", "Auftrag")
+VORDEFINIERTE_UNTERSUCHUNGSZWECKE = (
     "System verstehen und transparent beschreiben",
     "System analysieren",
     "System evaluieren",
     "Varianten oder Bereiche vergleichen",
     "zukünftiges Verhalten prognostizieren",
-    "Weiteren Untersuchungszweck hinzufügen …",
 )
-
-
-def _status_text(status: Projektstatus) -> str:
-    return status.value.capitalize()
+WEITERER_ZWECK = "Weiteren Untersuchungszweck hinzufügen …"
+PROBLEM_HILFE = (
+    "Beschreiben Sie kurz, welches betriebliche Problem oder welche Fragestellung "
+    "mit der Untersuchung analysiert werden soll."
+)
+SYSTEMGRENZE_HILFE = (
+    "Beschreiben Sie, welche Prozesse, Bereiche oder Objekte betrachtet werden und "
+    "was ausdrücklich außerhalb der Untersuchung liegt."
+)
 
 
 def _enum_text(wert: Any) -> str:
@@ -87,89 +69,77 @@ def _neuer_entwurf() -> dict[str, Any]:
     return {
         "bezeichnung": "",
         "status": Projektstatus.ENTWURF,
-        "personen": [],
+        "personen": (),
         "problemstellung": "",
         "systemgrenze": "",
-        "untersuchungszweck": "",
-        "individuelles_ziel": "",
+        "zwecke": [],
+        "individuelle_zwecke": [],
         "zielgroessen": [],
-        "systemtyp": Systemtyp.KOMBINIERT,
-        "bereich": "",
-        "objekte": "",
+        "systemtyp": None,
+        "systemklassifikation": Systemklassifikation(),
         "gestalt": GestaltDerGueter.MISCHFORM,
         "flussform": Materialflussform.GEMISCHT,
         "kontinuitaet": Materialflusskontinuitaet.GEMISCHT,
-        "kapazitaet": "",
-        "input": "",
-        "transformation": "",
-        "output": "",
-        "detaillierung": "",
         "produktion": {},
         "intralogistik": {},
         "kpis": [],
-        "vertraulichkeit": "",
-        "technik": "",
-        "annahmen": "",
-        "ausschluesse": "",
-        "sonstige_rahmenbedingungen": "",
-        "zeitraum_modus": BetrachtungszeitraumModus.AUS_DATEN,
-        "beginn": date.today(),
-        "ende": date.today(),
+        "detaillierung": "",
+        "rahmenbedingungen": Rahmenbedingungen(),
+        "betrachtungszeitraum": Betrachtungszeitraum(),
         "anmerkungen": "",
         "legacy_kpis": [],
+        "migrationsbestand": False,
     }
 
 
 def _entwurf_aus_projekt(projekt: Projekt) -> dict[str, Any]:
-    a = projekt.untersuchungsauftrag
-    s = a.systemklassifikation
-    daten = _neuer_entwurf()
-    daten.update(
-        {
-            "bezeichnung": projekt.bezeichnung,
-            "status": projekt.status,
-            "personen": [
-                {"vorname": p.vorname, "nachname": p.nachname, "rolle": p.rolle}
-                for p in projekt.beteiligte_personen
-            ],
-            "problemstellung": a.problemstellung,
-            "systemgrenze": a.systemgrenze,
-            "untersuchungszweck": a.untersuchungszweck,
-            "individuelles_ziel": a.individuelles_ziel,
-            "zielgroessen": list(a.logistische_zielgroessen),
-            "systemtyp": a.systemtyp,
-            "bereich": s.bereich,
-            "objekte": s.objekte_gueter,
-            "gestalt": s.gestalt_der_gueter,
-            "flussform": s.materialflussform,
-            "kontinuitaet": s.materialflusskontinuitaet,
-            "kapazitaet": s.kapazitaetsgrenzen,
-            "input": s.input_beschreibung,
-            "transformation": s.transformation_beschreibung,
-            "output": s.output_beschreibung,
-            "detaillierung": a.detaillierungsgrad,
-            "kpis": list(a.ausgewaehlte_kpi_ids),
-            "vertraulichkeit": a.rahmenbedingungen.vertraulichkeit_datenschutz,
-            "technik": a.rahmenbedingungen.technische_einschraenkungen,
-            "annahmen": a.rahmenbedingungen.bekannte_annahmen,
-            "ausschluesse": a.rahmenbedingungen.bekannte_ausschluesse,
-            "sonstige_rahmenbedingungen": a.rahmenbedingungen.sonstige,
-            "zeitraum_modus": a.betrachtungszeitraum.modus,
-            "beginn": a.betrachtungszeitraum.beginn or date.today(),
-            "ende": a.betrachtungszeitraum.ende or date.today(),
-            "anmerkungen": a.anmerkungen,
-            "legacy_kpis": list(a.legacy_leistungskennzahlen),
-        }
-    )
-    if s.produktion is not None:
-        daten["produktion"] = {
-            feld: getattr(s.produktion, feld) for feld in s.produktion.__dataclass_fields__
-        }
-    if s.intralogistik is not None:
-        daten["intralogistik"] = {
-            feld: getattr(s.intralogistik, feld) for feld in s.intralogistik.__dataclass_fields__
-        }
-    return daten
+    auftrag = projekt.untersuchungsauftrag
+    system = auftrag.systemklassifikation
+    zwecke = list(auftrag.untersuchungszwecke)
+    individuelle = [zweck for zweck in zwecke if zweck not in VORDEFINIERTE_UNTERSUCHUNGSZWECKE]
+    if auftrag.individuelles_ziel and all(
+        auftrag.individuelles_ziel.casefold() != zweck.casefold() for zweck in zwecke
+    ):
+        zwecke.append(auftrag.individuelles_ziel)
+        individuelle.append(auftrag.individuelles_ziel)
+    return {
+        "bezeichnung": projekt.bezeichnung,
+        "status": projekt.status,
+        "personen": projekt.beteiligte_personen,
+        "problemstellung": auftrag.problemstellung,
+        "systemgrenze": auftrag.systemgrenze,
+        "zwecke": zwecke,
+        "individuelle_zwecke": individuelle,
+        "zielgroessen": list(auftrag.logistische_zielgroessen),
+        "systemtyp": auftrag.systemtyp,
+        "systemklassifikation": system,
+        "gestalt": system.gestalt_der_gueter,
+        "flussform": system.materialflussform,
+        "kontinuitaet": system.materialflusskontinuitaet,
+        "produktion": (
+            {}
+            if system.produktion is None
+            else {
+                name: getattr(system.produktion, name)
+                for name in system.produktion.__dataclass_fields__
+            }
+        ),
+        "intralogistik": (
+            {}
+            if system.intralogistik is None
+            else {
+                name: getattr(system.intralogistik, name)
+                for name in system.intralogistik.__dataclass_fields__
+            }
+        ),
+        "kpis": list(auftrag.ausgewaehlte_kpi_ids),
+        "detaillierung": auftrag.detaillierungsgrad,
+        "rahmenbedingungen": auftrag.rahmenbedingungen,
+        "betrachtungszeitraum": auftrag.betrachtungszeitraum,
+        "anmerkungen": auftrag.anmerkungen,
+        "legacy_kpis": list(auftrag.legacy_leistungskennzahlen),
+        "migrationsbestand": auftrag.migrationsbestand,
+    }
 
 
 def _initialisieren() -> None:
@@ -184,23 +154,21 @@ def _initialisieren() -> None:
 
 
 def _projekt_nach_id(projekte: list[Projekt], projekt_id: UUID | None) -> Projekt | None:
-    return next((p for p in projekte if p.projekt_id == projekt_id), None)
+    return next((projekt for projekt in projekte if projekt.projekt_id == projekt_id), None)
 
 
 def _seitenleiste(projekte: list[Projekt]) -> Projekt | None:
-    st.sidebar.header("Projektverwaltung")
+    st.sidebar.header("Projekt und Untersuchungsauftrag")
     aktuelle_id = st.session_state.ausgewaehlte_projekt_id
-    if aktuelle_id not in {p.projekt_id for p in projekte}:
+    if aktuelle_id not in {projekt.projekt_id for projekt in projekte}:
         aktuelle_id = None
-    optionen = ["", *(str(p.projekt_id) for p in projekte)]
-    projekttexte = {
-        str(p.projekt_id): f"{p.bezeichnung} · {_status_text(p.status)}" for p in projekte
-    }
+    optionen = ["", *(str(projekt.projekt_id) for projekt in projekte)]
+    texte = {str(projekt.projekt_id): projekt.bezeichnung for projekt in projekte}
     auswahl = st.sidebar.selectbox(
         "Vorhandenes Projekt auswählen",
         optionen,
         index=optionen.index("" if aktuelle_id is None else str(aktuelle_id)),
-        format_func=lambda wert: "Neues Projekt" if not wert else projekttexte[wert],
+        format_func=lambda wert: "Neues Projekt" if not wert else texte[wert],
         key=f"projektauswahl_{st.session_state.auswahl_generation}",
     )
     neue_id = UUID(auswahl) if auswahl else None
@@ -218,14 +186,7 @@ def _seitenleiste(projekte: list[Projekt]) -> Projekt | None:
         st.session_state.wizard_schritt = 1
         st.session_state.auswahl_generation += 1
         st.rerun()
-    projekt = _projekt_nach_id(projekte, neue_id)
-    if projekt:
-        st.sidebar.caption(
-            f"Zuletzt geändert: {projekt.geaendert_am.astimezone():%d.%m.%Y, %H:%M %Z}"
-        )
-    elif not projekte:
-        st.sidebar.info("Noch keine Projekte vorhanden.")
-    return projekt
+    return _projekt_nach_id(projekte, neue_id)
 
 
 def _kopf(schritt: int) -> None:
@@ -234,553 +195,486 @@ def _kopf(schritt: int) -> None:
         kurze_namen=SCHRITTE_KURZ,
         lange_namen=SCHRITTE,
     )
-    st.subheader(SCHRITTE[schritt - 1])
 
 
-def _schritt_1(d: dict[str, Any]) -> None:
-    d["bezeichnung"] = st.text_input("Projektbezeichnung", d["bezeichnung"])
-    status_als_text = st.selectbox(
-        "Projektstatus",
-        [status.value for status in Projektstatus],
-        index=list(Projektstatus).index(d["status"]),
-        format_func=lambda wert: _status_text(Projektstatus(wert)),
+def _schritt_problem(daten: dict[str, Any]) -> None:
+    daten["bezeichnung"] = st.text_input(
+        "Projektbezeichnung", daten["bezeichnung"], help="Eindeutige Bezeichnung des Projekts."
     )
-    d["status"] = Projektstatus(status_als_text)
-    st.markdown("#### Beteiligte Personen")
-    entfernen: int | None = None
-    for index, person in enumerate(d["personen"]):
-        spalten = st.columns((2, 2, 2, 1))
-        person["vorname"] = spalten[0].text_input(
-            "Vorname", person["vorname"], key=f"person_v_{index}"
-        )
-        person["nachname"] = spalten[1].text_input(
-            "Nachname", person["nachname"], key=f"person_n_{index}"
-        )
-        aktuelle_rolle = person["rolle"] if person["rolle"] in ROLLEN[:-1] else ROLLEN[-1]
-        rolle = spalten[2].selectbox(
-            "Rolle", ROLLEN, index=ROLLEN.index(aktuelle_rolle), key=f"person_r_{index}"
-        )
-        if rolle == ROLLEN[-1]:
-            person["rolle"] = spalten[2].text_input(
-                "Individuelle Rolle",
-                person["rolle"] if aktuelle_rolle == ROLLEN[-1] else "",
-                key=f"person_rx_{index}",
-            )
+    daten["problemstellung"] = st.text_area(
+        "Problemstellung",
+        daten["problemstellung"],
+        help=PROBLEM_HILFE,
+    )
+    daten["systemgrenze"] = st.text_area(
+        "Systemgrenze",
+        daten["systemgrenze"],
+        help=SYSTEMGRENZE_HILFE,
+    )
+
+
+def _zweck_hinzufuegen(daten: dict[str, Any], eingabe: str) -> bool:
+    zweck = eingabe.strip()
+    if not zweck:
+        st.error("Der individuelle Untersuchungszweck darf nicht leer sein.")
+        return False
+    vorhandene = {
+        wert.casefold()
+        for wert in (*VORDEFINIERTE_UNTERSUCHUNGSZWECKE, *daten["individuelle_zwecke"])
+    }
+    if zweck.casefold() in vorhandene:
+        st.error("Dieser Untersuchungszweck ist bereits vorhanden.")
+        return False
+    daten["individuelle_zwecke"].append(zweck)
+    daten["zwecke"].append(zweck)
+    return True
+
+
+def _schritt_ziele(daten: dict[str, Any]) -> None:
+    optionen = (*VORDEFINIERTE_UNTERSUCHUNGSZWECKE, *daten["individuelle_zwecke"])
+    daten["zwecke"] = st.multiselect(
+        "Untersuchungszwecke",
+        optionen,
+        default=[zweck for zweck in daten["zwecke"] if zweck in optionen],
+    )
+    if st.checkbox(WEITERER_ZWECK):
+        eingabe = st.text_input("Individueller Untersuchungszweck")
+        if st.button("Untersuchungszweck hinzufügen") and _zweck_hinzufuegen(daten, eingabe):
+            st.rerun()
+    st.markdown("### Logistikziele")
+    st.caption("Übergeordnetes Ziel: Leistungsfähigkeit des betrachteten Systems steigern")
+    gewaehlt = set(daten["zielgroessen"])
+    spalten = st.columns(3)
+    for index, ziel in enumerate(LogistischeZielgroesse):
+        if spalten[index % 3].checkbox(
+            ZIELGROESSEN_BEZEICHNUNGEN[ziel],
+            value=ziel in gewaehlt,
+            key=f"ziel_{ziel.value}",
+        ):
+            gewaehlt.add(ziel)
         else:
-            person["rolle"] = rolle
-        if spalten[3].button("Entfernen", key=f"person_entfernen_{index}"):
-            entfernen = index
-    if entfernen is not None:
-        d["personen"].pop(entfernen)
-        st.rerun()
-    if st.button("Person hinzufügen"):
-        d["personen"].append({"vorname": "", "nachname": "", "rolle": "Sonstige"})
-        st.rerun()
+            gewaehlt.discard(ziel)
+    daten["zielgroessen"] = [ziel for ziel in LogistischeZielgroesse if ziel in gewaehlt]
 
 
-def _schritt_2(d: dict[str, Any]) -> None:
-    d["problemstellung"] = st.text_area("Problemstellung", d["problemstellung"])
-    d["systemgrenze"] = st.text_area("Systemgrenze", d["systemgrenze"])
-
-
-def _schritt_3(d: dict[str, Any]) -> None:
-    vorhandener = d["untersuchungszweck"]
-    standard = vorhandener if vorhandener in UNTERSUCHUNGSZWECKE[:-1] else UNTERSUCHUNGSZWECKE[-1]
-    zweck = st.selectbox(
-        "Untersuchungszweck", UNTERSUCHUNGSZWECKE, index=UNTERSUCHUNGSZWECKE.index(standard)
-    )
-    d["untersuchungszweck"] = (
-        st.text_input(
-            "Individueller Untersuchungszweck",
-            vorhandener if standard == UNTERSUCHUNGSZWECKE[-1] else "",
-        )
-        if zweck == UNTERSUCHUNGSZWECKE[-1]
-        else zweck
-    )
-    d["individuelles_ziel"] = st.text_area("Weiteres individuelles Ziel", d["individuelles_ziel"])
-    st.markdown("**Oberziel: Leistungsfähigkeit des betrachteten Systems steigern**")
-    gewaehlt = set(d["zielgroessen"])
-    for gruppe in ZIELGRUPPEN:
-        with st.expander(gruppe.titel, expanded=True):
-            st.caption(gruppe.beschreibung)
-            for ziel in gruppe.zielgroessen:
-                if st.checkbox(
-                    ZIELGROESSEN_BEZEICHNUNGEN[ziel],
-                    value=ziel in gewaehlt,
-                    key=f"ziel_{ziel.value}",
-                ):
-                    gewaehlt.add(ziel)
-                else:
-                    gewaehlt.discard(ziel)
-    d["zielgroessen"] = [ziel for ziel in LogistischeZielgroesse if ziel in gewaehlt]
-    st.info(
-        "Gewählt: "
-        + (", ".join(ZIELGROESSEN_BEZEICHNUNGEN[z] for z in d["zielgroessen"]) or "Keine Zielgröße")
-    )
+def _auswahl(label: str, optionen: tuple[str, ...], wert: str) -> str:
+    index = optionen.index(wert) if wert in optionen else 0
+    return st.selectbox(label, optionen, index=index)
 
 
 def _mehrfach(
     label: str, optionen: tuple[str, ...], wert: tuple[str, ...] | list[str]
 ) -> tuple[str, ...]:
-    return tuple(st.multiselect(label, optionen, default=[x for x in wert if x in optionen]))
+    return tuple(
+        st.multiselect(
+            label, optionen, default=[eintrag for eintrag in wert if eintrag in optionen]
+        )
+    )
 
 
-def _auswahl(label: str, optionen: tuple[str, ...], wert: str) -> str:
-    """Zeigt eine Textauswahl mit einem vorhandenen Wert als Standard."""
-    index = optionen.index(wert) if wert in optionen else 0
-    return st.selectbox(label, optionen, index=index)
+def _produktionsauswahl(daten: dict[str, Any]) -> None:
+    produktion = daten["produktion"]
+    produktion["auftragsabwicklungsstrategie"] = _auswahl(
+        "Auftragsabwicklungsstrategie",
+        (
+            "",
+            "ETO – Engineer-to-Order",
+            "CTO – Configure-to-Order",
+            "MTO – Make-to-Order",
+            "ATO – Assemble-to-Order",
+            "MTS – Make-to-Stock",
+        ),
+        produktion.get("auftragsabwicklungsstrategie", ""),
+    )
+    produktion["produktionsart"] = _auswahl(
+        "Produktionsart",
+        ("", "Einzelproduktion", "Serienproduktion", "Sortenproduktion", "Massenproduktion"),
+        produktion.get("produktionsart", ""),
+    )
+    produktion["produktionsstueckzahl"] = _auswahl(
+        "Produktionsstückzahl",
+        ("", "gering (1–100 Stück)", "mittel (101–10.000 Stück)", "hoch (> 10.000 Stück)"),
+        produktion.get("produktionsstueckzahl", ""),
+    )
+    produktion["produktvielfalt"] = _auswahl(
+        "Produktvielfalt",
+        ("", "gering (1–10 Varianten)", "mittel (11–100 Varianten)", "hoch (> 100 Varianten)"),
+        produktion.get("produktvielfalt", ""),
+    )
+    produktion["organisationstyp"] = _auswahl(
+        "Organisationstyp",
+        (
+            "",
+            "Werkstattfertigung",
+            "Gruppenfertigung",
+            "Inselfertigung",
+            "Reihenproduktion",
+            "Fließproduktion",
+            "Fließband beziehungsweise Transferstraße",
+            "flexible Fertigung",
+            "sonstiger Organisationstyp",
+        ),
+        produktion.get("organisationstyp", ""),
+    )
+    produktion["anzahl_arbeitsgaenge"] = _auswahl(
+        "Anzahl der Arbeitsgänge",
+        ("", "einstufig", "mehrstufig"),
+        produktion.get("anzahl_arbeitsgaenge", ""),
+    )
+    produktion["produktionsfaktoren"] = _mehrfach(
+        "Produktionsfaktoren",
+        ("materialintensiv", "arbeitsintensiv", "informationsintensiv", "anlagenintensiv"),
+        produktion.get("produktionsfaktoren", ()),
+    )
+    produktion["ressourcen"] = _mehrfach(
+        "Eingesetzte Produktionsressourcen",
+        (
+            "Maschinen",
+            "Anlagen",
+            "Arbeitsplätze",
+            "Personal",
+            "Werkzeuge",
+            "Fördertechnik",
+            "Lager- und Pufferplätze",
+            "Informationssysteme",
+        ),
+        produktion.get("ressourcen", ()),
+    )
 
 
-def _schritt_4(d: dict[str, Any]) -> None:
-    systemtyp_als_text = st.selectbox(
+def _intralogistikauswahl(daten: dict[str, Any]) -> None:
+    intralogistik = daten["intralogistik"]
+    intralogistik["hauptfunktionen"] = _mehrfach(
+        "Hauptfunktionen",
+        (
+            "Transport",
+            "Lagerung",
+            "Umschlag",
+            "Kommissionierung",
+            "Bereitstellung",
+            "innerbetriebliche Versorgung",
+        ),
+        intralogistik.get("hauptfunktionen", ()),
+    )
+    intralogistik["transportorganisation"] = _auswahl(
+        "Transportorganisation",
+        (
+            "",
+            "Direkttransport",
+            "Sammeltransport",
+            "Linien- beziehungsweise Routenzugverkehr",
+            "bedarfsgesteuerter Transport",
+            "kontinuierliche Fördertechnik",
+            "sonstige Organisation",
+        ),
+        intralogistik.get("transportorganisation", ""),
+    )
+    intralogistik["lagerprinzip"] = _auswahl(
+        "Lager- beziehungsweise Bereitstellungsprinzip",
+        (
+            "",
+            "feste Lagerplatzzuordnung",
+            "chaotische Lagerung",
+            "FIFO",
+            "LIFO",
+            "Kanban",
+            "Supermarktprinzip",
+            "Just-in-Time",
+            "Just-in-Sequence",
+            "sonstiges Prinzip",
+        ),
+        intralogistik.get("lagerprinzip", ""),
+    )
+    intralogistik["ressourcen"] = _mehrfach(
+        "Eingesetzte Intralogistikressourcen",
+        (
+            "manuelle Transporte",
+            "Stapler",
+            "Routenzug",
+            "Kran",
+            "stationäre Fördertechnik",
+            "FTS",
+            "AMR",
+            "Regalbediengerät",
+            "Lager- und Pufferplätze",
+            "Personal",
+            "Informationssysteme",
+        ),
+        intralogistik.get("ressourcen", ()),
+    )
+
+
+def _schritt_system(daten: dict[str, Any]) -> None:
+    altbestand_gemischt = daten["systemtyp"] is Systemtyp.KOMBINIERT
+    if altbestand_gemischt:
+        st.warning(
+            "Dieses Altprojekt ist als Gemischt klassifiziert. Wählen Sie vor dem "
+            "Speichern Produktion oder Intralogistik; eine automatische Umklassifikation "
+            "findet nicht statt."
+        )
+    optionen: tuple[Systemtyp | None, ...] = (
+        None,
+        Systemtyp.PRODUKTION,
+        Systemtyp.INTRALOGISTIK,
+    )
+    aktueller_typ = daten["systemtyp"]
+    index = optionen.index(aktueller_typ) if aktueller_typ in optionen else 0
+    daten["systemtyp"] = st.selectbox(
         "Systemtyp",
-        [wert.value for wert in Systemtyp],
-        index=list(Systemtyp).index(d["systemtyp"]),
-        format_func=lambda wert: _enum_text(Systemtyp(wert)),
+        optionen,
+        index=index,
+        format_func=lambda wert: "Bitte auswählen" if wert is None else _enum_text(wert),
     )
-    d["systemtyp"] = Systemtyp(systemtyp_als_text)
-    d["bereich"] = st.text_input(
-        "Betrachteter Bereich beziehungsweise Systemausschnitt", d["bereich"]
-    )
-    d["objekte"] = st.text_input("Betrachtete Produkte, Objekte oder Güter", d["objekte"])
-    gestalt_als_text = st.selectbox(
+    system = daten["systemklassifikation"]
+    daten["gestalt"] = st.selectbox(
         "Gestalt der Güter",
-        [wert.value for wert in GestaltDerGueter],
-        index=list(GestaltDerGueter).index(d["gestalt"]),
-        format_func=lambda wert: _enum_text(GestaltDerGueter(wert)),
+        list(GestaltDerGueter),
+        index=list(GestaltDerGueter).index(system.gestalt_der_gueter),
+        format_func=_enum_text,
     )
-    d["gestalt"] = GestaltDerGueter(gestalt_als_text)
-    flussform_als_text = st.selectbox(
-        "Form des Materialflusses",
-        [wert.value for wert in Materialflussform],
-        index=list(Materialflussform).index(d["flussform"]),
-        format_func=lambda wert: _enum_text(Materialflussform(wert)),
+    daten["flussform"] = st.selectbox(
+        "Art des Materialflusses",
+        list(Materialflussform),
+        index=list(Materialflussform).index(system.materialflussform),
+        format_func=_enum_text,
     )
-    d["flussform"] = Materialflussform(flussform_als_text)
-    kontinuitaet_als_text = st.selectbox(
+    daten["kontinuitaet"] = st.selectbox(
         "Kontinuität des Materialflusses",
-        [wert.value for wert in Materialflusskontinuitaet],
-        index=list(Materialflusskontinuitaet).index(d["kontinuitaet"]),
-        format_func=lambda wert: _enum_text(Materialflusskontinuitaet(wert)),
+        list(Materialflusskontinuitaet),
+        index=list(Materialflusskontinuitaet).index(system.materialflusskontinuitaet),
+        format_func=_enum_text,
     )
-    d["kontinuitaet"] = Materialflusskontinuitaet(kontinuitaet_als_text)
-    d["kapazitaet"] = st.text_area("Kapazitätsgrenzen", d["kapazitaet"])
-    d["input"] = st.text_area("Beschreibung des Inputs", d["input"])
-    d["transformation"] = st.text_area("Beschreibung der Transformation", d["transformation"])
-    d["output"] = st.text_area("Beschreibung des Outputs", d["output"])
-    d["detaillierung"] = st.text_input("Gewünschter Detaillierungsgrad", d["detaillierung"])
-    if d["systemtyp"] in (Systemtyp.PRODUKTION, Systemtyp.KOMBINIERT):
-        with st.expander("Produktionssystem", expanded=True):
-            p = d["produktion"]
-            p["auftragsabwicklungsstrategie"] = _auswahl(
-                "Auftragsabwicklungsstrategie",
-                (
-                    "",
-                    "ETO – Engineer-to-Order",
-                    "CTO – Configure-to-Order",
-                    "MTO – Make-to-Order",
-                    "ATO – Assemble-to-Order",
-                    "MTS – Make-to-Stock",
-                ),
-                p.get("auftragsabwicklungsstrategie", ""),
-            )
-            p["produktionsart"] = _auswahl(
-                "Produktionsart",
-                (
-                    "",
-                    "Einzelproduktion",
-                    "Serienproduktion",
-                    "Sortenproduktion",
-                    "Massenproduktion",
-                ),
-                p.get("produktionsart", ""),
-            )
-            p["produktionsstueckzahl"] = _auswahl(
-                "Produktionsstückzahl (Orientierungswert je Produktvariante "
-                "und Betrachtungszeitraum)",
-                ("", "gering (1–100 Stück)", "mittel (101–10.000 Stück)", "hoch (> 10.000 Stück)"),
-                p.get("produktionsstueckzahl", ""),
-            )
-            if st.checkbox(
-                "Abweichende Stückzahlgrenzen verwenden",
-                value=p.get("stueckzahl_grenze_gering_mittel") is not None,
-            ):
-                grenzspalten = st.columns(2)
-                p["stueckzahl_grenze_gering_mittel"] = int(
-                    grenzspalten[0].number_input(
-                        "Grenze gering bis mittel",
-                        min_value=1,
-                        value=p.get("stueckzahl_grenze_gering_mittel") or 100,
-                    )
-                )
-                p["stueckzahl_grenze_mittel_hoch"] = int(
-                    grenzspalten[1].number_input(
-                        "Grenze mittel bis hoch",
-                        min_value=2,
-                        value=p.get("stueckzahl_grenze_mittel_hoch") or 10_000,
-                    )
-                )
-                p["stueckzahl_einheit_zeitraum"] = st.text_input(
-                    "Einheit beziehungsweise Bezugszeitraum",
-                    p.get("stueckzahl_einheit_zeitraum", ""),
-                )
-            else:
-                p["stueckzahl_grenze_gering_mittel"] = None
-                p["stueckzahl_grenze_mittel_hoch"] = None
-            p["produktvielfalt"] = _auswahl(
-                "Produktvielfalt (Orientierungswert)",
-                (
-                    "",
-                    "gering (1–10 Varianten)",
-                    "mittel (11–100 Varianten)",
-                    "hoch (> 100 Varianten)",
-                ),
-                p.get("produktvielfalt", ""),
-            )
-            if st.checkbox(
-                "Abweichende Variantengrenzen verwenden",
-                value=p.get("varianten_grenze_gering_mittel") is not None,
-            ):
-                variantenspalten = st.columns(2)
-                p["varianten_grenze_gering_mittel"] = int(
-                    variantenspalten[0].number_input(
-                        "Variantengrenze gering bis mittel",
-                        min_value=1,
-                        value=p.get("varianten_grenze_gering_mittel") or 10,
-                    )
-                )
-                p["varianten_grenze_mittel_hoch"] = int(
-                    variantenspalten[1].number_input(
-                        "Variantengrenze mittel bis hoch",
-                        min_value=2,
-                        value=p.get("varianten_grenze_mittel_hoch") or 100,
-                    )
-                )
-            else:
-                p["varianten_grenze_gering_mittel"] = None
-                p["varianten_grenze_mittel_hoch"] = None
-            p["organisationstyp"] = _auswahl(
-                "Organisationstyp",
-                (
-                    "",
-                    "Werkstattfertigung",
-                    "Gruppenfertigung",
-                    "Inselfertigung",
-                    "Reihenproduktion",
-                    "Fließproduktion",
-                    "Fließband beziehungsweise Transferstraße",
-                    "flexible Fertigung",
-                    "sonstiger Organisationstyp",
-                ),
-                p.get("organisationstyp", ""),
-            )
-            p["anzahl_arbeitsgaenge"] = st.radio(
-                "Anzahl der Arbeitsgänge", ("einstufig", "mehrstufig")
-            )
-            p["produktionsfaktoren"] = _mehrfach(
-                "Produktionsfaktoren",
-                ("materialintensiv", "arbeitsintensiv", "informationsintensiv", "anlagenintensiv"),
-                p.get("produktionsfaktoren", ()),
-            )
-            basis = (
-                "Maschinen",
-                "Anlagen",
-                "Arbeitsplätze",
-                "Personal",
-                "Werkzeuge",
-                "Fördertechnik",
-                "Lager- und Pufferplätze",
-                "Informationssysteme",
-            )
-            p["ressourcen"] = (
-                *_mehrfach("Eingesetzte Produktionsressourcen", basis, p.get("ressourcen", ())),
-                *mehrzeiliger_text_als_liste(
-                    st.text_area("Weitere Produktionsressourcen (eine pro Zeile)")
-                ),
-            )
-            st.caption(
-                "Die Grenzen sind Orientierungswerte je Produktvariante und Betrachtungszeitraum."
-            )
-    if d["systemtyp"] in (Systemtyp.INTRALOGISTIK, Systemtyp.KOMBINIERT):
-        with st.expander("Intralogistiksystem", expanded=True):
-            i = d["intralogistik"]
-            i["hauptfunktionen"] = _mehrfach(
-                "Hauptfunktionen",
-                (
-                    "Transport",
-                    "Lagerung",
-                    "Umschlag",
-                    "Kommissionierung",
-                    "Bereitstellung",
-                    "innerbetriebliche Versorgung",
-                ),
-                i.get("hauptfunktionen", ()),
-            )
-            i["ladungstraeger"] = mehrzeiliger_text_als_liste(
-                st.text_area(
-                    "Material- oder Ladungsträger (eine Angabe pro Zeile)",
-                    liste_als_mehrzeiliger_text(i.get("ladungstraeger", ())),
-                )
-            )
-            i["quellen_und_senken"] = st.text_area(
-                "Quellen und Senken des Materialflusses", i.get("quellen_und_senken", "")
-            )
-            i["transportorganisation"] = st.selectbox(
-                "Transportorganisation",
-                (
-                    "",
-                    "Direkttransport",
-                    "Sammeltransport",
-                    "Linien- beziehungsweise Routenzugverkehr",
-                    "bedarfsgesteuerter Transport",
-                    "kontinuierliche Fördertechnik",
-                    "sonstige Organisation",
-                ),
-            )
-            i["lagerprinzip"] = st.selectbox(
-                "Lager- beziehungsweise Bereitstellungsprinzip",
-                (
-                    "",
-                    "feste Lagerplatzzuordnung",
-                    "chaotische Lagerung",
-                    "FIFO",
-                    "LIFO",
-                    "Kanban",
-                    "Supermarktprinzip",
-                    "Just-in-Time",
-                    "Just-in-Sequence",
-                    "sonstiges Prinzip",
-                ),
-            )
-            basis = (
-                "manuelle Transporte",
-                "Stapler",
-                "Routenzug",
-                "Kran",
-                "stationäre Fördertechnik",
-                "FTS",
-                "AMR",
-                "Regalbediengerät",
-                "Lager- und Pufferplätze",
-                "Personal",
-                "Informationssysteme",
-            )
-            i["ressourcen"] = (
-                *_mehrfach("Eingesetzte Intralogistikressourcen", basis, i.get("ressourcen", ())),
-                *mehrzeiliger_text_als_liste(
-                    st.text_area("Weitere Intralogistikressourcen (eine pro Zeile)")
-                ),
-            )
-            i["puffer_und_lagerbereiche"] = st.text_area(
-                "Puffer- und Lagerbereiche", i.get("puffer_und_lagerbereiche", "")
-            )
-            i["bekannte_kapazitaetsgrenzen"] = st.text_area(
-                "Bekannte Kapazitätsgrenzen der Intralogistik",
-                i.get("bekannte_kapazitaetsgrenzen", ""),
-            )
+    if daten["systemtyp"] is Systemtyp.PRODUKTION:
+        _produktionsauswahl(daten)
+    elif daten["systemtyp"] is Systemtyp.INTRALOGISTIK:
+        _intralogistikauswahl(daten)
 
 
-def _schritt_5(d: dict[str, Any]) -> None:
-    kandidaten = leite_kpi_kandidaten_ab(tuple(d["zielgroessen"]))
-    erlaubte = {k.kpi_id for k in kandidaten}
-    gewaehlt = {k for k in d["kpis"] if k in erlaubte}
-    st.markdown("#### KPI-Kandidaten")
+def _schritt_auswertungen(daten: dict[str, Any]) -> None:
+    st.info(
+        "Die Auswahl beschreibt den Analysebedarf. Ob eine Kennzahl berechnet werden "
+        "kann, wird später anhand der verfügbaren Ereignisdaten geprüft."
+    )
+    kandidaten = leite_kpi_kandidaten_ab(tuple(daten["zielgroessen"]))
+    gewaehlt = set(daten["kpis"])
     for kandidat in kandidaten:
         if st.checkbox(
-            kandidat.bezeichnung, kandidat.kpi_id in gewaehlt, key=f"kpi_{kandidat.kpi_id}"
+            kandidat.bezeichnung,
+            kandidat.kpi_id in gewaehlt,
+            key=f"kpi_{kandidat.kpi_id}",
         ):
             gewaehlt.add(kandidat.kpi_id)
         else:
             gewaehlt.discard(kandidat.kpi_id)
-        st.caption(f"Benötigte Daten: {kandidat.voraussetzungen}")
-    d["kpis"] = [k.kpi_id for k in kandidaten if k.kpi_id in gewaehlt]
-    st.info("Die tatsächliche Ableitbarkeit wird nach dem Datenimport geprüft.")
-    d["vertraulichkeit"] = st.text_area("Vertraulichkeit und Datenschutz", d["vertraulichkeit"])
-    d["technik"] = st.text_area("Technische Einschränkungen", d["technik"])
-    d["annahmen"] = st.text_area("Bekannte Annahmen", d["annahmen"])
-    d["ausschluesse"] = st.text_area("Bekannte Ausschlüsse", d["ausschluesse"])
-    d["sonstige_rahmenbedingungen"] = st.text_area(
-        "Sonstige fachliche Rahmenbedingungen", d["sonstige_rahmenbedingungen"]
-    )
-
-
-def _schritt_6(d: dict[str, Any]) -> None:
-    modus_als_text = st.radio(
-        "Modus des Betrachtungszeitraums",
-        [wert.value for wert in BetrachtungszeitraumModus],
-        index=list(BetrachtungszeitraumModus).index(d["zeitraum_modus"]),
-        format_func=lambda wert: _enum_text(BetrachtungszeitraumModus(wert)),
-    )
-    d["zeitraum_modus"] = BetrachtungszeitraumModus(modus_als_text)
-    if d["zeitraum_modus"] is BetrachtungszeitraumModus.AUS_DATEN:
-        st.info(
-            "Der Betrachtungszeitraum wird nach dem Datenimport aus dem frühesten und "
-            "spätesten relevanten Zeitstempel bestimmt."
-        )
-    elif d["zeitraum_modus"] is BetrachtungszeitraumModus.MANUELL:
-        d["beginn"] = st.date_input("Beginn", d["beginn"])
-        d["ende"] = st.date_input("Ende", d["ende"])
-    else:
-        st.info("Der Betrachtungszeitraum wird zu einem späteren Zeitpunkt festgelegt.")
-
-
-def _schritt_7(d: dict[str, Any]) -> None:
-    st.markdown(f"**Projekt:** {d['bezeichnung'] or '–'}")
-    st.markdown(f"**Problemstellung:** {d['problemstellung'] or '–'}")
-    st.markdown(f"**Systemgrenze:** {d['systemgrenze'] or '–'}")
-    st.markdown(f"**Untersuchungszweck:** {d['untersuchungszweck'] or '–'}")
-    st.markdown(
-        "**Zielgrößen:** "
-        + (", ".join(ZIELGROESSEN_BEZEICHNUNGEN[z] for z in d["zielgroessen"]) or "–")
-    )
-    st.markdown(f"**Systemtyp:** {_enum_text(d['systemtyp'])}")
-    st.markdown(f"**Ausgewählte KPI-Kandidaten:** {len(d['kpis'])}")
-    d["anmerkungen"] = st.text_area("Anmerkungen", d["anmerkungen"])
-    vorschau = _auftrag(d)
-    if vorschau.ist_vollstaendig():
-        st.success("Untersuchungsauftrag vollständig")
-    else:
-        st.warning(
-            "Untersuchungsauftrag unvollständig. Erforderlich sind Problemstellung, "
-            "Systemgrenze und Untersuchungszweck."
-        )
+        st.caption(kandidat.beschreibung)
+    daten["kpis"] = [kandidat.kpi_id for kandidat in kandidaten if kandidat.kpi_id in gewaehlt]
+    if daten["legacy_kpis"]:
+        st.caption("Relevante Kennzahlen aus dem Altprojekt: " + ", ".join(daten["legacy_kpis"]))
 
 
 def _produktionsblock(daten: dict[str, Any]) -> Produktionsklassifikation:
-    erlaubte = {f.name for f in Produktionsklassifikation.__dataclass_fields__.values()}
-    return Produktionsklassifikation(**{k: v for k, v in daten.items() if k in erlaubte})
+    erlaubte = {feld.name for feld in Produktionsklassifikation.__dataclass_fields__.values()}
+    return Produktionsklassifikation(
+        **{name: wert for name, wert in daten.items() if name in erlaubte}
+    )
 
 
 def _intralogistikblock(daten: dict[str, Any]) -> Intralogistikklassifikation:
-    erlaubte = {f.name for f in Intralogistikklassifikation.__dataclass_fields__.values()}
-    return Intralogistikklassifikation(**{k: v for k, v in daten.items() if k in erlaubte})
+    erlaubte = {feld.name for feld in Intralogistikklassifikation.__dataclass_fields__.values()}
+    return Intralogistikklassifikation(
+        **{name: wert for name, wert in daten.items() if name in erlaubte}
+    )
 
 
-def _auftrag(d: dict[str, Any]) -> Untersuchungsauftrag:
-    typ = d["systemtyp"]
-    system = Systemklassifikation(
-        d["bereich"],
-        d["objekte"],
-        d["gestalt"],
-        d["flussform"],
-        d["kontinuitaet"],
-        d["kapazitaet"],
-        d["input"],
-        d["transformation"],
-        d["output"],
-        _produktionsblock(d["produktion"])
-        if typ in (Systemtyp.PRODUKTION, Systemtyp.KOMBINIERT)
-        else None,
-        _intralogistikblock(d["intralogistik"])
-        if typ in (Systemtyp.INTRALOGISTIK, Systemtyp.KOMBINIERT)
-        else None,
-    )
-    modus = d["zeitraum_modus"]
-    zeitraum = Betrachtungszeitraum(
-        modus,
-        d["beginn"] if modus is BetrachtungszeitraumModus.MANUELL else None,
-        d["ende"] if modus is BetrachtungszeitraumModus.MANUELL else None,
-    )
-    return Untersuchungsauftrag(
-        d["problemstellung"],
-        d["untersuchungszweck"],
-        typ,
-        d["systemgrenze"],
-        d["individuelles_ziel"],
-        tuple(d["zielgroessen"]),
-        tuple(d["kpis"]),
-        system,
-        d["detaillierung"],
-        Rahmenbedingungen(
-            d["vertraulichkeit"],
-            d["technik"],
-            d["annahmen"],
-            d["ausschluesse"],
-            d["sonstige_rahmenbedingungen"],
+def _auftrag(daten: dict[str, Any]) -> Untersuchungsauftrag:
+    typ = daten["systemtyp"]
+    if typ not in (Systemtyp.PRODUKTION, Systemtyp.INTRALOGISTIK):
+        raise Domaenenfehler(
+            "Wählen Sie für die Systemklassifikation Produktion oder Intralogistik."
+        )
+    alt = daten["systemklassifikation"]
+    system = replace(
+        alt,
+        gestalt_der_gueter=daten["gestalt"],
+        materialflussform=daten["flussform"],
+        materialflusskontinuitaet=daten["kontinuitaet"],
+        produktion=(
+            _produktionsblock(daten["produktion"])
+            if typ is Systemtyp.PRODUKTION
+            else alt.produktion
         ),
-        zeitraum,
-        d["anmerkungen"],
-        tuple(d["legacy_kpis"]),
+        intralogistik=(
+            _intralogistikblock(daten["intralogistik"])
+            if typ is Systemtyp.INTRALOGISTIK
+            else alt.intralogistik
+        ),
+    )
+    zwecke = tuple(daten["zwecke"])
+    return Untersuchungsauftrag(
+        problemstellung=daten["problemstellung"],
+        untersuchungszweck=zwecke[0] if zwecke else "",
+        systemtyp=typ,
+        systemgrenze=daten["systemgrenze"],
+        individuelles_ziel="",
+        logistische_zielgroessen=tuple(daten["zielgroessen"]),
+        ausgewaehlte_kpi_ids=tuple(daten["kpis"]),
+        systemklassifikation=system,
+        detaillierungsgrad=daten["detaillierung"],
+        rahmenbedingungen=daten["rahmenbedingungen"],
+        betrachtungszeitraum=daten["betrachtungszeitraum"],
+        anmerkungen=daten["anmerkungen"],
+        legacy_leistungskennzahlen=tuple(daten["legacy_kpis"]),
+        migrationsbestand=daten["migrationsbestand"],
+        untersuchungszwecke=zwecke,
     )
 
 
-def _speichern(
-    service: ProjektService, projekt: Projekt | None, d: dict[str, Any], als_entwurf: bool
+def _zeitraum_text(zeitraum: Betrachtungszeitraum) -> str:
+    if zeitraum.beginn is None or zeitraum.ende is None:
+        return "Noch nicht aus den Ereignisdaten ermittelt"
+    return f"{zeitraum.beginn:%d.%m.%Y} bis {zeitraum.ende:%d.%m.%Y}"
+
+
+def _schritt_auftrag(
+    daten: dict[str, Any],
+    projekt: Projekt | None,
+    datenquelle_service: DatenquelleService,
+) -> None:
+    st.markdown("### Ausgaben dieses Schritts")
+    st.markdown("**Untersuchungsauftrag U**")
+    st.write(f"Problemstellung: {daten['problemstellung'] or '–'}")
+    st.write(f"Systemgrenze: {daten['systemgrenze'] or '–'}")
+    st.write("Untersuchungszwecke: " + (", ".join(daten["zwecke"]) if daten["zwecke"] else "–"))
+    st.write(
+        "Logistikziele: "
+        + (
+            ", ".join(ZIELGROESSEN_BEZEICHNUNGEN[ziel] for ziel in daten["zielgroessen"])
+            if daten["zielgroessen"]
+            else "–"
+        )
+    )
+    st.write(
+        "Systemklassifikation: "
+        + (
+            _enum_text(daten["systemtyp"])
+            if daten["systemtyp"] in (Systemtyp.PRODUKTION, Systemtyp.INTRALOGISTIK)
+            else "Bitte festlegen"
+        )
+    )
+    st.write("Betrachtungszeitraum: " + _zeitraum_text(daten["betrachtungszeitraum"]))
+    st.markdown("**Datenquellenkatalog Q**")
+    quellen = (
+        [] if projekt is None else datenquelle_service.datenquellen_fuer_projekt(projekt.projekt_id)
+    )
+    if not quellen:
+        st.info("Datenquellenkatalog Q: Noch keine Datenquelle erfasst")
+    else:
+        st.dataframe(
+            [
+                {
+                    "Bezeichnung": quelle.bezeichnung,
+                    "Quellsystemtyp": quelle.quellsystemtyp.value,
+                    "Quellenart": quelle.quellenart.value,
+                }
+                for quelle in quellen
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+
+
+def _speichern_und_weiter(
+    service: ProjektService,
+    projekt: Projekt | None,
+    daten: dict[str, Any],
 ) -> None:
     try:
-        personen = tuple(BeteiligtePerson(**person) for person in d["personen"])
-        status = Projektstatus.ENTWURF if als_entwurf else d["status"]
+        auftrag = _auftrag(daten)
+        if not auftrag.ist_vollstaendig():
+            raise Domaenenfehler(
+                "Problemstellung, Systemgrenze und mindestens ein "
+                "Untersuchungszweck müssen ausgefüllt sein."
+            )
         if projekt is None:
             gespeichert = service.projekt_anlegen(
-                bezeichnung=d["bezeichnung"],
-                untersuchungsauftrag=_auftrag(d),
-                status=status,
-                beteiligte_personen=personen,
+                bezeichnung=daten["bezeichnung"],
+                untersuchungsauftrag=auftrag,
             )
         else:
             gespeichert = service.projekt_aktualisieren(
                 projekt.projekt_id,
-                bezeichnung=d["bezeichnung"],
-                untersuchungsauftrag=_auftrag(d),
-                status=status,
-                beteiligte_personen=personen,
+                bezeichnung=daten["bezeichnung"],
+                untersuchungsauftrag=auftrag,
+                status=projekt.status,
+                beteiligte_personen=projekt.beteiligte_personen,
             )
-    except Domaenenfehler as fehler:
-        st.error(str(fehler))
-        return
-    except NichtUnterstuetzteSchemaversion as fehler:
+    except (Domaenenfehler, NichtUnterstuetzteSchemaversion) as fehler:
         st.error(str(fehler))
         return
     except Exception:
-        LOGGER.exception("Unerwarteter technischer Fehler beim Speichern des Projekts.")
-        st.error("Das Projekt konnte aufgrund eines technischen Fehlers nicht gespeichert werden.")
+        LOGGER.exception("Unerwarteter technischer Fehler beim Speichern von Auftrag U.")
+        st.error(
+            "Der Untersuchungsauftrag konnte aufgrund eines technischen Fehlers "
+            "nicht gespeichert werden."
+        )
         return
     st.session_state.ausgewaehlte_projekt_id = gespeichert.projekt_id
-    st.session_state.erfolgsmeldung = (
-        "Der Entwurf wurde gespeichert."
-        if als_entwurf
-        else "Das Projekt wurde erfolgreich gespeichert."
+    st.session_state.wizard_entwurf = _entwurf_aus_projekt(gespeichert)
+    schritt_abschliessen_und_weiter(
+        aktueller_schritt=1,
+        projekt_id=gespeichert.projekt_id,
     )
-    st.session_state.auswahl_generation += 1
-    st.rerun()
 
 
 def _navigation(
-    service: ProjektService, projekt: Projekt | None, d: dict[str, Any], schritt: int
+    service: ProjektService,
+    projekt: Projekt | None,
+    daten: dict[str, Any],
+    datenquelle_service: DatenquelleService,
 ) -> None:
-    links, mitte, rechts = st.columns(3)
-    if links.button("Zurück", disabled=schritt == 1, width="stretch"):
+    schritt = st.session_state.wizard_schritt
+    links, rechts = st.columns(2)
+    if links.button("Zurück", disabled=schritt == 1, width="content"):
         st.session_state.wizard_schritt = schritt - 1
         st.rerun()
-    if mitte.button("Entwurf speichern", width="stretch"):
-        _speichern(service, projekt, d, True)
-    if schritt < 7:
-        if rechts.button("Weiter", width="stretch"):
+    if schritt < len(SCHRITTE):
+        if rechts.button("Weiter", width="content"):
             st.session_state.wizard_schritt = schritt + 1
             st.rerun()
-    elif rechts.button("Projekt speichern", type="primary", width="stretch"):
-        _speichern(service, projekt, d, False)
+    elif rechts.button(
+        "Untersuchungsauftrag speichern und mit ETL fortfahren",
+        type="primary",
+        width="content",
+    ):
+        _speichern_und_weiter(service, projekt, daten)
 
 
-def zeige_projektverwaltung(service: ProjektService) -> None:
-    """Zeigt Projektwahl, Fortschritt und den aktuellen Wizard-Schritt."""
+def zeige_projektverwaltung(
+    service: ProjektService,
+    datenquelle_service: DatenquelleService,
+) -> None:
+    """Zeigt ausschließlich die fünf methodisch erforderlichen Unterabschnitte."""
     _initialisieren()
-    if meldung := st.session_state.pop("erfolgsmeldung", None):
-        st.success(meldung)
     try:
         projekte = service.projekte_auflisten()
+        projekt = _seitenleiste(projekte)
     except NichtUnterstuetzteSchemaversion as fehler:
         st.error(str(fehler))
         return
-    except Exception:
-        LOGGER.exception("Unerwarteter technischer Fehler beim Laden der Projekte.")
-        st.error("Die Projekte konnten aufgrund eines technischen Fehlers nicht geladen werden.")
-        return
-    projekt = _seitenleiste(projekte)
-    d = st.session_state.wizard_entwurf
+    st.header("1 Projekt und Untersuchungsauftrag")
+    if meldung := st.session_state.pop("erfolgsmeldung", None):
+        st.success(meldung)
     schritt = st.session_state.wizard_schritt
     _kopf(schritt)
-    (_schritt_1, _schritt_2, _schritt_3, _schritt_4, _schritt_5, _schritt_6, _schritt_7)[
-        schritt - 1
-    ](d)
-    _navigation(service, projekt, d, schritt)
+    daten = st.session_state.wizard_entwurf
+    if schritt == 1:
+        _schritt_problem(daten)
+    elif schritt == 2:
+        _schritt_ziele(daten)
+    elif schritt == 3:
+        _schritt_system(daten)
+    elif schritt == 4:
+        _schritt_auswertungen(daten)
+    else:
+        _schritt_auftrag(daten, projekt, datenquelle_service)
+    _navigation(service, projekt, daten, datenquelle_service)

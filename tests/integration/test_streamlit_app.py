@@ -1,14 +1,24 @@
-"""Bedientests für die Streamlit-Anwendung."""
+"""Bedientests der reduzierten Projektverwaltung und Hauptnavigation."""
 
 from pathlib import Path
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from framework_mvp.bootstrap import DATENBANKPFAD_UMGEBUNGSVARIABLE, erstelle_projekt_service
+from framework_mvp.bootstrap import (
+    DATENBANKPFAD_UMGEBUNGSVARIABLE,
+    erstelle_datenquelle_service,
+    erstelle_projekt_service,
+)
 from framework_mvp.domain.models import (
+    Betrachtungszeitraum,
     BetrachtungszeitraumModus,
     LogistischeZielgroesse,
+    Projektstatus,
+    Quellenart,
+    Quellsystemtyp,
+    Rahmenbedingungen,
+    Systemklassifikation,
     Systemtyp,
     Untersuchungsauftrag,
 )
@@ -26,160 +36,294 @@ def _schaltflaeche(anwendung: AppTest, beschriftung: str):  # type: ignore[no-un
     return next(element for element in anwendung.button if element.label == beschriftung)
 
 
-def test_anwendung_startet_und_zeigt_formular(
+def test_anwendung_startet_mit_fuenf_schritten_und_tooltips(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Die Anwendung startet ohne Ausnahme und zeigt zentrale Eingaben."""
+    """Schritt 1 beginnt kompakt mit genau den beiden fachlichen Textbereichen."""
     anwendung = _anwendung_starten(tmp_path, monkeypatch)
-
     assert not anwendung.exception
-    assert anwendung.title[0].value == "Datengetriebene konzeptionelle Modellierung"
-    assert any(element.label == "Projektbezeichnung" for element in anwendung.text_input)
-    assert any(element.label == "Projektstatus" for element in anwendung.selectbox)
-    assert anwendung.get("progress")
-    assert any("Schritt 1 von 7" in element.value for element in anwendung.caption)
-    assert all(
-        any(name in element.value for element in anwendung.caption)
-        for name in ("Projekt und beteiligte Personen", "Zusammenfassung und Speicherung")
+    assert any("Schritt 1 von 5" in element.value for element in anwendung.caption)
+    assert {element.label for element in anwendung.text_area} == {
+        "Problemstellung",
+        "Systemgrenze",
+    }
+    problem = next(element for element in anwendung.text_area if element.label == "Problemstellung")
+    grenze = next(element for element in anwendung.text_area if element.label == "Systemgrenze")
+    assert "betriebliche Problem" in problem.help
+    assert "außerhalb der Untersuchung" in grenze.help
+    assert not any(element.label == "Projektstatus" for element in anwendung.selectbox)
+
+
+def test_untersuchungszwecke_und_logistikziele_sind_kompakt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Vordefinierte und individuelle Zwecke teilen sich eine Auswahl."""
+    anwendung = _anwendung_starten(tmp_path, monkeypatch)
+    _schaltflaeche(anwendung, "Weiter").click().run()
+    zwecke = next(
+        element for element in anwendung.multiselect if element.label == "Untersuchungszwecke"
+    )
+    assert "System analysieren" in zwecke.options
+    assert any(
+        element.label == "Weiteren Untersuchungszweck hinzufügen …"
+        for element in anwendung.checkbox
+    )
+    assert any("Logistikziele" in element.value for element in anwendung.markdown)
+    oberziel = "Übergeordnetes Ziel: Leistungsfähigkeit des betrachteten Systems steigern"
+    assert sum(oberziel in element.value for element in anwendung.caption) == 1
+    assert all(element.label != oberziel for element in anwendung.checkbox)
+    assert not any(
+        element.label == "Weiteres individuelles Ziel" for element in anwendung.text_area
     )
 
 
-def test_person_kann_hinzugefuegt_und_entfernt_werden(
+def test_individueller_zweck_wird_ausgewaehlt_und_duplikat_abgelehnt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Dynamische Personenzeilen lassen sich vor dem Speichern verwalten."""
+    """Ein bereinigter Zweck wird ergänzt; Groß-/Kleinschreibung erzeugt kein Duplikat."""
     anwendung = _anwendung_starten(tmp_path, monkeypatch)
-    _schaltflaeche(anwendung, "Person hinzufügen").click().run()
-    assert any(element.label == "Vorname" for element in anwendung.text_input)
-    _schaltflaeche(anwendung, "Entfernen").click().run()
-    assert not any(element.label == "Vorname" for element in anwendung.text_input)
+    anwendung.session_state["wizard_schritt"] = 2
+    anwendung.run()
+    next(
+        element
+        for element in anwendung.checkbox
+        if element.label == "Weiteren Untersuchungszweck hinzufügen …"
+    ).check().run()
+    next(
+        element
+        for element in anwendung.text_input
+        if element.label == "Individueller Untersuchungszweck"
+    ).set_value("  Materialfluss erklären  ")
+    _schaltflaeche(anwendung, "Untersuchungszweck hinzufügen").click().run()
+    assert "Materialfluss erklären" in anwendung.session_state["wizard_entwurf"]["zwecke"]
+    assert (
+        "Materialfluss erklären" in anwendung.session_state["wizard_entwurf"]["individuelle_zwecke"]
+    )
+
+    next(
+        element
+        for element in anwendung.checkbox
+        if element.label == "Weiteren Untersuchungszweck hinzufügen …"
+    ).check().run()
+    next(
+        element
+        for element in anwendung.text_input
+        if element.label == "Individueller Untersuchungszweck"
+    ).set_value("materialfluss ERKLÄREN")
+    _schaltflaeche(anwendung, "Untersuchungszweck hinzufügen").click().run()
+    assert any("bereits vorhanden" in element.value for element in anwendung.error)
+    assert len(anwendung.session_state["wizard_entwurf"]["individuelle_zwecke"]) == 1
 
 
-def test_kpi_vorschlaege_reagieren_auf_zielauswahl(
+def test_systemklassifikation_enthaelt_keine_freien_beschreibungsfelder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Gewählte Zielgrößen erzeugen im Auswertungsschritt KPI-Kandidaten."""
+    """Neue Projekte wählen eindeutig Produktion oder Intralogistik."""
+    anwendung = _anwendung_starten(tmp_path, monkeypatch)
+    anwendung.session_state["wizard_schritt"] = 3
+    anwendung.run()
+    systemtyp = next(element for element in anwendung.selectbox if element.label == "Systemtyp")
+    assert "Produktion" in systemtyp.options
+    assert "Intralogistik" in systemtyp.options
+    assert "Kombiniert" not in systemtyp.options
+    entfernte_felder = {
+        "Beschreibung des Inputs",
+        "Beschreibung der Transformation",
+        "Beschreibung des Outputs",
+        "Kapazitätsgrenzen",
+        "Gewünschter Detaillierungsgrad",
+    }
+    assert not entfernte_felder & {
+        element.label for element in (*anwendung.text_input, *anwendung.text_area)
+    }
+
+
+def test_kpi_hinweis_und_entfernte_allgemeine_freitexte(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KPI-Bedarf bleibt auswählbar, allgemeine Annahmen werden nicht mehr erhoben."""
     anwendung = _anwendung_starten(tmp_path, monkeypatch)
     anwendung.session_state["wizard_entwurf"]["zielgroessen"] = [
         LogistischeZielgroesse.DURCHLAUFZEIT
     ]
-    anwendung.session_state["wizard_schritt"] = 5
+    anwendung.session_state["wizard_schritt"] = 4
     anwendung.run()
     assert any(element.label == "Gesamtdurchlaufzeit" for element in anwendung.checkbox)
+    assert any("Analysebedarf" in element.value for element in anwendung.info)
+    assert not {
+        "Bekannte Annahmen",
+        "Technische Einschränkungen",
+        "Sonstige fachliche Rahmenbedingungen",
+        "Anmerkungen",
+    } & {element.label for element in anwendung.text_area}
 
 
-def test_neues_entwurfsprojekt_kann_gespeichert_werden(
+def test_ausgaben_u_q_und_zeitraum_sind_schreibgeschuetzt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Ein neues Projekt mit unvollständigem Auftrag kann als Entwurf gespeichert werden."""
+    """Der letzte Schritt benennt U und Q und bietet keine Datumseingabe."""
     anwendung = _anwendung_starten(tmp_path, monkeypatch)
-    anwendung.text_input[0].set_value("Bedienbares Projekt")
-
-    _schaltflaeche(anwendung, "Entwurf speichern").click().run()
-
-    assert not anwendung.exception
-    assert any("Entwurf wurde gespeichert" in element.value for element in anwendung.success)
-    service = erstelle_projekt_service()
-    assert [projekt.bezeichnung for projekt in service.projekte_auflisten()] == [
-        "Bedienbares Projekt"
-    ]
-
-
-def test_unvollstaendiges_aktives_projekt_zeigt_fachlichen_fehler(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Die Statusinvariante wird als verständliche Fehlermeldung angezeigt."""
-    anwendung = _anwendung_starten(tmp_path, monkeypatch)
-    anwendung.text_input[0].set_value("Unvollständiges Projekt")
-    projektstatus = next(
-        element for element in anwendung.selectbox if element.label == "Projektstatus"
-    )
-    projektstatus.select_index(1)
-
-    _schaltflaeche(anwendung, "Weiter").click().run()
-    _schaltflaeche(anwendung, "Zurück").click().run()
-    anwendung.session_state["wizard_schritt"] = 7
+    anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    _schaltflaeche(anwendung, "Projekt speichern").click().run()
+    texte = [element.value for element in anwendung.markdown]
+    assert any("Untersuchungsauftrag U" in text for text in texte)
+    assert any("Datenquellenkatalog Q" in text for text in texte)
+    assert any("Noch keine Datenquelle erfasst" in element.value for element in anwendung.info)
+    assert any(
+        "Noch nicht aus den Ereignisdaten ermittelt" in element.value
+        for element in anwendung.markdown
+    )
 
-    assert not anwendung.exception
-    assert any("nur als Entwurf" in element.value for element in anwendung.error)
 
-
-def test_gespeichertes_projekt_wird_erneut_geladen(
+def test_vorhandene_datenquelle_erscheint_im_katalog_q(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Persistierte Projektwerte werden beim Start in das Formular geladen."""
+    """Registrierte Datenquellen sind eindeutig dem gewählten Projekt zugeordnet."""
     datenbankpfad = tmp_path / "streamlit.sqlite"
     monkeypatch.setenv(DATENBANKPFAD_UMGEBUNGSVARIABLE, str(datenbankpfad))
-    service = erstelle_projekt_service()
-    service.projekt_anlegen(
-        bezeichnung="Bereits gespeichert",
+    projekt = erstelle_projekt_service().projekt_anlegen(
+        bezeichnung="Katalog",
         untersuchungsauftrag=Untersuchungsauftrag(
-            problemstellung="Problem",
-            untersuchungszweck="Ziel",
-            systemtyp=Systemtyp.PRODUKTION,
-            systemgrenze="Grenze",
+            "Problem", "System analysieren", Systemtyp.PRODUKTION, "Grenze"
         ),
     )
-
+    erstelle_datenquelle_service().datenquelle_anlegen(
+        projekt_id=projekt.projekt_id,
+        bezeichnung="ERP-Export",
+        quellsystemtyp=Quellsystemtyp.ERP_SYSTEM,
+        quellenart=Quellenart.CSV,
+    )
     anwendung = AppTest.from_file(ANWENDUNGSPFAD).run()
-    projektauswahl = next(
+    next(
         element
         for element in anwendung.selectbox
         if element.label == "Vorhandenes Projekt auswählen"
+    ).select_index(1).run()
+    anwendung.session_state["wizard_schritt"] = 5
+    anwendung.run()
+    assert any(
+        "ERP-Export" in str(zelle)
+        for dataframe in anwendung.dataframe
+        for zelle in dataframe.value.to_numpy().flat
     )
-    projektauswahl.select_index(1).run()
-
-    assert not anwendung.exception
-    assert anwendung.text_input[0].value == "Bereits gespeichert"
-    _schaltflaeche(anwendung, "Weiter").click().run()
-    assert next(e for e in anwendung.text_area if e.label == "Problemstellung").value == "Problem"
-
-
-@pytest.mark.parametrize("schritt", range(1, 8))
-def test_entwurf_kann_aus_jedem_schritt_gespeichert_werden(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, schritt: int
-) -> None:
-    """Jeder Wizard-Schritt bietet eine wirksame Entwurfsspeicherung."""
-    anwendung = _anwendung_starten(tmp_path, monkeypatch)
-    anwendung.session_state["wizard_entwurf"]["bezeichnung"] = f"Entwurf {schritt}"
-    anwendung.session_state["wizard_schritt"] = schritt
-    anwendung.run()
-    _schaltflaeche(anwendung, "Entwurf speichern").click().run()
-    assert not anwendung.exception
-    assert any("Entwurf wurde gespeichert" in element.value for element in anwendung.success)
+    assert not anwendung.date_input
+    assert any(
+        element.label == "Untersuchungsauftrag speichern und mit ETL fortfahren"
+        for element in anwendung.button
+    )
 
 
-def test_systemtyp_steuert_spezifische_fragen(
+def test_altprojekt_wird_ohne_verlust_verdeckt_geladen(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Ein reines Intralogistiksystem zeigt keine Produktionsfragen."""
-    anwendung = _anwendung_starten(tmp_path, monkeypatch)
-    anwendung.session_state["wizard_entwurf"]["systemtyp"] = Systemtyp.INTRALOGISTIK
-    anwendung.session_state["wizard_schritt"] = 4
+    """Gemischt, Anmerkung, Rahmenbedingungen und Altbeschreibungen verursachen keinen Fehler."""
+    datenbankpfad = tmp_path / "streamlit.sqlite"
+    monkeypatch.setenv(DATENBANKPFAD_UMGEBUNGSVARIABLE, str(datenbankpfad))
+    service = erstelle_projekt_service()
+    entwurf = service.projekt_anlegen(
+        bezeichnung="Altprojekt",
+        untersuchungsauftrag=Untersuchungsauftrag(
+            "Problem",
+            "System analysieren",
+            Systemtyp.KOMBINIERT,
+            "Grenze",
+            systemklassifikation=Systemklassifikation(
+                input_beschreibung="Alter Input",
+                transformation_beschreibung="Alte Transformation",
+                output_beschreibung="Alter Output",
+                kapazitaetsgrenzen="Alte Kapazität",
+            ),
+            detaillierungsgrad="Alt",
+            rahmenbedingungen=Rahmenbedingungen(bekannte_annahmen="Altannahme"),
+            anmerkungen="Alte Anmerkung",
+            betrachtungszeitraum=Betrachtungszeitraum(
+                BetrachtungszeitraumModus.MANUELL,
+                __import__("datetime").date(2025, 1, 1),
+                __import__("datetime").date(2025, 12, 31),
+            ),
+        ),
+    )
+    projekt = service.projekt_aktualisieren(
+        entwurf.projekt_id,
+        bezeichnung=entwurf.bezeichnung,
+        untersuchungsauftrag=entwurf.untersuchungsauftrag,
+        status=Projektstatus.AKTIV,
+    )
+    anwendung = AppTest.from_file(ANWENDUNGSPFAD).run()
+    next(
+        element
+        for element in anwendung.selectbox
+        if element.label == "Vorhandenes Projekt auswählen"
+    ).select_index(1).run()
+    anwendung.session_state["wizard_schritt"] = 3
     anwendung.run()
-    assert any(element.label == "Hauptfunktionen" for element in anwendung.multiselect)
-    assert not any(element.label == "Produktionsart" for element in anwendung.selectbox)
-
-
-def test_manueller_zeitraum_zeigt_beide_datumsfelder(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Der manuelle Modus zeigt Beginn und Ende zur Eingabe."""
-    anwendung = _anwendung_starten(tmp_path, monkeypatch)
-    anwendung.session_state["wizard_entwurf"]["zeitraum_modus"] = BetrachtungszeitraumModus.MANUELL
-    anwendung.session_state["wizard_schritt"] = 6
-    anwendung.run()
-    assert {element.label for element in anwendung.date_input} == {"Beginn", "Ende"}
-
-
-def test_process_mining_seite_ist_in_der_navigation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Framework-Schritt 6 ist erreichbar und zeigt keine Framework-Grafik."""
-    anwendung = _anwendung_starten(tmp_path, monkeypatch)
-    anwendung.radio[0].set_value("6 Process Mining durchführen").run()
     assert not anwendung.exception
-    assert any(element.value == "6 Process Mining durchführen" for element in anwendung.header)
-    assert not anwendung.get("html")
+    assert any("Altprojekt ist als Gemischt klassifiziert" in e.value for e in anwendung.warning)
+    assert service.projekt_laden(projekt.projekt_id).status is Projektstatus.AKTIV  # type: ignore[union-attr]
+    systemtyp = next(element for element in anwendung.selectbox if element.label == "Systemtyp")
+    systemtyp.select_index(1).run()
+    anwendung.session_state["wizard_schritt"] = 5
+    anwendung.run()
+    _schaltflaeche(anwendung, "Untersuchungsauftrag speichern und mit ETL fortfahren").click().run()
+    erneut = service.projekt_laden(projekt.projekt_id)
+    assert erneut is not None
+    assert erneut.status is Projektstatus.AKTIV
+    assert erneut.untersuchungsauftrag.anmerkungen == "Alte Anmerkung"
+    assert erneut.untersuchungsauftrag.systemklassifikation.input_beschreibung == "Alter Input"
+
+
+def test_vollstaendiges_neues_projekt_navigiert_zu_etl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Erst erfolgreiche Persistenz öffnet Schritt 2 und bewahrt die Projekt-ID."""
+    anwendung = _anwendung_starten(tmp_path, monkeypatch)
+    entwurf = anwendung.session_state["wizard_entwurf"]
+    entwurf.update(
+        {
+            "bezeichnung": "Navigationsprojekt",
+            "problemstellung": "Problem",
+            "systemgrenze": "Grenze",
+            "zwecke": ["System analysieren"],
+            "systemtyp": Systemtyp.PRODUKTION,
+        }
+    )
+    anwendung.session_state["wizard_schritt"] = 5
+    anwendung.run()
+    _schaltflaeche(anwendung, "Untersuchungsauftrag speichern und mit ETL fortfahren").click().run()
+    assert not anwendung.exception
+    assert anwendung.radio[0].value == "2 ETL durchführen"
+    gespeicherte = erstelle_projekt_service().projekte_auflisten()
+    assert len(gespeicherte) == 1
+    assert str(gespeicherte[0].projekt_id) == anwendung.session_state["aktuelles_projekt_id"]
+    assert gespeicherte[0].status is Projektstatus.ENTWURF
+
+
+def test_validierungsfehler_verhindert_navigation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Leere Pflichtangaben lassen Eingaben und Framework-Schritt unverändert."""
+    anwendung = _anwendung_starten(tmp_path, monkeypatch)
+    anwendung.session_state["wizard_entwurf"].update(
+        {"bezeichnung": "Ungültig", "systemtyp": Systemtyp.PRODUKTION}
+    )
+    anwendung.session_state["wizard_schritt"] = 5
+    anwendung.run()
+    _schaltflaeche(anwendung, "Untersuchungsauftrag speichern und mit ETL fortfahren").click().run()
+    assert anwendung.radio[0].value == "1 Projekt und Untersuchungsauftrag"
+    assert any("müssen ausgefüllt sein" in element.value for element in anwendung.error)
+    assert not erstelle_projekt_service().projekte_auflisten()
+
+
+def test_schritte_zwei_bis_sechs_bleiben_in_der_navigation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Die Reduktion von Schritt 1 verändert keine späteren Hauptbereiche."""
+    anwendung = _anwendung_starten(tmp_path, monkeypatch)
+    assert anwendung.radio[0].options == [
+        "1 Projekt und Untersuchungsauftrag",
+        "2 ETL durchführen",
+        "3 Semantisches Mapping",
+        "4 Event Log aufbauen",
+        "5 Datenqualität prüfen",
+        "6 Process Mining durchführen",
+    ]

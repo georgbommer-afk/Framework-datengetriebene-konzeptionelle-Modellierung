@@ -10,6 +10,8 @@ from pathlib import Path
 from uuid import UUID
 
 from framework_mvp.domain.models import (
+    Aktivitaetsbildungsart,
+    Aktivitaetsdefinition,
     Attributrolle,
     Ereignisrolle,
     MappingModus,
@@ -122,6 +124,23 @@ class SQLiteMappingRepository:
             )
             for wert in struktur["spaltenzuordnungen"]
         )
+        aktivitaetsdefinition_roh = struktur.get("aktivitaetsdefinition")
+        aktivitaetsdefinition = (
+            Aktivitaetsdefinition(
+                bildungsart=Aktivitaetsbildungsart(aktivitaetsdefinition_roh["bildungsart"]),
+                quellspalten=tuple(aktivitaetsdefinition_roh["quellspalten"]),
+                trennzeichen=aktivitaetsdefinition_roh.get("trennzeichen", ""),
+                praefix=aktivitaetsdefinition_roh.get("praefix", ""),
+                suffix=aktivitaetsdefinition_roh.get("suffix", ""),
+                fehlwertstrategie=aktivitaetsdefinition_roh.get(
+                    "fehlwertstrategie",
+                    "Nur vorhandene Bestandteile kombinieren",
+                ),
+                ersatztext=aktivitaetsdefinition_roh.get("ersatztext", ""),
+            )
+            if aktivitaetsdefinition_roh
+            else None
+        )
         return SemantischesMapping(
             UUID(struktur["mapping_id"]),
             UUID(struktur["projekt_id"]),
@@ -142,4 +161,5 @@ class SQLiteMappingRepository:
             datetime.fromisoformat(struktur["erstellt_am"]),
             datetime.fromisoformat(struktur["geaendert_am"]),
             Mappingstatus(struktur["status"]),
+            aktivitaetsdefinition,
         )

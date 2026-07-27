@@ -5,6 +5,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from framework_mvp.domain.models import (
+    Aktivitaetsbildungsart,
+    Aktivitaetsdefinition,
     MappingModus,
     Mappingstatus,
     Projekt,
@@ -73,6 +75,11 @@ def test_plan_datensatz_und_mapping_werden_projektbezogen_persistiert(
         jetzt,
         jetzt,
         Mappingstatus.ENTWURF,
+        Aktivitaetsdefinition(
+            Aktivitaetsbildungsart.ZUSAMMENGESETZT,
+            ("von", "zu"),
+            " → ",
+        ),
     )
     mapping_pfad = f"projects/{projekt.projekt_id}/mappings/{mapping.mapping_id}.json"
     SQLiteMappingRepository(pfad).speichern(mapping, mapping_pfad)

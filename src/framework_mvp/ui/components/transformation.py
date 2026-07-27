@@ -17,7 +17,9 @@ from framework_mvp.application.profiling.entscheidungsgrundlage import (
     transformationsart_fuer_auffaelligkeit,
     vergleiche_profile,
 )
+from framework_mvp.application.transformation import kombiniere_textspalten
 from framework_mvp.application.transformations_service import TransformationsService
+from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     Transformationsart,
     Transformationsplan,
@@ -31,6 +33,11 @@ def _standardparameter(art: Transformationsart, spalten: list[str]) -> dict[str,
     return {
         Transformationsart.SPALTENAUSWAHL: {},
         Transformationsart.UMBENENNEN: {"mapping": {erste: f"{erste}_neu"}},
+        Transformationsart.WERTE_ERSETZEN: {
+            "gesuchter_wert": "",
+            "ersatzwert": "",
+            "normalisierte_uebereinstimmung": False,
+        },
         Transformationsart.DATENTYP_KONVERTIEREN: {
             "zieltyp": "Text",
             "fehlerverhalten": "Vorgang abbrechen",
@@ -101,7 +108,7 @@ def _auffaelligkeiten(
                         "Spalte": wert.spaltenname,
                         "Art": wert.art,
                         "Anzahl": wert.anzahl,
-                        "Anteil": wert.anteil,
+                        "Anteil": f"{wert.anteil:.1%}",
                         "Details": wert.detailwerte,
                         "Beispielzeilen": ", ".join(map(str, wert.beispielzeilen)),
                     }
@@ -109,7 +116,6 @@ def _auffaelligkeiten(
                 ]
             ),
             hide_index=True,
-            column_config={"Anteil": st.column_config.NumberColumn(format="%.1%%")},
             width="stretch",
         )
         optionen = [
@@ -244,6 +250,15 @@ def _parameterformular(
             parameter["wert"] = st.text_input("Einzusetzender Wert")
         return parameter
     if art is Transformationsart.PLATZHALTER_BEHANDELN:
+        profile = _profil_spalten(profil)
+        erkannt = sorted(
+            {
+                str(klasse["bezeichnung"])
+                for name in betroffene
+                for klasse in profile[name]["fehlwerte"]["platzhalterklassen"]
+                if int(klasse["anzahl"]) > 0
+            }
+        )
         strategie = st.selectbox(
             "Platzhalterstrategie",
             (
@@ -252,7 +267,12 @@ def _parameterformular(
                 "Durch Wert ersetzen",
             ),
         )
-        parameter = {"strategie": strategie}
+        parameter = {
+            "strategie": strategie,
+            "platzhalterarten": st.multiselect(
+                "Erkannte Platzhalterarten", erkannt, default=erkannt
+            ),
+        }
         if strategie == "Durch Wert ersetzen":
             parameter["wert"] = st.text_input("Ersatzwert")
         return parameter
@@ -301,15 +321,70 @@ def _parameterformular(
                 ),
             ),
         }
-    standard = _standardparameter(art, betroffene)
-    return json.loads(
-        st.text_area(
-            "Parameter als nachvollziehbares JSON",
-            value=json.dumps(standard, ensure_ascii=False, indent=2),
-            help="Erst die Schaltfläche unterhalb fügt die Transformation dem Plan hinzu.",
-            key=f"transformationsparameter_{art.value}",
+    if art is Transformationsart.UMBENENNEN:
+        neuer_name = st.text_input("Neuer Spaltenname")
+        return {"mapping": {betroffene[0]: neuer_name} if betroffene else {}}
+    if art is Transformationsart.WERTE_ERSETZEN:
+        return {
+            "gesuchter_wert": st.text_input("Gesuchter Wert"),
+            "ersatzwert": st.text_input("Ersatzwert"),
+            "normalisierte_uebereinstimmung": st.checkbox(
+                "Groß-/Kleinschreibung und Rand-Leerzeichen ignorieren"
+            ),
+        }
+    if art is Transformationsart.SPALTENAUSWAHL:
+        return {}
+    if art is Transformationsart.ZEILEN_FILTERN:
+        operator = st.selectbox(
+            "Bedingung",
+            (
+                "gleich",
+                "ungleich",
+                "enthält",
+                "beginnt mit",
+                "endet mit",
+                "ist leer",
+                "ist nicht leer",
+                "kleiner",
+                "kleiner oder gleich",
+                "größer",
+                "größer oder gleich",
+            ),
         )
-    )
+        return {
+            "operator": operator,
+            "wert": ""
+            if operator in {"ist leer", "ist nicht leer"}
+            else st.text_input("Vergleichswert"),
+        }
+    if art is Transformationsart.ABGELEITETE_SPALTE:
+        zielspalte = st.text_input("Name der neuen Zielspalte")
+        trennzeichen = st.text_input("Text oder Trennzeichen zwischen Bestandteilen", value=" → ")
+        praefix = st.text_input("Präfix (optional)")
+        suffix = st.text_input("Suffix (optional)")
+        strategie = st.selectbox(
+            "Behandlung leerer Werte und textueller Platzhalter",
+            (
+                "Ergebnis leer lassen",
+                "Nur vorhandene Bestandteile kombinieren",
+                "Festen Ersatztext verwenden",
+            ),
+        )
+        ersatztext = (
+            st.text_input("Ersatztext") if strategie == "Festen Ersatztext verwenden" else ""
+        )
+        return {
+            "zielspalte": zielspalte,
+            "art": "Textspalten kombinieren",
+            "quellspalten": betroffene,
+            "trennzeichen": trennzeichen,
+            "praefix": praefix,
+            "suffix": suffix,
+            "fehlwertstrategie": strategie,
+            "ersatztext": ersatztext,
+            "originalspalten_behalten": st.checkbox("Originalspalten behalten", value=True),
+        }
+    raise ValueError(f"Für die Transformationsart {art.value} fehlt ein Eingabeformular.")
 
 
 def _vorher_nachher(
@@ -326,10 +401,24 @@ def _vorher_nachher(
         cache[schluessel] = service.vorschauprofil_erstellen(ergebnis)
     nachher = asdict(cache[schluessel].profil)
     st.write("**Vorher-Nachher-Profil**")
+    vergleich = pd.DataFrame(vergleiche_profile(ausgangsprofil, nachher))
+    for spalte in vergleich.columns:
+        vergleich[spalte] = (
+            vergleich[spalte]
+            .map(
+                lambda wert, name=spalte: (
+                    "–"
+                    if wert is None or pd.isna(wert)
+                    else f"{float(wert):.1%}"
+                    if name == "Relative Veränderung"
+                    else str(wert)
+                )
+            )
+            .astype("string")
+        )
     st.dataframe(
-        pd.DataFrame(vergleiche_profile(ausgangsprofil, nachher)),
+        vergleich,
         hide_index=True,
-        column_config={"Relative Veränderung": st.column_config.NumberColumn(format="%.1%%")},
         width="stretch",
     )
     gemeinsame = sorted(set(_profil_spalten(ausgangsprofil)) & set(_profil_spalten(nachher)))
@@ -396,32 +485,130 @@ def zeige_transformationseditor(
         "Profilinformationen sind Entscheidungshilfen. Keine Transformation wird "
         "automatisch hinzugefügt oder ausgeführt."
     )
-    arten = [wert for wert in Transformationsart if wert is not Transformationsart.TABELLEN_JOIN]
+    st.write("Wählen Sie eine Transformation aus und prüfen Sie die Wirkung vor der Anwendung.")
+    haeufig = (
+        Transformationsart.UMBENENNEN,
+        Transformationsart.DATENTYP_KONVERTIEREN,
+        Transformationsart.WERTE_ERSETZEN,
+        Transformationsart.PLATZHALTER_BEHANDELN,
+        Transformationsart.FEHLWERTE_BEHANDELN,
+        Transformationsart.DUPLIKATE_BEHANDELN,
+        Transformationsart.ZEILEN_FILTERN,
+        Transformationsart.AUSREISSER_BEHANDELN,
+        Transformationsart.ABGELEITETE_SPALTE,
+    )
+    weitere = (Transformationsart.SPALTENAUSWAHL,)
+    bezeichnungen = {
+        Transformationsart.UMBENENNEN: "Spalte umbenennen",
+        Transformationsart.DATENTYP_KONVERTIEREN: "Datentyp ändern",
+        Transformationsart.WERTE_ERSETZEN: "Werte ersetzen",
+        Transformationsart.PLATZHALTER_BEHANDELN: "Textuelle Platzhalter behandeln",
+        Transformationsart.FEHLWERTE_BEHANDELN: "Leere Werte behandeln",
+        Transformationsart.DUPLIKATE_BEHANDELN: "Exakte Duplikate entfernen",
+        Transformationsart.ZEILEN_FILTERN: "Zeilen filtern",
+        Transformationsart.AUSREISSER_BEHANDELN: "Ausreißer behandeln",
+        Transformationsart.ABGELEITETE_SPALTE: "Textspalten kombinieren",
+        Transformationsart.SPALTENAUSWAHL: "Spalten auswählen oder entfernen",
+    }
     vorauswahl = st.session_state.pop("transformations_vorauswahl", None)
-    art_index = arten.index(vorauswahl[0]) if vorauswahl else 0
+    gruppe = st.radio(
+        "Transformationsgruppe",
+        ("Häufige Transformationen", "Weitere Transformationen"),
+        horizontal=True,
+    )
+    arten = list(haeufig if gruppe == "Häufige Transformationen" else weitere)
+    art_index = arten.index(vorauswahl[0]) if vorauswahl and vorauswahl[0] in arten else 0
     art = st.selectbox(
         "Transformationsart",
         arten,
         index=art_index,
-        format_func=lambda wert: wert.value.replace("_", " ").capitalize(),
+        format_func=lambda wert: bezeichnungen[wert],
     )
     alle_spalten = [str(wert) for wert in daten.columns]
     optionen = _spaltenoptionen(art, ausgangsprofil, alle_spalten)
     standard_spalten = [vorauswahl[1]] if vorauswahl and vorauswahl[1] in optionen else []
-    betroffene = st.multiselect("Betroffene Spalten", optionen, default=standard_spalten)
+    spaltenlabel = (
+        "Quellspalten in gewünschter Reihenfolge"
+        if art is Transformationsart.ABGELEITETE_SPALTE
+        else (
+            "Erhaltene Spalten"
+            if art is Transformationsart.SPALTENAUSWAHL
+            else "Betroffene Spalten"
+        )
+    )
+    standard = alle_spalten if art is Transformationsart.SPALTENAUSWAHL else standard_spalten
+    betroffene = st.multiselect(spaltenlabel, optionen, default=standard)
     parameter = _parameterformular(art, betroffene, ausgangsprofil)
     _kontexthinweise(art, betroffene, ausgangsprofil, daten, parameter)
-    st.caption(f"Persistierte Parameter: {json.dumps(parameter, ensure_ascii=False)}")
+    if art is Transformationsart.ABGELEITETE_SPALTE and betroffene:
+        try:
+            beispiel = kombiniere_textspalten(
+                daten.head(10),
+                tuple(betroffene),
+                trennzeichen=str(parameter["trennzeichen"]),
+                praefix=str(parameter["praefix"]),
+                suffix=str(parameter["suffix"]),
+                fehlwertstrategie=str(parameter["fehlwertstrategie"]),
+                ersatztext=str(parameter["ersatztext"]),
+            )
+            st.dataframe(
+                pd.DataFrame(
+                    {
+                        **{name: daten[name].head(10) for name in betroffene},
+                        str(parameter["zielspalte"] or "Vorschau der Zielspalte"): beispiel,
+                    }
+                ),
+                width="stretch",
+            )
+        except ValueError:
+            st.warning("Die Textvorschau kann mit den aktuellen Eingaben nicht erzeugt werden.")
+    with st.expander("Technische Transformationsdefinition"):
+        st.code(json.dumps(parameter, ensure_ascii=False, indent=2), language="json")
     begruendung = st.text_input("Fachliche Begründung (optional)")
-    if st.button("Transformationsschritt hinzufügen", type="primary"):
-        schritt = Transformationsschritt.neu(
+    ungueltig = (
+        not betroffene
+        or (
+            art is Transformationsart.UMBENENNEN
+            and (
+                not parameter.get("mapping")
+                or next(iter(parameter["mapping"].values()), "") in daten.columns
+            )
+        )
+        or (
+            art is Transformationsart.ABGELEITETE_SPALTE
+            and (
+                not str(parameter.get("zielspalte", "")).strip()
+                or str(parameter["zielspalte"]).strip() in daten.columns
+            )
+        )
+    )
+    vorschau_schritt = None
+    if not ungueltig:
+        vorschau_schritt = Transformationsschritt.neu(
             typ=art,
             betroffene_spalten=tuple(betroffene),
             parameter=parameter,
             reihenfolge=len(plan.schritte) + 1,
-            beschreibung=art.value.replace("_", " ").capitalize(),
+            beschreibung=bezeichnungen[art],
             fachliche_begruendung=begruendung,
         )
+        try:
+            wirkung = service.vorschau(service.schritt_hinzufuegen(plan, vorschau_schritt))
+            historie = wirkung.historie[-1]
+            st.write("**Vorschau der Wirkung**")
+            st.write(
+                f"{historie.zeilen_vorher:,} → {historie.zeilen_nachher:,} Zeilen · "
+                f"{historie.spalten_vorher:,} → {historie.spalten_nachher:,} Spalten · "
+                f"{historie.ergebnis_oder_warnung}"
+            )
+            st.dataframe(wirkung.vorschau.head(10), width="stretch")
+            for warnung in wirkung.warnungen:
+                st.warning(warnung)
+        except (Domaenenfehler, KeyError, TypeError, ValueError) as fehler:
+            st.warning(f"Die Vorschau ist mit den aktuellen Eingaben noch nicht möglich: {fehler}")
+    if st.button("Transformation anwenden", type="primary", disabled=ungueltig):
+        assert vorschau_schritt is not None
+        schritt = vorschau_schritt
         plan = service.schritt_hinzufuegen(plan, schritt)
         service.plan_speichern(plan)
         st.session_state.etl_transformationsplan = plan

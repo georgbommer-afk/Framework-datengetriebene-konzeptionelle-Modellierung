@@ -203,9 +203,20 @@ def _abgeleitet(daten: pd.DataFrame, parameter: dict[str, Any]) -> None:
         daten[ziel] = parameter.get("wert")
     elif art == "Kopie":
         daten[ziel] = daten[quellen[0]]
-    elif art == "Text verketten":
-        trennzeichen = str(parameter.get("trennzeichen", ""))
-        daten[ziel] = daten[quellen].astype("string").fillna("").agg(trennzeichen.join, axis=1)
+    elif art in {"Text verketten", "Textspalten kombinieren"}:
+        daten[ziel] = kombiniere_textspalten(
+            daten,
+            tuple(str(name) for name in quellen),
+            trennzeichen=str(parameter.get("trennzeichen", "")),
+            praefix=str(parameter.get("praefix", "")),
+            suffix=str(parameter.get("suffix", "")),
+            fehlwertstrategie=str(
+                parameter.get("fehlwertstrategie", "Nur vorhandene Bestandteile kombinieren")
+            ),
+            ersatztext=str(parameter.get("ersatztext", "")),
+        )
+        if not bool(parameter.get("originalspalten_behalten", True)):
+            daten.drop(columns=list(quellen), inplace=True)
     elif art in {"Addition", "Subtraktion"}:
         links = pd.to_numeric(daten[quellen[0]], errors="coerce")
         rechts = pd.to_numeric(daten[quellen[1]], errors="coerce")
@@ -222,6 +233,43 @@ def _abgeleitet(daten: pd.DataFrame, parameter: dict[str, Any]) -> None:
         }[art]
     else:
         raise Domaenenfehler(f"Die Art der abgeleiteten Spalte {art} ist unbekannt.")
+
+
+def kombiniere_textspalten(
+    daten: pd.DataFrame,
+    quellspalten: tuple[str, ...],
+    *,
+    trennzeichen: str,
+    praefix: str = "",
+    suffix: str = "",
+    fehlwertstrategie: str = "Nur vorhandene Bestandteile kombinieren",
+    ersatztext: str = "",
+) -> pd.Series:
+    """Kombiniert Textwerte ohne technische Fehlwertrepräsentationen."""
+    if not quellspalten:
+        raise Domaenenfehler("Zum Kombinieren muss mindestens eine Quellspalte gewählt werden.")
+    fehlend = [name for name in quellspalten if name not in daten.columns]
+    if fehlend:
+        raise Domaenenfehler(f"Die Quellspalten sind nicht vorhanden: {', '.join(fehlend)}")
+
+    def kombinieren(zeile: pd.Series) -> object:
+        bestandteile: list[str] = []
+        hat_fehlwert = False
+        for wert in zeile:
+            ist_fehlwert = pd.isna(wert) or _platzhalter(wert)
+            if ist_fehlwert:
+                hat_fehlwert = True
+                if fehlwertstrategie == "Festen Ersatztext verwenden":
+                    bestandteile.append(ersatztext)
+                continue
+            bestandteile.append(str(wert).strip())
+        if hat_fehlwert and fehlwertstrategie == "Ergebnis leer lassen":
+            return pd.NA
+        if not bestandteile:
+            return pd.NA
+        return f"{praefix}{trennzeichen.join(bestandteile)}{suffix}"
+
+    return daten.loc[:, list(quellspalten)].apply(kombinieren, axis=1).astype("string")
 
 
 def _wende_schritt_an(
@@ -241,6 +289,21 @@ def _wende_schritt_an(
         ):
             raise Domaenenfehler("Technische Zielnamen müssen eindeutig und nicht leer sein.")
         return daten.rename(columns=mapping).copy(), f"{len(mapping)} Spalten umbenannt"
+    if schritt.typ is Transformationsart.WERTE_ERSETZEN:
+        gesucht = str(parameter.get("gesuchter_wert", ""))
+        ersatz = parameter.get("ersatzwert")
+        normalisiert = bool(parameter.get("normalisierte_uebereinstimmung", False))
+        anzahl = 0
+        for name in schritt.betroffene_spalten:
+            maske = (
+                daten[name].astype("string").str.strip().str.casefold()
+                == gesucht.strip().casefold()
+                if normalisiert
+                else daten[name].astype("string") == gesucht
+            )
+            anzahl += int(maske.sum())
+            daten.loc[maske.fillna(False), name] = ersatz
+        return daten, f"{anzahl} Werte ersetzt"
     if schritt.typ is Transformationsart.DATENTYP_KONVERTIEREN:
         fehler = 0
         for name in schritt.betroffene_spalten:
@@ -249,8 +312,25 @@ def _wende_schritt_an(
         return daten, f"{fehler} nicht konvertierbare Werte"
     if schritt.typ is Transformationsart.PLATZHALTER_BEHANDELN:
         strategie = parameter["strategie"]
+        ausgewaehlt = {str(wert) for wert in parameter.get("platzhalterarten", ())}
+
+        def ist_ausgewaehlt(wert: object) -> bool:
+            if not _platzhalter(wert):
+                return False
+            text = str(wert)
+            klasse = (
+                "Leere Zeichenkette"
+                if text == ""
+                else "Nur Leerzeichen"
+                if not text.strip()
+                else "NaN"
+                if text.strip().upper() == "NAN"
+                else text.strip().upper()
+            )
+            return not ausgewaehlt or klasse in ausgewaehlt
+
         for name in schritt.betroffene_spalten:
-            maske = daten[name].map(_platzhalter) & daten[name].notna()
+            maske = daten[name].map(ist_ausgewaehlt) & daten[name].notna()
             if strategie == "Als echten Fehlwert interpretieren":
                 daten.loc[maske, name] = pd.NA
             elif strategie == "Durch Wert ersetzen":

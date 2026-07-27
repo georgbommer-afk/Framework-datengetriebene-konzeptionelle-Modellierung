@@ -84,3 +84,15 @@ def test_leere_datei_wird_abgelehnt() -> None:
     """Ein Upload ohne Bytes wird verständlich abgelehnt."""
     with pytest.raises(Datenimportfehler, match="leer"):
         ermittle_dateimetadaten("leer.csv", b"")
+
+
+def test_xlsx_endung_mit_csv_inhalt_wird_abgelehnt() -> None:
+    """Dateiendung und Inhalt dürfen sich bei einer Arbeitsmappe nicht widersprechen."""
+    with pytest.raises(Datenimportfehler, match="keine gültige Excel"):
+        ermittle_dateimetadaten("falsch.xlsx", b"a,b\n1,2\n")
+
+
+def test_csv_endung_mit_zip_signatur_wird_abgelehnt() -> None:
+    """Ein ZIP-Container wird nicht fälschlich als CSV akzeptiert."""
+    with pytest.raises(Datenimportfehler, match="keine Textdatei"):
+        ermittle_dateimetadaten("falsch.csv", b"PK\x03\x04rest")

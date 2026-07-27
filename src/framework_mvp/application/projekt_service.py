@@ -1,9 +1,11 @@
 """Anwendungsservice für die Projektverwaltung."""
 
+from dataclasses import replace
+from datetime import UTC, datetime
 from uuid import UUID
 
 from framework_mvp.application.ports.projekt_repository import ProjektRepository
-from framework_mvp.domain.exceptions import ProjektNichtGefunden
+from framework_mvp.domain.exceptions import Domaenenfehler, ProjektNichtGefunden
 from framework_mvp.domain.models import (
     BeteiligtePerson,
     Projekt,
@@ -24,14 +26,13 @@ class ProjektService:
         *,
         bezeichnung: str,
         untersuchungsauftrag: Untersuchungsauftrag,
-        status: Projektstatus = Projektstatus.ENTWURF,
         beteiligte_personen: tuple[BeteiligtePerson, ...] = (),
     ) -> Projekt:
         """Erzeugt und speichert ein neues Projekt."""
         projekt = Projekt.neu(
             bezeichnung=bezeichnung,
             untersuchungsauftrag=untersuchungsauftrag,
-            status=status,
+            status=Projektstatus.ENTWURF,
             beteiligte_personen=beteiligte_personen,
         )
         self._repository.speichern(projekt)
@@ -63,6 +64,44 @@ class ProjektService:
             untersuchungsauftrag=untersuchungsauftrag,
             status=status,
             beteiligte_personen=beteiligte_personen,
+        )
+        self._repository.speichern(aktualisiert)
+        return aktualisiert
+
+    def betrachtungszeitraum_aus_event_log_aktualisieren(
+        self,
+        projekt_id: UUID,
+        *,
+        fruehester_ereigniszeitpunkt: datetime,
+        spaetester_ereigniszeitpunkt: datetime,
+    ) -> Projekt:
+        """Übernimmt den fachlichen Zeitraum ausschließlich aus einem erzeugten Event Log."""
+        projekt = self._repository.laden(projekt_id)
+        if projekt is None:
+            raise ProjektNichtGefunden(f"Das Projekt mit der ID {projekt_id} wurde nicht gefunden.")
+        if (
+            fruehester_ereigniszeitpunkt.utcoffset() is None
+            or spaetester_ereigniszeitpunkt.utcoffset() is None
+        ):
+            raise Domaenenfehler(
+                "Ereigniszeitpunkte für den Betrachtungszeitraum müssen zeitzonenbewusst sein."
+            )
+        from framework_mvp.domain.models import (
+            Betrachtungszeitraum,
+            BetrachtungszeitraumModus,
+        )
+
+        zeitraum = Betrachtungszeitraum(
+            BetrachtungszeitraumModus.AUS_DATEN,
+            fruehester_ereigniszeitpunkt.astimezone(UTC).date(),
+            spaetester_ereigniszeitpunkt.astimezone(UTC).date(),
+        )
+        auftrag = replace(projekt.untersuchungsauftrag, betrachtungszeitraum=zeitraum)
+        aktualisiert = projekt.aktualisiert(
+            bezeichnung=projekt.bezeichnung,
+            untersuchungsauftrag=auftrag,
+            status=projekt.status,
+            beteiligte_personen=projekt.beteiligte_personen,
         )
         self._repository.speichern(aktualisiert)
         return aktualisiert

@@ -7,8 +7,10 @@ from uuid import UUID
 
 import pandas as pd
 
+from framework_mvp.application.transformation import kombiniere_textspalten
 from framework_mvp.domain.models import (
     Attributrolle,
+    Ereignisrolle,
     MappingModus,
     SemantischesMapping,
 )
@@ -52,7 +54,12 @@ def _attribute(
         if zuordnung.rolle is Attributrolle.IGNORIERT:
             continue
         if zuordnung.spaltenname in daten:
-            ziel[zuordnung.spaltenname] = daten[zuordnung.spaltenname].to_numpy()
+            zielname = (
+                "source_event_id"
+                if zuordnung.rolle is Ereignisrolle.QUELL_EREIGNIS_ID
+                else zuordnung.spaltenname
+            )
+            ziel[zielname] = daten[zuordnung.spaltenname].to_numpy()
             rollen[zuordnung.spaltenname] = zuordnung.rolle.value
     return ziel, rollen
 
@@ -61,10 +68,28 @@ def _ereignisorientiert(
     daten: pd.DataFrame, mapping: SemantischesMapping
 ) -> tuple[pd.DataFrame, dict[str, str], dict[str, str]]:
     quellzeilen = pd.Series(range(len(daten)), index=daten.index, dtype="int64")
+    definition = mapping.wirksame_aktivitaetsdefinition
+    if definition is None:
+        aktivitaeten = pd.Series(pd.NA, index=daten.index)
+        aktivitaetsherkunft = ""
+    elif len(definition.quellspalten) == 1:
+        aktivitaeten = daten[definition.quellspalten[0]]
+        aktivitaetsherkunft = definition.quellspalten[0]
+    else:
+        aktivitaeten = kombiniere_textspalten(
+            daten,
+            definition.quellspalten,
+            trennzeichen=definition.trennzeichen,
+            praefix=definition.praefix,
+            suffix=definition.suffix,
+            fehlwertstrategie=definition.fehlwertstrategie,
+            ersatztext=definition.ersatztext,
+        )
+        aktivitaetsherkunft = " + ".join(definition.quellspalten)
     ereignisse = pd.DataFrame(
         {
             "case_id": _fall_ids(daten, mapping),
-            "activity": daten[mapping.aktivitaetsspalte],
+            "activity": aktivitaeten,
             "timestamp": daten[mapping.zeitstempelspalte],
             "_source_row": quellzeilen,
             "_source_timestamp_column": mapping.zeitstempelspalte,
@@ -78,7 +103,7 @@ def _ereignisorientiert(
     }
     herkunft = {
         "case_id": mapping.fall_id.trennzeichen.join(mapping.fall_id.spalten),
-        "activity": mapping.aktivitaetsspalte,
+        "activity": aktivitaetsherkunft,
         "timestamp": mapping.zeitstempelspalte,
     }
     for ziel, quelle in optionen.items():
@@ -112,7 +137,12 @@ def _breit(
             teil["lifecycle"] = daten.loc[index, zuordnung.statusspalte].to_numpy()
         for spalte in mapping.spaltenzuordnungen:
             if spalte.rolle is not Attributrolle.IGNORIERT:
-                teil[spalte.spaltenname] = daten.loc[index, spalte.spaltenname].to_numpy()
+                zielname = (
+                    "source_event_id"
+                    if spalte.rolle is Ereignisrolle.QUELL_EREIGNIS_ID
+                    else spalte.spaltenname
+                )
+                teil[zielname] = daten.loc[index, spalte.spaltenname].to_numpy()
         teile.append(teil)
     ereignisse = (
         pd.concat(teile, ignore_index=True)

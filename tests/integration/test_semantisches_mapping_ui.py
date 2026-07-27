@@ -18,13 +18,21 @@ def test_mapping_seite_startet_und_verlangt_zwischendatensatz(
     """Framework-Schritt 3 startet projektbezogen mit sechs sichtbaren Teilschritten."""
     monkeypatch.setenv(DATENBANKPFAD_UMGEBUNGSVARIABLE, str(tmp_path / "app.sqlite"))
     monkeypatch.setenv(WORKSPACE_UMGEBUNGSVARIABLE, str(tmp_path / "workspace"))
-    erstelle_projekt_service().projekt_anlegen(
+    projekt = erstelle_projekt_service().projekt_anlegen(
         bezeichnung="Mapping-Projekt",
         untersuchungsauftrag=Untersuchungsauftrag("", "", Systemtyp.KOMBINIERT, ""),
     )
     anwendung = AppTest.from_file(ANWENDUNGSPFAD).run()
+    anwendung.session_state["aktuelles_projekt_id"] = str(projekt.projekt_id)
     anwendung.radio[0].set_value("3 Semantisches Mapping").run()
     assert not anwendung.exception
     assert any(element.value == "3 Semantisches Mapping" for element in anwendung.header)
-    assert any("Schritt 1 von 6" in element.value for element in anwendung.caption)
-    assert any("Zwischendatensatz erzeugt" in element.value for element in anwendung.warning)
+    assert any("Zwischendatensatz vorhanden" in element.value for element in anwendung.warning)
+    assert not any(element.label == "Aktuelles Projekt" for element in anwendung.selectbox)
+    assert not any(
+        element.label == "Zwischendatensatz auswählen" for element in anwendung.selectbox
+    )
+    assert any(
+        "Aktuelles Projekt: Mapping-Projekt" in element.value for element in anwendung.markdown
+    )
+    assert any(element.label == "Zurück zu ETL" for element in anwendung.button)

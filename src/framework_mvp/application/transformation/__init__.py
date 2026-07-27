@@ -3,6 +3,7 @@
 from framework_mvp.application.transformation.engine import (
     Transformationsergebnis,
     fuehre_transformationsplan_aus,
+    kombiniere_textspalten,
 )
 from framework_mvp.application.transformation.joins import (
     JoinPruefung,
@@ -15,5 +16,6 @@ __all__ = [
     "Transformationsergebnis",
     "fuehre_join_aus",
     "fuehre_transformationsplan_aus",
+    "kombiniere_textspalten",
     "pruefe_join",
 ]

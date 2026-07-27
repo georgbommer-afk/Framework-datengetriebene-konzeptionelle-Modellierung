@@ -40,26 +40,27 @@ Das erzeugte konzeptionelle Modell kann jedoch als Grundlage für eine spätere 
 
 Die Streamlit-Anwendung besitzt sechs Hauptbereiche: Projektverwaltung, ETL, semantisches
 Mapping, Event-Log-Aufbau, Datenqualitätsprüfung und Process Mining. Projektbezogene
-Datenquellen werden im Datenquellenkatalog Q registriert. Der ETL-Wizard verarbeitet jeweils eine
-CSV- oder XLSX-Datei temporär, führt durch Importeinstellungen und Tabellenblattauswahl und zeigt
-eine unveränderte Vorschau der ersten maximal 200 Zeilen sowie eine kompakte Spaltenübersicht.
+Datenquellen werden im Datenquellenkatalog Q registriert. Der zentral in Schritt 1 gewählte
+Projektkontext gilt auch für den ETL-Schritt; ein Projektwechsel führt zurück zu Schritt 1. Der
+fünfstufige ETL-Ablauf verbindet Datenquelle und Datei, Tabelle und Vorschau, Datenprofil,
+Transformation und Ergebnis. CSV oder XLSX werden anhand von Endung und Inhalt erkannt.
+CSV-Grundeinstellungen werden nach Möglichkeit automatisch ermittelt und können in erweiterten
+Einstellungen korrigiert werden. Die unveränderte Vorschau umfasst maximal 200 Zeilen.
 
-Die Datei, das vollständig eingelesene DataFrame und das technische Datenprofil bleiben im
-temporären Streamlit-Sitzungszustand. Weder Uploadbytes, Vorschauen noch Profile werden in SQLite
-oder im Workspace gespeichert. Die maximale Uploadgröße beträgt standardmäßig 50 MB und kann mit
-einer positiven Ganzzahl in `FRAMEWORK_MVP_MAX_UPLOAD_MB` angepasst werden.
+Vor einer Bestätigung bleiben Uploadbytes und Berechnungsergebnisse im Streamlit-Sitzungszustand.
+Nach der im Profil integrierten Bestätigung werden Raw-Datei und Profil dauerhaft gespeichert.
+Bestätigte Importe sind mit lesbarer Datei-, Tabellen- und Zeitangabe erneut wählbar; Raw-Pfad,
+Prüfsumme und Profil werden vor der Wiederverwendung validiert. Die maximale Uploadgröße beträgt
+standardmäßig 50 MB und kann mit einer positiven Ganzzahl in
+`FRAMEWORK_MVP_MAX_UPLOAD_MB` angepasst werden.
 
 Die technische Profilierung berechnet Gesamtkennzahlen, echte Pandas-Fehlwerte, getrennte
 textuelle Fehlwertplatzhalter sowie numerische, kategoriale und zeitbezogene Spaltenprofile auf
 der vollständigen Tabelle. Aggregierte Histogramme, Boxplots, Kategoriehäufigkeiten und
 Zeitintervalle unterstützen die visuelle Prüfung, ohne die Quelldaten zu verändern. Eine
-Datenbereinigung oder Transformation findet dabei nicht statt.
-
-Der vollständige ETL-Wizard umfasst außerdem die verbindliche Importprüfung. Nach Bestätigung
-wird die Originaldatei bytegenau und inhaltsadressiert gespeichert, das vollständige technische
-Profil als versioniertes JSON abgelegt und der Importvorgang mit Schema 4 in SQLite dokumentiert.
-Gespeicherte Importe können projektbezogen geöffnet und erneut auf Pfad-, Prüfsummen- und
-Profilintegrität geprüft werden.
+Die Profilansicht erklärt leere Werte und textuelle Platzhalter getrennt, übersetzt technische
+Datentypen und hebt auffällige Spalten hervor. Die verbindliche Auswahl als Ausgangsdaten ist
+direkt am Ende dieses Abschnitts angeordnet.
 
 Die lokale Artefaktstruktur lautet:
 
@@ -85,16 +86,26 @@ workspace/projects/<projekt-id>/
 
 Nach der Importbestätigung können geordnete, aktivierbare Transformationspläne erstellt werden.
 Sie unterstützen Spaltenauswahl und -umbenennung, Typkonvertierung, explizite Behandlung von
-Platzhaltern, Fehlwerten, Duplikaten und Ausreißern, Filter sowie abgeleitete Spalten.
-Kontrollierte Joins prüfen Schlüssel und Kardinalität vor der Ausführung. Raw-Dateien bleiben
-unverändert. Ein erzeugter Zwischendatensatz wird als `CSV.GZ`, Schema-JSON und
-Transformation-JSON im Ordner `interim` gespeichert.
+Platzhaltern, Fehlwerten, Duplikaten und Ausreißern, Filter sowie das Kombinieren beliebig vieler
+Textspalten. Die Oberfläche verwendet typisierte Eingaben; reproduzierbares JSON bleibt
+schreibgeschützt einsehbar. Kontrollierte Left-, Inner- und Full-Outer-Joins erklären ihre
+fachliche Wirkung, prüfen Schlüssel und Kardinalität und verlangen bei n:m-Beziehungen eine
+Bestätigung. Raw-Dateien bleiben unverändert. Ein erzeugter Zwischendatensatz T wird als
+`CSV.GZ`, Schema-JSON und Transformation-JSON im Ordner `interim` gespeichert. Nach erfolgreicher
+Prüfung der Artefakte navigiert die Anwendung automatisch zum semantischen Mapping.
 
-Framework-Schritt 3 ordnet anschließend Spalten eines Zwischendatensatzes semantischen
-Ereignisrollen zu. Ereignisorientierte und breite Zeitstempeldatensätze werden unterstützt.
-Validierung, Warnungen und eine standardisierte temporäre Ereignisvorschau helfen bei der
-fachlichen Prüfung; ein Event Log wird in diesem Schritt noch nicht erzeugt. Mappingdateien
-liegen projektbezogen unter `mappings/`.
+Framework-Schritt 3 übernimmt das zentral gewählte Projekt und den aktiven, integritätsgeprüften
+Zwischendatensatz. Der kompakte Ablauf besteht aus Datenstruktur, Zuordnung sowie Prüfung und
+Speicherung. Ereignisorientierte Daten besitzen eine Ereigniszeile mit Fall-ID, Aktivität und
+Zeitstempel; breite Daten enthalten mehrere Zeitstempelspalten, aus denen Schritt 4 Ereignisse
+erzeugt. Neue Mappings verwenden genau eine vorhandene oder bereits in Schritt 2 kombinierte
+Fall-ID-Spalte. Die Aktivität kann aus einer vorhandenen Spalte stammen oder virtuell aus mehreren
+Spalten, Affixen und einem Trennzeichen zusammengesetzt werden. Optionale Standardrollen und
+Attributgruppen werden dynamisch ausschließlich aus noch verfügbaren Spalten angeboten.
+Validierung, Warnungsbestätigung und eine auf 100 Zeilen begrenzte kanonische Vorschau helfen bei
+der fachlichen Prüfung. Schritt 3 verändert den Zwischendatensatz nicht und erzeugt noch kein
+Event Log. Nach erfolgreicher Speicherung navigiert die Anwendung automatisch zu Schritt 4;
+Mappingdateien liegen projektbezogen unter `mappings/`.
 
 Framework-Schritt 4 wendet ein validiertes Mapping reproduzierbar an und erzeugt ein kanonisches
 Event Log mit `case_id`, `activity`, `timestamp`, stabiler `event_id`, zusätzlichen Attributen
@@ -222,3 +233,29 @@ process-mining-conceptual-model-framework/
 ├── tests/
 ├── outputs/
 └── requirements.txt
+
+### Miniguide
+für das Bearbeiten der sqlite-Dateien
+1 - Finden
+  cd /Users/georgbommer/MasterarbeitGithubRepo
+
+  find . -type f \
+    \( -iname "*.sqlite" -o -iname "*.sqlite3" -o -iname "*.db" \) \
+    -not -path "./.git/*" \
+    -not -path "./.venv/*" \
+    -print
+2 - Löschen
+  find . -type f \
+  \( -iname "*.sqlite" -o -iname "*.sqlite3" -o -iname "*.db" \) \
+  -not -path "./.git/*" \
+  -not -path "./.venv/*" \
+  -print -delete
+3 - Kontrollieren
+find . -type f \
+  \( -iname "*.sqlite" -o -iname "*.sqlite3" -o -iname "*.db" \) \
+  -not -path "./.git/*" \
+  -not -path "./.venv/*" \
+  -print
+
+Initieren der streamlit App als localhost
+  .venv/bin/python -m streamlit run streamlit_app.py

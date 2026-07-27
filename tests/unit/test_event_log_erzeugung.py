@@ -1,5 +1,6 @@
 """Unit-Tests des kanonischen Event-Log-Aufbaus."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -7,6 +8,8 @@ import pandas as pd
 
 from framework_mvp.application.event_log import erzeuge_event_log
 from framework_mvp.domain.models import (
+    Aktivitaetsbildungsart,
+    Aktivitaetsdefinition,
     Attributrolle,
     MappingModus,
     Mappingstatus,
@@ -95,3 +98,37 @@ def test_breiter_datensatz_wird_unpivotiert_und_leere_zeit_uebersprungen() -> No
     assert ergebnis.ereignisse["activity"].tolist() == ["Erstellt"]
     assert ergebnis.ereignisse["_source_timestamp_column"].tolist() == ["erstellt"]
     assert ergebnis.ereignisse["produkt"].tolist() == ["P"]
+
+
+def test_event_log_wendet_gespeicherte_zusammengesetzte_aktivitaet_an() -> None:
+    """Schritt 4 verwendet Reihenfolge, Affixe und Fehlwertstrategie des Mappings."""
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A", "A"],
+            "position": [1, 1],
+            "von": ["C01", None],
+            "zu": ["MAS", "Z02"],
+            "zeit": ["2025-01-01", "2025-01-02"],
+            "ressource": ["R1", "R2"],
+            "produkt": ["P", "P"],
+        }
+    )
+    mapping = replace(
+        _mapping(MappingModus.EREIGNISORIENTIERT),
+        aktivitaetsspalte="",
+        aktivitaetsdefinition=Aktivitaetsdefinition(
+            Aktivitaetsbildungsart.ZUSAMMENGESETZT,
+            ("von", "zu"),
+            " zu ",
+            "von ",
+            "",
+            "Festen Ersatztext verwenden",
+            "unbekannt",
+        ),
+    )
+    ergebnis = erzeuge_event_log(daten, mapping, uuid4())
+    assert ergebnis.ereignisse["activity"].tolist() == [
+        "von C01 zu MAS",
+        "von unbekannt zu Z02",
+    ]
+    assert ergebnis.herkunft_standardspalten["activity"] == "von + zu"

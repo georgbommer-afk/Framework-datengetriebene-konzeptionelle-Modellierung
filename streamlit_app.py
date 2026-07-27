@@ -14,6 +14,7 @@ from framework_mvp.bootstrap import (
     erstelle_projekt_service,
     erstelle_transformations_service,
 )
+from framework_mvp.ui.navigation import FRAMEWORK_BEREICHE
 from framework_mvp.ui.pages.datenqualitaet import zeige_datenqualitaet_seite
 from framework_mvp.ui.pages.etl import zeige_etl_seite
 from framework_mvp.ui.pages.event_log import zeige_event_log_seite
@@ -31,21 +32,18 @@ st.set_page_config(
 st.title("Datengetriebene konzeptionelle Modellierung")
 st.caption(f"Framework-MVP · Version {__version__}")
 
+if naechster_bereich := st.session_state.pop("naechster_framework_bereich", None):
+    st.session_state.framework_bereich = naechster_bereich
+
 seite = st.sidebar.radio(
     "Framework-Bereich",
-    (
-        "1 Projektverwaltung",
-        "2 ETL durchführen",
-        "3 Semantisches Mapping",
-        "4 Event Log aufbauen",
-        "5 Datenqualität prüfen",
-        "6 Process Mining durchführen",
-    ),
+    FRAMEWORK_BEREICHE,
+    key="framework_bereich",
 )
 projekt_service = erstelle_projekt_service()
 workspace = WorkspaceKonfiguration.ermitteln()
-if seite == "1 Projektverwaltung":
-    zeige_projektverwaltung(projekt_service)
+if seite == "1 Projekt und Untersuchungsauftrag":
+    zeige_projektverwaltung(projekt_service, erstelle_datenquelle_service())
 elif seite == "2 ETL durchführen":
     zeige_etl_seite(
         projekt_service,
@@ -61,6 +59,7 @@ elif seite == "3 Semantisches Mapping":
         projekt_service,
         transformations_service,
         erstelle_mapping_service(workspace=workspace),
+        erstelle_datenquelle_service(),
     )
 elif seite == "4 Event Log aufbauen":
     zeige_event_log_seite(
