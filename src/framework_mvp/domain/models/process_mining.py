@@ -17,10 +17,45 @@ class ProcessMiningStatus(StrEnum):
 
 
 class DiscoveryVerfahren(StrEnum):
-    """Im MVP unterstützte Discovery-Verfahren."""
+    """Persistierte Verfahren einschließlich kontrolliert lesbarer Legacy-Analysen."""
 
     INDUCTIVE_MINER = "inductive_miner"
     HEURISTICS_MINER = "heuristics_miner"
+
+
+class MinerVariante(StrEnum):
+    """Durch den Schwellwert k eindeutig bestimmte Variante des Inductive Miner."""
+
+    INDUCTIVE_MINER = "inductive_miner"
+    INDUCTIVE_MINER_INFREQUENT = "inductive_miner_infrequent"
+
+
+class Prozessnotation(StrEnum):
+    """Die drei in Algorithmus 6 wählbaren Ausgabeformen des Prozessmodells P."""
+
+    PROZESSBAUM = "prozessbaum"
+    PETRINETZ = "petrinetz"
+    BPMN = "bpmn"
+
+    @property
+    def dateiendung(self) -> str:
+        return {
+            Prozessnotation.PROZESSBAUM: "ptml",
+            Prozessnotation.PETRINETZ: "pnml",
+            Prozessnotation.BPMN: "bpmn",
+        }[self]
+
+    @property
+    def mime_type(self) -> str:
+        return "application/xml"
+
+    @property
+    def bezeichnung(self) -> str:
+        return {
+            Prozessnotation.PROZESSBAUM: "Prozessbaum",
+            Prozessnotation.PETRINETZ: "Petrinetz",
+            Prozessnotation.BPMN: "BPMN",
+        }[self]
 
 
 class ProcessMiningFiltertyp(StrEnum):
@@ -105,23 +140,23 @@ class DfgErgebnis:
 
 @dataclass(frozen=True, slots=True)
 class DiscoveryKonfiguration:
-    """Typisierte Parameter genau eines Discovery-Verfahrens."""
+    """Die zwei menschlichen Entscheidungen aus Algorithmus 6."""
 
-    verfahren: DiscoveryVerfahren
-    noise_threshold: float = 0.0
-    dependency_threshold: float = 0.5
-    and_threshold: float = 0.65
-    loop_two_threshold: float = 0.5
+    schwellwert_k: float
+    prozessnotation: Prozessnotation
 
     def __post_init__(self) -> None:
-        for name, wert in (
-            ("Noise Threshold", self.noise_threshold),
-            ("Dependency Threshold", self.dependency_threshold),
-            ("AND Threshold", self.and_threshold),
-            ("Loop-two Threshold", self.loop_two_threshold),
-        ):
-            if not 0.0 <= wert <= 1.0:
-                raise Domaenenfehler(f"{name} muss zwischen 0,0 und 1,0 liegen.")
+        if not 0.0 <= self.schwellwert_k <= 1.0:
+            raise Domaenenfehler("Der Schwellwert k muss zwischen 0 und 1 liegen.")
+
+    @property
+    def miner_variante(self) -> MinerVariante:
+        """Verwendet bei k=0 IM und bei k>0 ausschließlich IM infrequent."""
+        return (
+            MinerVariante.INDUCTIVE_MINER
+            if self.schwellwert_k == 0.0
+            else MinerVariante.INDUCTIVE_MINER_INFREQUENT
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,11 +189,13 @@ class ProcessMiningWarnung:
 class DiscoveryErgebnisse:
     """In-Memory-Ergebnis eines Discovery-Laufs."""
 
+    prozessnotation: Prozessnotation
+    miner_variante: MinerVariante
     statistik: ModellStatistik
-    pnml: bytes
-    process_tree_ptml: bytes | None
+    prozessmodell: bytes
+    prozessbaum_ptml: bytes
     modell_svg: bytes | None
-    process_tree_svg: bytes | None
+    prozessbaum_svg: bytes | None
     warnungen: tuple[ProcessMiningWarnung, ...]
 
 

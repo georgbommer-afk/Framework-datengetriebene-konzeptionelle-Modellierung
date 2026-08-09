@@ -135,7 +135,12 @@ class DatenimportService:
         """Verknüpft Prüfsumme und unveränderliche Importparameter."""
         return (datei_metadaten.sha256, parameter)
 
-    def profil_erstellen(self, daten: pd.DataFrame) -> Profilierungsergebnis:
+    def profil_erstellen(
+        self, daten: pd.DataFrame, zusaetzliche_platzhalter: tuple[str, ...] = ()
+    ) -> Profilierungsergebnis:
         """Berechnet Profilkennzahlen und getrennte aggregierte Diagrammdaten."""
-        profil = erstelle_datenprofil(daten)
+        bereinigt = tuple(
+            dict.fromkeys(wert.strip() for wert in zusaetzliche_platzhalter if wert.strip())
+        )
+        profil = erstelle_datenprofil(daten, bereinigt)
         return Profilierungsergebnis(profil, erstelle_diagrammdaten(daten, profil))

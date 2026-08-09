@@ -139,8 +139,15 @@ def test_event_log_und_qualitaetsartefakte_speichern_und_laden(tmp_path: Path) -
     lineage = json.loads(
         (workspace.basisverzeichnis / event_log.relativer_lineage_pfad).read_text()
     )
-    assert schema["artefaktversion"] == 1
+    assert schema["artefaktversion"] == 2
     assert lineage["mapping_id"] == str(mapping.mapping_id)
+    assert lineage["event_log_konfiguration"]["zwischendatensatz_id"] == str(
+        datensatz.zwischendatensatz_id
+    )
+    assert lineage["herkunft_zusaetzliche_attribute"] == {"attribut": "attribut"}
+    assert lineage["technische_ereignisherkunft"]["urspruenglicher_zeitstempelwert"] == (
+        "_source_timestamp_raw"
+    )
 
     qualitaet = DatenqualitaetService(SQLiteQualitaetRepository(db), event_service, speicher)
     qualitaetsartefakt = qualitaet.speichern(

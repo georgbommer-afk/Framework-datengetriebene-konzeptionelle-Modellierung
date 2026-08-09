@@ -1,9 +1,9 @@
-"""Orchestrierung regelbasierter Qualitätsprüfung und bestätigter Maßnahmen."""
+"""Quality-Gate und E*-Freigabe mit getrennten Legacy-Qualitätskopien."""
 
 import gzip
 import hashlib
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import PurePosixPath
@@ -14,35 +14,258 @@ import pandas as pd
 from framework_mvp.application.datenqualitaet import (
     Massnahmenergebnis,
     QualitaetspruefungErgebnis,
+    QualityGateKontext,
     pruefe_event_log,
+    pruefe_quality_gate,
     wende_massnahmen_an,
 )
+from framework_mvp.application.datenquelle_service import DatenquelleService
 from framework_mvp.application.event_log_service import EventLogService
+from framework_mvp.application.mappingtabelle_service import MappingtabelleService
 from framework_mvp.application.ports.qualitaet_repository import QualitaetRepository
+from framework_mvp.application.transformations_service import TransformationsService
+from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
+    FachlicheEntscheidung,
+    Freigabestatus,
+    Qualitaetsfreigabe,
     Qualitaetsmassnahmenplan,
     QualitaetspruefungArtefakt,
     Qualitaetsregel,
+    QualityGateErgebnis,
     Schweregrad,
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
 
 QUALITAETS_ARTEFAKTVERSION = 1
+QUALITY_GATE_ARTEFAKTVERSION = 2
 
 
 class DatenqualitaetService:
-    """Prüft Event Logs und speichert ausschließlich bestätigte Maßnahmen."""
+    """Prüft die Artefaktkette; alte Maßnahmen bleiben ausschließlich Legacy-API."""
 
     def __init__(
         self,
         repository: QualitaetRepository,
         event_log_service: EventLogService,
         artefakte: ImportartefaktSpeicher,
+        transformations_service: TransformationsService | None = None,
+        datenquelle_service: DatenquelleService | None = None,
+        mappingtabelle_service: MappingtabelleService | None = None,
     ) -> None:
         self._repository = repository
         self._event_log_service = event_log_service
         self._artefakte = artefakte
+        self._transformations_service = transformations_service
+        self._datenquelle_service = datenquelle_service
+        self._mappingtabelle_service = mappingtabelle_service
+
+    def _quality_gate_kontext(self, projekt_id: UUID, event_log_id: UUID) -> QualityGateKontext:
+        """Leitet Q, T, optional M und Konfiguration ausschließlich aus E ab."""
+        if self._transformations_service is None or self._datenquelle_service is None:
+            raise Domaenenfehler(
+                "Die Services für Q und T sind für das Quality-Gate nicht konfiguriert."
+            )
+        event = self._event_log_service.kontext_laden(event_log_id)
+        if event.artefakt.projekt_id != projekt_id:
+            raise Domaenenfehler("Der aktive Event Log gehört nicht zum aktuellen Projekt.")
+        importe = []
+        datenquellen = {}
+        for import_id in event.zwischendatensatz.import_ids:
+            geladen = self._transformations_service.import_laden(import_id)
+            if geladen is None:
+                raise Importintegritaetsfehler(
+                    f"Der in T referenzierte Import {import_id} wurde nicht gefunden."
+                )
+            importvorgang = geladen.importvorgang
+            if importvorgang.projekt_id != projekt_id:
+                raise Importintegritaetsfehler(
+                    "Ein Ausgangsimport von T gehört nicht zum aktuellen Projekt."
+                )
+            importe.append(importvorgang)
+            quelle = self._datenquelle_service.datenquelle_laden(importvorgang.datenquellen_id)
+            if quelle is not None:
+                datenquellen[quelle.datenquellen_id] = quelle
+        mapping_sha256 = ""
+        if event.mappingtabelle is not None:
+            if self._mappingtabelle_service is None:
+                raise Domaenenfehler(
+                    "Die referenzierte Mappingtabelle kann im Quality-Gate nicht geprüft werden."
+                )
+            mapping_sha256 = self._mappingtabelle_service.pruefsumme(
+                event.mappingtabelle.mapping_id
+            )
+        return QualityGateKontext(
+            event,
+            tuple(datenquellen.values()),
+            tuple(importe),
+            mapping_sha256,
+        )
+
+    def quality_gate_pruefen(
+        self,
+        projekt_id: UUID,
+        event_log_id: UUID,
+        entscheidungen: tuple[FachlicheEntscheidung, ...] = (),
+    ) -> QualityGateErgebnis:
+        """Prüft die unveränderte Artefaktkette nach Tabelle 3.14 und Pseudocode 5."""
+        return pruefe_quality_gate(
+            self._quality_gate_kontext(projekt_id, event_log_id), entscheidungen
+        )[0]
+
+    def freigeben(
+        self,
+        freigabe_id: UUID,
+        projekt_id: UUID,
+        event_log_id: UUID,
+        entscheidungen: tuple[FachlicheEntscheidung, ...],
+    ) -> Qualitaetsfreigabe:
+        """Speichert E* als Freigabereferenz auf exakt dasselbe E, niemals als neue CSV."""
+        vorhanden = self._repository.freigabe_laden(freigabe_id)
+        if vorhanden is not None:
+            if vorhanden.projekt_id != projekt_id or vorhanden.event_log_id != event_log_id:
+                raise Domaenenfehler(
+                    "Die Freigabe-ID gehört bereits zu einer anderen Artefaktkette."
+                )
+            return self.freigabe_laden(freigabe_id)[0]
+        kontext = self._quality_gate_kontext(projekt_id, event_log_id)
+        ergebnis, q_snapshot = pruefe_quality_gate(kontext, entscheidungen)
+        if not ergebnis.freigabe_moeglich:
+            raise Domaenenfehler(
+                "E kann erst freigegeben werden, wenn alle Pflichtprüfungen bestanden und "
+                "alle fachlichen Bewertungen abgeschlossen sind."
+            )
+        jetzt = datetime.now(UTC)
+        report_pfad = (
+            PurePosixPath("projects") / str(projekt_id) / "quality" / f"{freigabe_id}.release.json"
+        ).as_posix()
+        vorlaeufig = Qualitaetsfreigabe(
+            freigabe_id,
+            projekt_id,
+            event_log_id,
+            ergebnis.event_log_sha256,
+            ergebnis.zwischendatensatz_id,
+            ergebnis.zwischendatensatz_sha256,
+            ergebnis.mapping_id,
+            ergebnis.mappingtabelle_id,
+            ergebnis.mappingtabelle_sha256,
+            ergebnis.mappingzustand,
+            ergebnis.datenquellen_ids,
+            ergebnis.datenquellen_snapshot_sha256,
+            ergebnis.konfiguration_sha256,
+            ergebnis.kettenfingerabdruck,
+            report_pfad,
+            "0" * 64,
+            Freigabestatus.FREIGEGEBEN,
+            jetzt,
+        )
+        freigabe_roh = asdict(vorlaeufig)
+        freigabe_roh.pop("report_sha256")
+        report = {
+            "artefaktversion": QUALITY_GATE_ARTEFAKTVERSION,
+            "artefaktart": "quality_gate_freigabe_e_stern",
+            "freigabe": freigabe_roh,
+            "quality_gate_ergebnis": asdict(ergebnis),
+            "datenquellen_snapshot": q_snapshot,
+            "event_log_konfiguration": asdict(kontext.event_log.konfiguration),
+            "bedeutung": "E* verweist unverändert auf E; es wurde keine Qualitäts-CSV erzeugt.",
+            "software_schemaversion": 7,
+        }
+        report_bytes = json.dumps(
+            report, ensure_ascii=False, sort_keys=True, indent=2, default=str
+        ).encode("utf-8")
+        report_sha256 = hashlib.sha256(report_bytes).hexdigest()
+        freigabe = replace(vorlaeufig, report_sha256=report_sha256)
+        gespeichert = self._artefakte.artefakt_speichern(report_pfad, report_bytes)
+        try:
+            self._repository.freigabe_speichern(freigabe, report, report_sha256)
+        except Exception:
+            self._artefakte.neu_erstelltes_artefakt_entfernen(gespeichert)
+            raise
+        return freigabe
+
+    def freigabe_laden(self, freigabe_id: UUID) -> tuple[Qualitaetsfreigabe, pd.DataFrame]:
+        """Validiert Bericht und aktuelle Artefaktkette erneut und lädt dasselbe E."""
+        freigabe = self._repository.freigabe_laden(freigabe_id)
+        if freigabe is None:
+            raise Importintegritaetsfehler(
+                "Die E*-Freigabe wurde nicht gefunden oder ist ein Legacy-Qualitätsartefakt."
+            )
+        report_bytes = self._artefakte.lesen(freigabe.relativer_report_pfad)
+        if hashlib.sha256(report_bytes).hexdigest() != freigabe.report_sha256:
+            raise Importintegritaetsfehler("Die Prüfsumme des Freigabeberichts ist ungültig.")
+        try:
+            report = json.loads(report_bytes)
+            if (
+                report.get("artefaktversion") != QUALITY_GATE_ARTEFAKTVERSION
+                or report.get("artefaktart") != "quality_gate_freigabe_e_stern"
+                or report["freigabe"]["freigabe_id"] != str(freigabe.freigabe_id)
+            ):
+                raise Importintegritaetsfehler("Der Freigabebericht ist inkonsistent.")
+            entscheidungen = tuple(
+                FachlicheEntscheidung(
+                    wert["kriterium_id"],
+                    bool(wert["ist_mangel"]),
+                    wert["begruendung"],
+                    wert.get("ruecksprung_schritt"),
+                )
+                for wert in report["quality_gate_ergebnis"]["entscheidungen"]
+            )
+        except Importintegritaetsfehler:
+            raise
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as fehler:
+            raise Importintegritaetsfehler("Der Freigabebericht ist ungültig.") from fehler
+        kontext = self._quality_gate_kontext(freigabe.projekt_id, freigabe.event_log_id)
+        aktuell, _ = pruefe_quality_gate(kontext, entscheidungen)
+        if (
+            not aktuell.freigabe_moeglich
+            or aktuell.kettenfingerabdruck != freigabe.kettenfingerabdruck
+            or aktuell.event_log_sha256 != freigabe.event_log_sha256
+            or aktuell.zwischendatensatz_sha256 != freigabe.zwischendatensatz_sha256
+            or aktuell.mappingtabelle_sha256 != freigabe.mappingtabelle_sha256
+            or aktuell.datenquellen_snapshot_sha256 != freigabe.datenquellen_snapshot_sha256
+        ):
+            raise Importintegritaetsfehler(
+                "Die Artefaktkette wurde seit der Freigabe verändert oder besteht das "
+                "Quality-Gate nicht mehr."
+            )
+        return freigabe, kontext.event_log.ereignisse.copy(deep=True)
+
+    def freigaben_fuer_projekt(self, projekt_id: UUID) -> list[Qualitaetsfreigabe]:
+        """Listet ausschließlich aktuell gültige neue E*-Freigaben, niemals Legacy-Kopien."""
+        ergebnis = []
+        for wert in self._repository.freigaben_fuer_projekt(projekt_id):
+            try:
+                geladen, _ = self.freigabe_laden(wert.freigabe_id)
+            except (Domaenenfehler, Importintegritaetsfehler):
+                continue
+            ergebnis.append(geladen)
+        return ergebnis
+
+    def entscheidungen_der_freigabe(self, freigabe_id: UUID) -> tuple[FachlicheEntscheidung, ...]:
+        """Lädt die begründeten Bewertungen einer zuvor erneut validierten Freigabe."""
+        freigabe, _ = self.freigabe_laden(freigabe_id)
+        report = json.loads(self._artefakte.lesen(freigabe.relativer_report_pfad))
+        return tuple(
+            FachlicheEntscheidung(
+                wert["kriterium_id"],
+                bool(wert["ist_mangel"]),
+                wert["begruendung"],
+                wert.get("ruecksprung_schritt"),
+            )
+            for wert in report["quality_gate_ergebnis"]["entscheidungen"]
+        )
+
+    def freigaben_fuer_event_log(
+        self, projekt_id: UUID, event_log_id: UUID
+    ) -> list[Qualitaetsfreigabe]:
+        """Bietet Wiederaufnahme nur für dasselbe Projekt und exakt dasselbe E an."""
+        return [
+            wert
+            for wert in self.freigaben_fuer_projekt(projekt_id)
+            if wert.event_log_id == event_log_id
+        ]
 
     def pruefen(
         self, event_log_id: UUID, regeln: tuple[Qualitaetsregel, ...]
@@ -159,7 +382,7 @@ class DatenqualitaetService:
         return artefakt, pd.read_csv(BytesIO(gzip.decompress(inhalt)))
 
     def fuer_projekt(self, projekt_id: UUID) -> list[QualitaetspruefungArtefakt]:
-        """Listet ausschließlich gespeicherte Qualitätsartefakte eines Projekts."""
+        """Listet kontrolliert lesbare Legacy-Qualitätskopien, nicht neue E*-Freigaben."""
         return self._repository.fuer_projekt(projekt_id)
 
     @staticmethod

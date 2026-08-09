@@ -20,8 +20,12 @@ from framework_mvp.application.datenimport_service import DatenimportService
 from framework_mvp.application.transformation import Transformationsergebnis
 from framework_mvp.application.transformations_service import TransformationsService
 from framework_mvp.domain.models import (
+    CsvImportparameter,
+    Dateityp,
     Projekt,
+    Quellsystemtyp,
     Systemtyp,
+    Trennzeichenwahl,
     Transformationsplan,
     Untersuchungsauftrag,
 )
@@ -71,11 +75,20 @@ zustand.setdefault(
         datenquellen_id=uuid4(),
         originaldateiname="regression.csv",
         tabellenbezeichnung="Regression",
+        dateityp=Dateityp.CSV,
+        importparameter=CsvImportparameter(trennzeichenwahl=Trennzeichenwahl.KOMMA),
+        sha256="a" * 64,
+        relativer_profil_pfad="projects/test/profiles/regression.json",
     ),
 )
+service.importe_fuer_projekt = lambda projekt_id: [zustand["bestaetigter_import"]]
 class DatenquelleService:
     def datenquelle_laden(self, datenquellen_id):
-        return SimpleNamespace(bezeichnung="Regression")
+        return SimpleNamespace(
+            bezeichnung="Regression",
+            quellsystemtyp=Quellsystemtyp.ERP_SYSTEM,
+            bekannte_schluesselattribute=("id",),
+        )
 _zwischendatensatz(service, DatenquelleService(), plan.projekt_id, zustand)
 """
 
@@ -90,15 +103,16 @@ def test_schritt_neun_zeigt_alle_artefaktpfade_ohne_attributfehler(
     monkeypatch.setenv(WORKSPACE_UMGEBUNGSVARIABLE, str(workspace))
     anwendung = AppTest.from_string(ANWENDUNG).run()
     next(
-        wert
-        for wert in anwendung.button
-        if wert.label == "Zwischendatensatz erstellen und mit dem semantischen Mapping fortfahren"
+        wert for wert in anwendung.button if wert.label == "Q, R und T verbindlich speichern"
     ).click().run()
     assert not anwendung.exception
     ausgabe = "\n".join(wert.value for wert in anwendung.markdown)
     assert ".csv.gz" in ausgabe
     assert ".schema.json" in ausgabe
     assert ".transformation.json" in ausgabe
+    assert "Datenquellenkatalog (Q)" in ausgabe
+    assert "Datenprofil (R)" in ausgabe
+    assert "Aufbereiteter Zwischendatensatz (T)" in ausgabe
     with sqlite3.connect(datenbank) as verbindung:
         zeile = verbindung.execute(
             "SELECT relativer_daten_pfad, relativer_schema_pfad, "

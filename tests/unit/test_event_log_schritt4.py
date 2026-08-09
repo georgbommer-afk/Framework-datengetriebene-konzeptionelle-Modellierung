@@ -1,0 +1,246 @@
+"""Fachliche Tests von Pseudocode 4 und Abschnitt 3.6.8."""
+
+from dataclasses import replace
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
+
+import pandas as pd
+import pytest
+
+from framework_mvp.application.event_log import erzeuge_event_log
+from framework_mvp.domain.exceptions import Domaenenfehler
+from framework_mvp.domain.models import (
+    Aktivitaetsbildungsart,
+    Aktivitaetsdefinition,
+    Attributrolle,
+    Mappingeintrag,
+    MappingModus,
+    Mappingstatus,
+    Mappingtabelle,
+    SemantischesMapping,
+    Spaltenzuordnung,
+    ZeitstempelZuordnung,
+    ZusammengesetzteFallId,
+)
+
+
+def _konfiguration(
+    projekt_id: UUID,
+    datensatz_id: UUID,
+    *,
+    modus: MappingModus = MappingModus.EREIGNISORIENTIERT,
+    definition: Aktivitaetsdefinition | None = None,
+    zeitzuordnungen: tuple[ZeitstempelZuordnung, ...] = (),
+    attribute: tuple[str, ...] = (),
+    mappingtabelle_id: UUID | None = None,
+) -> SemantischesMapping:
+    jetzt = datetime.now(UTC)
+    definition = definition or (
+        Aktivitaetsdefinition(Aktivitaetsbildungsart.VORHANDENE_SPALTE, ("aktion",))
+        if modus is MappingModus.EREIGNISORIENTIERT
+        else None
+    )
+    return SemantischesMapping(
+        uuid4(),
+        projekt_id,
+        datensatz_id,
+        modus,
+        ZusammengesetzteFallId(("auftrag",)),
+        "aktion" if definition and len(definition.quellspalten) == 1 else "",
+        "zeit" if modus is MappingModus.EREIGNISORIENTIERT else "",
+        "",
+        "",
+        "",
+        "",
+        tuple(Spaltenzuordnung(wert, Attributrolle.EREIGNISATTRIBUT) for wert in attribute),
+        zeitzuordnungen,
+        None,
+        jetzt,
+        jetzt,
+        Mappingstatus.VALIDIERT,
+        definition,
+        mappingtabelle_id,
+        2,
+    )
+
+
+def test_ereignisorientiert_erzeugt_je_tupel_ein_ereignis_und_behaelt_fehler() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A", "A", None],
+            "aktion": ["Ende", "Start", None],
+            "zeit": ["2025-01-02", "nicht-zeit", None],
+        }
+    )
+    vorher = daten.copy(deep=True)
+    konfiguration = _konfiguration(projekt_id, datensatz_id)
+
+    ergebnis = erzeuge_event_log(daten, konfiguration, datensatz_id)
+
+    pd.testing.assert_frame_equal(daten, vorher)
+    assert ergebnis.ereignisanzahl == len(daten)
+    assert ergebnis.ereignisse["_source_row"].tolist() == [0, 1, 2]
+    assert ergebnis.ereignisse["_source_timestamp_raw"].tolist()[:2] == [
+        "2025-01-02",
+        "nicht-zeit",
+    ]
+    assert ergebnis.ereignisse["timestamp"].isna().sum() == 2
+    assert any("nicht interpretierbar" in wert for wert in ergebnis.warnungen)
+    assert any("Schritt 5" in wert for wert in ergebnis.warnungen)
+
+
+def test_m_wird_typisiert_im_richtigen_spaltenkontext_und_kollisionssicher_angewandt() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    mapping = Mappingtabelle.neu(projekt_id, datensatz_id)
+    mapping = mapping.eintrag_hinzufuegen(Mappingeintrag.fuer_spalte("merkmal_a", "Merkmal"))
+    mapping = mapping.eintrag_hinzufuegen(Mappingeintrag.fuer_spalte("merkmal_b", "Merkmal"))
+    mapping = mapping.eintrag_hinzufuegen(Mappingeintrag.fuer_wert("aktion", "1", "Starten"))
+    mapping = mapping.eintrag_hinzufuegen(
+        Mappingeintrag.fuer_wert("status", "1", "Freigegeben")
+    ).bestaetigen()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A", "A"],
+            "aktion": ["1", "2"],
+            "zeit": ["2025-01-01", "2025-01-02"],
+            "status": ["1", "2"],
+            "gleichlautend": ["1", "2"],
+            "merkmal_a": [10, 11],
+            "merkmal_b": [20, 21],
+        }
+    )
+    konfiguration = _konfiguration(
+        projekt_id,
+        datensatz_id,
+        attribute=("status", "gleichlautend", "merkmal_a", "merkmal_b"),
+        mappingtabelle_id=mapping.mapping_id,
+    )
+
+    ergebnis = erzeuge_event_log(daten, konfiguration, datensatz_id, mapping)
+
+    assert ergebnis.ereignisse["activity"].tolist() == ["Starten", "2"]
+    assert ergebnis.ereignisse["status"].tolist() == ["Freigegeben", "2"]
+    assert ergebnis.ereignisse["gleichlautend"].tolist() == ["1", "2"]
+    assert ergebnis.ereignisse["Merkmal [merkmal_a]"].tolist() == [10, 11]
+    assert ergebnis.ereignisse["Merkmal [merkmal_b]"].tolist() == [20, 21]
+    assert ergebnis.attributherkunft == {
+        "status": "status",
+        "gleichlautend": "gleichlautend",
+        "Merkmal [merkmal_a]": "merkmal_a",
+        "Merkmal [merkmal_b]": "merkmal_b",
+    }
+
+
+def test_zusammengesetzte_aktivitaet_bewahrt_reihenfolge_und_laesst_fehlwert_leer() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A", "A"],
+            "von": ["A01", None],
+            "zu": ["B03", "C01"],
+            "zeit": ["2025-01-01", "2025-01-02"],
+        }
+    )
+    definition = Aktivitaetsdefinition(
+        Aktivitaetsbildungsart.ZUSAMMENGESETZT,
+        ("von", "zu"),
+        " → ",
+        fehlwertstrategie="Ergebnis leer lassen",
+    )
+    konfiguration = _konfiguration(projekt_id, datensatz_id, definition=definition)
+
+    ergebnis = erzeuge_event_log(daten, konfiguration, datensatz_id)
+
+    assert ergebnis.ereignisse["activity"].iloc[0] == "A01 → B03"
+    assert pd.isna(ergebnis.ereignisse["activity"].iloc[1])
+    wirksame_definition = konfiguration.wirksame_aktivitaetsdefinition
+    assert wirksame_definition is not None
+    assert wirksame_definition.quellspalten == ("von", "zu")
+
+
+def test_breiter_pfad_erzeugt_exakt_je_vorhandenem_ausgewaehltem_zeitstempel() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A", "A"],
+            "start": ["2025-01-01 10:00", ""],
+            "ende": ["2025-01-01 10:00", "2025-01-02 12:00"],
+            "nicht_gewaehlt": ["2025-01-03", "2025-01-03"],
+            "ressource": ["R1", "R2"],
+        }
+    )
+    konfiguration = _konfiguration(
+        projekt_id,
+        datensatz_id,
+        modus=MappingModus.BREITER_ZEITSTEMPELDATENSATZ,
+        zeitzuordnungen=(
+            ZeitstempelZuordnung("ende", "Beenden"),
+            ZeitstempelZuordnung("start", "Starten"),
+        ),
+        attribute=("ressource",),
+    )
+
+    ergebnis = erzeuge_event_log(daten, konfiguration, datensatz_id)
+
+    assert ergebnis.ereignisanzahl == 3
+    assert ergebnis.ereignisse["activity"].tolist() == [
+        "Beenden",
+        "Starten",
+        "Beenden",
+    ]
+    assert ergebnis.ereignisse["_source_timestamp_column"].tolist() == [
+        "ende",
+        "start",
+        "ende",
+    ]
+    assert "nicht_gewaehlt" not in ergebnis.ereignisse.columns
+    assert ergebnis.ereignisse["ressource"].tolist() == ["R1", "R1", "R2"]
+
+
+def test_neue_konfiguration_weist_legacy_erweiterungen_und_mehrere_fallspalten_ab() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    basis = _konfiguration(projekt_id, datensatz_id)
+    with pytest.raises(Domaenenfehler, match="genau eine"):
+        replace(basis, fall_id=ZusammengesetzteFallId(("auftrag", "position")))
+    definition = Aktivitaetsdefinition(
+        Aktivitaetsbildungsart.ZUSAMMENGESETZT,
+        ("von", "zu"),
+        " → ",
+        praefix="von ",
+        fehlwertstrategie="Ergebnis leer lassen",
+    )
+    with pytest.raises(Domaenenfehler, match="Reihenfolge und Verknüpfungselement"):
+        replace(basis, aktivitaetsspalte="", aktivitaetsdefinition=definition)
+
+
+def test_fremdes_m_oder_fremdes_t_wird_abgelehnt() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    konfiguration = _konfiguration(projekt_id, datensatz_id)
+    daten = pd.DataFrame({"auftrag": ["A"], "aktion": ["Start"], "zeit": ["2025-01-01"]})
+    with pytest.raises(Domaenenfehler, match="aktuellen T"):
+        erzeuge_event_log(daten, konfiguration, uuid4())
+    fremd = Mappingtabelle.neu(projekt_id, uuid4()).bestaetigen(kein_mapping_erforderlich=True)
+    with pytest.raises(Domaenenfehler, match="passen nicht zusammen"):
+        erzeuge_event_log(daten, konfiguration, datensatz_id, fremd)
+
+
+def test_sortierung_ist_bei_gleichstand_und_unlesbaren_zeiten_stabil() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A", "A", "A", "A"],
+            "aktion": ["ungültig", "erste", "zweite", "fehlend"],
+            "zeit": ["keine Zeit", "2025-01-01", "2025-01-01", None],
+        }
+    )
+
+    ergebnis = erzeuge_event_log(daten, _konfiguration(projekt_id, datensatz_id), datensatz_id)
+
+    assert ergebnis.ereignisse["_source_row"].tolist() == [1, 2, 0, 3]
+    assert ergebnis.ereignisse["activity"].tolist() == [
+        "erste",
+        "zweite",
+        "ungültig",
+        "fehlend",
+    ]

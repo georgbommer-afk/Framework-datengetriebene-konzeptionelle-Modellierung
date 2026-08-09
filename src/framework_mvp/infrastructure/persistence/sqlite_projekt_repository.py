@@ -13,10 +13,10 @@ from framework_mvp.domain.models import (
     BeteiligtePerson,
     Betrachtungszeitraum,
     BetrachtungszeitraumModus,
+    Erzeugnisstrukturtyp,
     GestaltDerGueter,
     Intralogistikklassifikation,
     LogistischeZielgroesse,
-    Materialflussform,
     Materialflusskontinuitaet,
     Produktionsklassifikation,
     Projekt,
@@ -153,7 +153,7 @@ class SQLiteProjektRepository:
             "bereich": system.bereich,
             "objekte_gueter": system.objekte_gueter,
             "gestalt_der_gueter": system.gestalt_der_gueter.value,
-            "materialflussform": system.materialflussform.value,
+            "erzeugnisstrukturtyp": system.erzeugnisstrukturtyp.value,
             "materialflusskontinuitaet": system.materialflusskontinuitaet.value,
             "kapazitaetsgrenzen": system.kapazitaetsgrenzen,
             "input_beschreibung": system.input_beschreibung,
@@ -175,26 +175,28 @@ class SQLiteProjektRepository:
     def _deserialisieren(cls, zeile: sqlite3.Row) -> Projekt:
         daten = json.loads(zeile["untersuchungsauftrag_json"])
         system_daten = daten["systemklassifikation"]
-        produktionsdaten = system_daten["produktion"]
-        intralogistikdaten = system_daten["intralogistik"]
-        if produktionsdaten is not None:
-            produktionsdaten["produktionsfaktoren"] = tuple(produktionsdaten["produktionsfaktoren"])
-            produktionsdaten["ressourcen"] = tuple(produktionsdaten["ressourcen"])
-        if intralogistikdaten is not None:
-            for feld in ("hauptfunktionen", "ladungstraeger", "ressourcen"):
-                intralogistikdaten[feld] = tuple(intralogistikdaten[feld])
+        produktionsdaten = cls._produktionsdaten_migrieren(system_daten.get("produktion"))
+        intralogistikdaten = cls._intralogistikdaten_migrieren(system_daten.get("intralogistik"))
+        gestalt_rohwert = system_daten.get("gestalt_der_gueter", "mischform")
+        if gestalt_rohwert == "fliessgut":
+            gestalt_rohwert = GestaltDerGueter.GEFORMT_UNGEFORMTES_FLIESSGUT.value
+        struktur_rohwert = system_daten.get(
+            "erzeugnisstrukturtyp", system_daten.get("materialflussform", "generell")
+        )
+        if struktur_rohwert == "gemischt":
+            struktur_rohwert = Erzeugnisstrukturtyp.GENERELL.value
         system = Systemklassifikation(
-            bereich=system_daten["bereich"],
-            objekte_gueter=system_daten["objekte_gueter"],
-            gestalt_der_gueter=GestaltDerGueter(system_daten["gestalt_der_gueter"]),
-            materialflussform=Materialflussform(system_daten["materialflussform"]),
+            bereich=system_daten.get("bereich", ""),
+            objekte_gueter=system_daten.get("objekte_gueter", ""),
+            gestalt_der_gueter=GestaltDerGueter(gestalt_rohwert),
+            erzeugnisstrukturtyp=Erzeugnisstrukturtyp(struktur_rohwert),
             materialflusskontinuitaet=Materialflusskontinuitaet(
-                system_daten["materialflusskontinuitaet"]
+                system_daten.get("materialflusskontinuitaet", "gemischt")
             ),
-            kapazitaetsgrenzen=system_daten["kapazitaetsgrenzen"],
-            input_beschreibung=system_daten["input_beschreibung"],
-            transformation_beschreibung=system_daten["transformation_beschreibung"],
-            output_beschreibung=system_daten["output_beschreibung"],
+            kapazitaetsgrenzen=system_daten.get("kapazitaetsgrenzen", ""),
+            input_beschreibung=system_daten.get("input_beschreibung", ""),
+            transformation_beschreibung=system_daten.get("transformation_beschreibung", ""),
+            output_beschreibung=system_daten.get("output_beschreibung", ""),
             produktion=None
             if produktionsdaten is None
             else Produktionsklassifikation(**produktionsdaten),
@@ -241,3 +243,180 @@ class SQLiteProjektRepository:
             datetime.fromisoformat(zeile["geaendert_am_utc"]),
             auftrag,
         )
+
+    @staticmethod
+    def _produktionsdaten_migrieren(daten: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Überführt alte Produktionswerte auf die Ausprägungen aus Tabelle 3.5."""
+        if daten is None:
+            return None
+        strategie_alias = {
+            f"{kuerzel} – {name}": f"{name} ({kuerzel})"
+            for kuerzel, name in (
+                ("ETO", "Engineer-to-Order"),
+                ("CTO", "Configure-to-Order"),
+                ("MTO", "Make-to-Order"),
+                ("ATO", "Assemble-to-Order"),
+                ("MTS", "Make-to-Stock"),
+            )
+        }
+        auflage_alias = {
+            "Sortenproduktion": "Massenproduktion (ggfs. mit Sorten)",
+            "Massenproduktion": "Massenproduktion (ggfs. mit Sorten)",
+        }
+        stueckzahl_alias = {
+            "gering (1–100 Stück)": "gering (1-100 Stück)",
+            "mittel (101–10.000 Stück)": "mittel (101-10 000 Stück)",
+            "hoch (> 10.000 Stück)": "hoch (mehr als 10 000 Stück)",
+        }
+        vielfalt_alias = {
+            "gering (1–10 Varianten)": "gering (1-10 Var.)",
+            "mittel (11–100 Varianten)": "mittel (11-100 Var.)",
+            "hoch (> 100 Varianten)": "hoch (mehr als 100 Var.)",
+        }
+        erlaubte = {
+            "auftragsabwicklungsstrategie": {
+                "Engineer-to-Order (ETO)",
+                "Configure-to-Order (CTO)",
+                "Make-to-Order (MTO)",
+                "Assemble-to-Order (ATO)",
+                "Make-to-Stock (MTS)",
+            },
+            "auflagegroesse": {
+                "Einzelproduktion",
+                "Serienproduktion",
+                "Massenproduktion (ggfs. mit Sorten)",
+            },
+            "produktionsstueckzahl": {
+                "gering (1-100 Stück)",
+                "mittel (101-10 000 Stück)",
+                "hoch (mehr als 10 000 Stück)",
+            },
+            "produktvielfalt": {
+                "gering (1-10 Var.)",
+                "mittel (11-100 Var.)",
+                "hoch (mehr als 100 Var.)",
+            },
+            "organisationstyp": {
+                "Werkstattfertigung",
+                "Gruppenfertigung",
+                "Inselfertigung",
+                "Reihenproduktion",
+                "Fließproduktion",
+            },
+            "anzahl_arbeitsgaenge": {"einstufig", "mehrstufig"},
+        }
+
+        def einzelwert(feld: str, alias: dict[str, str] | None = None) -> str:
+            rohwert = str(daten.get(feld, ""))
+            wert = (alias or {}).get(rohwert, rohwert)
+            return wert if wert in erlaubte[feld] else ""
+
+        ressourcen = tuple(
+            wert
+            for wert in daten.get("ressourcen", ())
+            if wert
+            in {
+                "Maschinen",
+                "Anlagen",
+                "Arbeitsplätze",
+                "Personal",
+                "Werkzeuge",
+                "Informationssysteme",
+            }
+        )
+        auflage_rohwert = str(daten.get("auflagegroesse", daten.get("produktionsart", "")))
+        auflage = auflage_alias.get(auflage_rohwert, auflage_rohwert)
+        if auflage not in erlaubte["auflagegroesse"]:
+            auflage = ""
+        return {
+            "auftragsabwicklungsstrategie": einzelwert(
+                "auftragsabwicklungsstrategie", strategie_alias
+            ),
+            "auflagegroesse": auflage,
+            "produktionsstueckzahl": einzelwert("produktionsstueckzahl", stueckzahl_alias),
+            "produktvielfalt": einzelwert("produktvielfalt", vielfalt_alias),
+            "organisationstyp": einzelwert("organisationstyp"),
+            "anzahl_arbeitsgaenge": einzelwert("anzahl_arbeitsgaenge"),
+            "ressourcen": ressourcen,
+        }
+
+    @staticmethod
+    def _intralogistikdaten_migrieren(daten: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Überführt alte Intralogistikwerte auf die Ausprägungen aus Tabelle 3.6."""
+        if daten is None:
+            return None
+        handling_erlaubt = {
+            "Einlagerung",
+            "Auslagerung",
+            "Sortierung",
+            "Kommissionierung",
+            "Verteilung",
+        }
+        handling: list[str] = []
+        for wert in daten.get("handlingvorgaenge", daten.get("hauptfunktionen", ())):
+            kandidaten = ("Einlagerung", "Auslagerung") if wert == "Lagerung" else (wert,)
+            handling.extend(k for k in kandidaten if k in handling_erlaubt and k not in handling)
+        transport_alias = {
+            "Linien- beziehungsweise Routenzugverkehr": "gebündelter Rundlauf (“Milk-Run”)",
+            "gebündelter Rundlauf („Milk-Run“)": "gebündelter Rundlauf (“Milk-Run”)",
+        }
+        transport = str(daten.get("transportorganisation", ""))
+        transport = transport_alias.get(transport, transport)
+        if transport not in {"Direkttransport", "gebündelter Rundlauf (“Milk-Run”)"}:
+            transport = ""
+        altes_lagerprinzip = str(daten.get("lagerprinzip", ""))
+        lagerplatz = str(daten.get("lagerplatzzuordnung", ""))
+        lagerplatz = {
+            "feste Lagerplatzzuordnung": "feste Zuordnung",
+            "chaotische Lagerung": "wahlfreie/chaotische Zuordnung",
+        }.get(lagerplatz or altes_lagerprinzip, lagerplatz)
+        if lagerplatz not in {
+            "feste Zuordnung",
+            "Zonenzuordnung",
+            "wahlfreie/chaotische Zuordnung",
+        }:
+            lagerplatz = ""
+        bereitstellung = str(daten.get("materialbereitstellungsprinzip", ""))
+        bereitstellung = {
+            "Supermarktprinzip": "Vorratshaltung",
+            "Just-in-Time": "einsatzsynchrone Bereitstellung",
+            "Just-in-Sequence": "einsatzsynchrone Bereitstellung",
+        }.get(bereitstellung or altes_lagerprinzip, bereitstellung)
+        if bereitstellung not in {
+            "Vorratshaltung",
+            "Einzelbeschaffung im Bedarfsfall",
+            "einsatzsynchrone Bereitstellung",
+        }:
+            bereitstellung = ""
+        ressourcen_alias = {
+            "manuelle Transporte": "manuelle Transportmittel",
+            "Stapler": "Gabelstapler",
+            "Routenzug": "Routenzüge",
+            "Kran": "Kräne",
+            "FTS": "Fahrerlose Transportsysteme (FTS)",
+            "Regalbediengerät": "Regalbediengeräte",
+        }
+        ressourcen_erlaubt = {
+            "manuelle Transportmittel",
+            "Gabelstapler",
+            "Routenzüge",
+            "Kräne",
+            "stationäre Fördertechnik",
+            "Fahrerlose Transportsysteme (FTS)",
+            "Regalbediengeräte",
+            "Lager- und Pufferplätze",
+            "Personal",
+            "Informationssysteme",
+        }
+        ressourcen = tuple(
+            normalisiert
+            for wert in daten.get("ressourcen", ())
+            if (normalisiert := ressourcen_alias.get(wert, wert)) in ressourcen_erlaubt
+        )
+        return {
+            "handlingvorgaenge": tuple(handling),
+            "transportorganisation": transport,
+            "lagerplatzzuordnung": lagerplatz,
+            "materialbereitstellungsprinzip": bereitstellung,
+            "ressourcen": ressourcen,
+        }

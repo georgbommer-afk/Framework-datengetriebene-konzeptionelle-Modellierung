@@ -19,12 +19,12 @@ AUFFAELLIGKEITSARTEN = (
 
 
 def transformationsart_fuer_auffaelligkeit(art: str) -> Transformationsart:
-    """Ordnet einen Befund ausschließlich einer Formularvorauswahl zu."""
+    """Ordnet einen Befund einer der vier zulässigen Transformationen zu."""
     return {
-        "Fehlwerte": Transformationsart.FEHLWERTE_BEHANDELN,
-        "Platzhalter": Transformationsart.PLATZHALTER_BEHANDELN,
-        "Ausreißer": Transformationsart.AUSREISSER_BEHANDELN,
-        "Duplikate": Transformationsart.DUPLIKATE_BEHANDELN,
+        "Fehlwerte": Transformationsart.WERTE_ERSETZEN,
+        "Platzhalter": Transformationsart.WERTE_ERSETZEN,
+        "Ausreißer": Transformationsart.WERTE_ERSETZEN,
+        "Duplikate": Transformationsart.EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN,
         "Zeitprobleme": Transformationsart.DATENTYP_KONVERTIEREN,
         "Datentypprobleme": Transformationsart.DATENTYP_KONVERTIEREN,
     }[art]
@@ -176,22 +176,29 @@ def filtere_auffaelligkeiten(
     )
 
 
+def fachlich_zulaessige_ersatzstrategien(
+    profil: dict[str, Any], spalten: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Begrenzt die Wertersetzung abhängig vom bestätigten Profiltyp."""
+    profile = {str(wert["spaltenname"]): wert for wert in profil["spaltenprofile"]}
+    if spalten and all(profile[name].get("numerisch") for name in spalten):
+        return (
+            "Frei definierter Wert",
+            "Minimum",
+            "Maximum",
+            "Arithmetisches Mittel",
+            "Median",
+        )
+    if spalten and all(profile[name].get("kategorial") for name in spalten):
+        return ("Frei definierter Wert", "Häufigster Wert (Modus)")
+    return ("Frei definierter Wert",)
+
+
 def fachlich_zulaessige_fehlwertstrategien(
     profil: dict[str, Any], spalten: tuple[str, ...]
 ) -> tuple[str, ...]:
-    """Erlaubt Mittelwert und Median nur für ausschließlich numerische Spalten."""
-    basis = (
-        "Unverändert lassen",
-        "Zeile entfernen",
-        "Festen Wert einsetzen",
-        "Häufigsten Wert einsetzen",
-        "Vorwärtsfüllen",
-        "Rückwärtsfüllen",
-    )
-    profile = {str(wert["spaltenname"]): wert for wert in profil["spaltenprofile"]}
-    if spalten and all(profile[name].get("numerisch") for name in spalten):
-        return (*basis[:3], "Mittelwert einsetzen", "Median einsetzen", *basis[3:])
-    return basis
+    """Kompatibilitätsalias für Aufrufer vor der Begrenzung durch Tabelle 3.11."""
+    return fachlich_zulaessige_ersatzstrategien(profil, spalten)
 
 
 def vergleiche_profile(

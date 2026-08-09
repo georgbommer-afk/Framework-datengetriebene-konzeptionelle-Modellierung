@@ -6,7 +6,7 @@ from typing import Any
 
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
 
-SCHEMAVERSION = 6
+SCHEMAVERSION = 7
 
 PROJEKT_SCHEMA_VERSION_2 = """
 CREATE TABLE IF NOT EXISTS projekte (
@@ -223,6 +223,27 @@ CREATE INDEX IF NOT EXISTS idx_process_mining_qualitaetspruefung_id
     ON process_mining_analysen(qualitaetspruefung_id);
 """
 
+MAPPINGTABELLEN_SCHEMA_VERSION_7 = """
+CREATE TABLE IF NOT EXISTS mappingtabellen (
+    mapping_id TEXT PRIMARY KEY NOT NULL,
+    projekt_id TEXT NOT NULL,
+    zwischendatensatz_id TEXT NOT NULL UNIQUE,
+    mapping_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('entwurf', 'bestaetigt')),
+    relativer_mapping_pfad TEXT NOT NULL,
+    sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+    erstellt_am_utc TEXT NOT NULL,
+    geaendert_am_utc TEXT NOT NULL,
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id),
+    FOREIGN KEY (zwischendatensatz_id)
+        REFERENCES zwischendatensaetze(zwischendatensatz_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mappingtabellen_projekt_id
+    ON mappingtabellen(projekt_id);
+CREATE INDEX IF NOT EXISTS idx_mappingtabellen_datensatz_id
+    ON mappingtabellen(zwischendatensatz_id);
+"""
+
 _PROJEKTSPALTEN_VERSION_2 = """
     projekt_id, bezeichnung, beteiligte_personen_json, status,
     erstellt_am_utc, geaendert_am_utc, untersuchungsauftrag_json
@@ -299,7 +320,7 @@ def _migriere_version_1_auf_2(verbindung: sqlite3.Connection) -> None:
 
 
 def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
-    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 6."""
+    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 7."""
     version = int(verbindung.execute("PRAGMA user_version").fetchone()[0])
     if version > SCHEMAVERSION:
         raise NichtUnterstuetzteSchemaversion(
@@ -323,6 +344,9 @@ def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
             if anweisung.strip():
                 verbindung.execute(anweisung)
         for anweisung in PROCESS_MINING_SCHEMA_VERSION_6.split(";"):
+            if anweisung.strip():
+                verbindung.execute(anweisung)
+        for anweisung in MAPPINGTABELLEN_SCHEMA_VERSION_7.split(";"):
             if anweisung.strip():
                 verbindung.execute(anweisung)
         if version < SCHEMAVERSION:

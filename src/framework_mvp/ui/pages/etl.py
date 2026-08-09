@@ -2,7 +2,7 @@
 
 import logging
 import re
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import Any
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -26,6 +26,7 @@ from framework_mvp.application.transformation import pruefe_join
 from framework_mvp.application.transformations_service import TransformationsService
 from framework_mvp.domain.exceptions import Datenimportfehler, Domaenenfehler
 from framework_mvp.domain.models import (
+    AUSWAEHLBARE_QUELLSYSTEMTYPEN,
     CsvImportparameter,
     DateiMetadaten,
     Dateityp,
@@ -72,7 +73,14 @@ ETL_KURZNAMEN = ("Quelle", "Vorschau", "Profil", "Transformation", "Ergebnis")
 
 def _enum_text(wert: Quellsystemtyp) -> str:
     """Formatiert einen Systemtyp als verständlichen Auswahltext."""
-    return wert.value.replace("_", " ").upper()
+    return {
+        Quellsystemtyp.ERP_SYSTEM: "ERP-System",
+        Quellsystemtyp.ME_SYSTEM: "ME-System",
+        Quellsystemtyp.WM_SYSTEM: "WM-System",
+        Quellsystemtyp.SONSTIGES_SYSTEM: "sonstiges System",
+        Quellsystemtyp.DATENBANK: "Legacy: Datenbank",
+        Quellsystemtyp.DATEI_EXPORT: "Legacy: Dateiexport",
+    }[wert]
 
 
 def _projektkontext(projekt_service: ProjektService) -> tuple[UUID, str] | None:
@@ -183,7 +191,12 @@ def _gespeicherten_import_wiederherstellen(
         importvorgang.sha256,
     )
     vorschau = datenimport_service.vorschau_erstellen(dateiinhalt, importvorgang.importparameter)
-    profil = datenimport_service.profil_erstellen(vorschau.vollstaendige_tabelle)
+    zusaetzliche_platzhalter = tuple(
+        geladen.profil.gesamtprofil.get("bestaetigte_zusaetzliche_platzhalter", ())
+    )
+    profil = datenimport_service.profil_erstellen(
+        vorschau.vollstaendige_tabelle, zusaetzliche_platzhalter
+    )
     _abhaengige_zustaende_verwerfen(zustand)
     zustand.update(
         {
@@ -201,6 +214,7 @@ def _gespeicherten_import_wiederherstellen(
             "import_id": importvorgang.import_id,
             "bestaetigter_import": importvorgang,
             "gespeichertes_profil": geladen.profil,
+            "zusaetzliche_platzhalter": zusaetzliche_platzhalter,
         }
     )
     if isinstance(importvorgang.importparameter, CsvImportparameter):
@@ -486,16 +500,29 @@ def _quelle_und_datei(
         bezeichnung = st.text_input(
             "Bezeichnung der Datenquelle", quelle.bezeichnung if quelle else ""
         )
-        systemtypen = list(Quellsystemtyp)
+        systemtypen = list(AUSWAEHLBARE_QUELLSYSTEMTYPEN)
+        vorhandener_systemtyp = (
+            quelle.quellsystemtyp
+            if quelle and quelle.quellsystemtyp in systemtypen
+            else Quellsystemtyp.SONSTIGES_SYSTEM
+        )
         systemtyp = st.selectbox(
             "Quellsystemtyp",
             systemtypen,
-            index=systemtypen.index(quelle.quellsystemtyp) if quelle else 0,
+            index=systemtypen.index(vorhandener_systemtyp),
             format_func=_enum_text,
         )
         konkretes_system = st.text_input(
             "Konkretes Quellsystem (optional)",
             quelle.konkretes_quellsystem if quelle else "",
+        )
+        schluesseltext = st.text_input(
+            "Gemeinsame Schlüsselattribute (durch Komma getrennt, optional)",
+            ", ".join(quelle.bekannte_schluesselattribute) if quelle else "",
+            help=(
+                "Deklarieren Sie Attribute, über die dieser Datensatz später mit anderen "
+                "Datensätzen verknüpft werden kann."
+            ),
         )
         speichern = st.form_submit_button("Datenquelle speichern")
     if speichern:
@@ -518,7 +545,9 @@ def _quelle_und_datei(
             "erwartete_tabellen_oder_blaetter": (
                 quelle.erwartete_tabellen_oder_blaetter if quelle else ()
             ),
-            "bekannte_schluesselattribute": (quelle.bekannte_schluesselattribute if quelle else ()),
+            "bekannte_schluesselattribute": tuple(
+                wert.strip() for wert in schluesseltext.split(",") if wert.strip()
+            ),
         }
         gespeichert = (
             datenquelle_service.datenquelle_anlegen(projekt_id=projekt_id, **argumente)
@@ -623,9 +652,21 @@ def _datenprofil_und_bestaetigung(
     """Zeigt das Profil und integriert die idempotente Importbestätigung."""
     st.subheader("Datenprofil")
     vorschau: Datenvorschau = zustand["vorschau"]
-    profilschluessel = zustand["vorschau_schluessel"]
+    vorhandene_platzhalter = tuple(zustand.get("zusaetzliche_platzhalter", ()))
+    platzhaltertext = st.text_input(
+        "Bestätigte domänenspezifische Fehlwertplatzhalter (durch Komma getrennt, optional)",
+        ", ".join(vorhandene_platzhalter),
+        help="Die Kennzeichnung verändert den Quelldatensatz nicht.",
+    )
+    zusaetzliche_platzhalter = tuple(
+        dict.fromkeys(wert.strip() for wert in platzhaltertext.split(",") if wert.strip())
+    )
+    zustand["zusaetzliche_platzhalter"] = zusaetzliche_platzhalter
+    profilschluessel = (zustand["vorschau_schluessel"], zusaetzliche_platzhalter)
     if zustand.get("profil_schluessel") != profilschluessel:
-        zustand["profil"] = datenimport_service.profil_erstellen(vorschau.vollstaendige_tabelle)
+        zustand["profil"] = datenimport_service.profil_erstellen(
+            vorschau.vollstaendige_tabelle, zusaetzliche_platzhalter
+        )
         zustand["profil_schluessel"] = profilschluessel
     ergebnis: Profilierungsergebnis = zustand["profil"]
     zeige_datenprofil(
@@ -664,13 +705,23 @@ def _transformation(
     if plan is None:
         plan = Transformationsplan.neu(projekt_id, (importvorgang.import_id,))
         service.plan_speichern(plan)
-    daten = service.import_dataframe_laden(importvorgang.import_id)
+    rohdaten = service.import_dataframe_laden(importvorgang.import_id)
     ausgangsprofil = service.ausgangsprofil_laden(importvorgang.import_id)
-    zustand["transformationsplan"] = zeige_transformationseditor(
-        service, plan, daten, ausgangsprofil.gesamtprofil
+    arbeitsdaten = (
+        service.vorschau(plan).daten
+        if all(not schritt.aktiviert or schritt.frameworkkonform for schritt in plan.schritte)
+        else rohdaten
     )
+    plan = zeige_transformationseditor(service, plan, arbeitsdaten, ausgangsprofil.gesamtprofil)
+    if any(schritt.aktiviert and not schritt.frameworkkonform for schritt in plan.schritte):
+        zustand["transformationsplan"] = plan
+        st.warning(
+            "Entfernen Sie die gekennzeichneten Legacy-Schritte, bevor Sie den aktuellen "
+            "Transformationsstand ausführen oder verknüpfen."
+        )
+        return
     zustand["transformationsplan"] = _join_konfigurieren(
-        service, projekt_id, zustand["transformationsplan"], daten
+        service, projekt_id, plan, service.vorschau(plan).daten
     )
     if ergebnis := st.session_state.pop("etl_transformationsergebnis", None):
         zustand["transformationsergebnis"] = ergebnis
@@ -683,31 +734,35 @@ def _join_konfigurieren(
     linke_daten: pd.DataFrame,
 ) -> Transformationsplan:
     """Prüft und ergänzt eine fachlich geführte Tabellenverknüpfung."""
-    importe = [
+    datensaetze = [
         wert
-        for wert in service.importe_fuer_projekt(projekt_id)
-        if wert.import_id not in plan.import_ids
+        for wert in service.datensaetze_fuer_projekt(projekt_id)
+        if not set(wert.import_ids).intersection(plan.import_ids)
     ]
     with st.expander("Weitere Tabelle verknüpfen (optional)"):
         st.caption(
-            "Ergänzen Sie den Hauptdatensatz um passende Informationen aus einer zweiten Tabelle."
+            "Verknüpft wird ausschließlich ein bereits separat bestätigter und aufbereiteter "
+            "Zwischendatensatz."
         )
         with st.expander("Was bedeuten die Verknüpfungsarten?"):
             st.write("Haupttabelle: A, B, C · Zusatztabelle: B, C, D")
             st.write("Alle Hauptzeilen behalten: A, B, C (LEFT JOIN)")
             st.write("Nur passende Zeilen: B, C (INNER JOIN)")
-            st.write("Alle Zeilen beider Tabellen: A, B, C, D (FULL OUTER JOIN)")
-        if not importe:
-            st.caption("Es ist keine weitere bestätigte Tabelle verfügbar.")
+            st.write("Alle Zeilen der Zusatztabelle: B, C, D (RIGHT JOIN)")
+            st.write("Alle Zeilen beider Tabellen: A, B, C, D (OUTER JOIN)")
+        if not datensaetze:
+            st.caption("Es ist kein weiterer separat aufbereiteter Zwischendatensatz verfügbar.")
             return plan
-        rechte_id = st.selectbox(
-            "Zusätzliche bestätigte Tabelle",
-            [wert.import_id for wert in importe],
+        rechter_datensatz_id = st.selectbox(
+            "Zusätzlicher aufbereiteter Zwischendatensatz",
+            [wert.zwischendatensatz_id for wert in datensaetze],
             format_func=lambda wert: next(
-                eintrag.originaldateiname for eintrag in importe if eintrag.import_id == wert
+                f"{eintrag.zeilenanzahl:,} Zeilen · {eintrag.spaltenanzahl:,} Spalten"
+                for eintrag in datensaetze
+                if eintrag.zwischendatensatz_id == wert
             ),
         )
-        rechte_daten = service.import_dataframe_laden(rechte_id)
+        rechter_datensatz, rechte_daten = service.zwischendatensatz_laden(rechter_datensatz_id)
         linke_schluessel = st.multiselect(
             "Schlüsselspalte im Hauptdatensatz", [str(wert) for wert in linke_daten.columns]
         )
@@ -717,15 +772,20 @@ def _join_konfigurieren(
         )
         join_texte = {
             "Alle Zeilen der Haupttabelle behalten (LEFT JOIN)": "LEFT",
+            "Alle Zeilen der zusätzlichen Tabelle behalten (RIGHT JOIN)": "RIGHT",
             "Nur passende Zeilen beider Tabellen behalten (INNER JOIN)": "INNER",
-            "Alle Zeilen beider Tabellen behalten (FULL OUTER JOIN)": "FULL OUTER",
+            "Alle Zeilen beider Tabellen behalten (OUTER JOIN)": "OUTER",
         }
         join_art = join_texte[st.selectbox("Art der Verknüpfung", list(join_texte))]
         if not linke_schluessel or len(linke_schluessel) != len(rechte_schluessel):
             st.caption("Wählen Sie gleich viele Schlüsselspalten auf beiden Seiten.")
             return plan
         pruefung = pruefe_join(
-            linke_daten, rechte_daten, tuple(linke_schluessel), tuple(rechte_schluessel)
+            linke_daten,
+            rechte_daten,
+            tuple(linke_schluessel),
+            tuple(rechte_schluessel),
+            join_art=join_art,
         )
         passende_hauptzeilen = max(len(linke_daten) - pruefung.nicht_zuordenbar_links, 0)
         trefferquote = passende_hauptzeilen / len(linke_daten) if len(linke_daten) else 0.0
@@ -735,31 +795,33 @@ def _join_konfigurieren(
             f"**Trefferquote:** {trefferquote:.1%} · "
             f"**Ohne Treffer:** {pruefung.nicht_zuordenbar_links:,}/"
             f"{pruefung.nicht_zuordenbar_rechts:,} · "
-            f"**Erwartete INNER-Zeilen:** {pruefung.erwartete_zeilen:,}"
+            f"**Erwartete {join_art}-Zeilen:** {pruefung.erwartete_zeilen:,}"
         )
-        nm_bestaetigt = st.checkbox(
+        risiko_bestaetigt = st.checkbox(
             "Ich bestätige die mögliche Zeilenvervielfachung.",
-            disabled=pruefung.kardinalitaet != "n:m",
+            disabled=not pruefung.moegliche_zeilenvervielfachung,
         )
-        if pruefung.kardinalitaet == "n:m":
-            st.warning("Viele-zu-viele-Verknüpfung: Das Ergebnis kann Zeilen vervielfachen.")
+        for warnung in pruefung.warnungen:
+            st.warning(warnung)
         parameter = {
-            "rechte_import_id": str(rechte_id),
+            "rechter_zwischendatensatz_id": str(rechter_datensatz_id),
             "linke_schluessel": linke_schluessel,
             "rechte_schluessel": rechte_schluessel,
             "join_art": join_art,
             "suffixe": ["_haupt", "_zusatz"],
-            "nm_bestaetigt": nm_bestaetigt,
+            "nm_bestaetigt": risiko_bestaetigt,
             "pruefung": {
                 "kardinalitaet": pruefung.kardinalitaet,
                 "erwartete_zeilen": pruefung.erwartete_zeilen,
+                "moeglicher_datenverlust": pruefung.moeglicher_datenverlust,
+                "moegliche_zeilenvervielfachung": (pruefung.moegliche_zeilenvervielfachung),
             },
         }
         with st.expander("Technische Transformationsdefinition"):
             st.json(parameter)
         if st.button(
             "Verknüpfung anwenden",
-            disabled=pruefung.kardinalitaet == "n:m" and not nm_bestaetigt,
+            disabled=pruefung.moegliche_zeilenvervielfachung and not risiko_bestaetigt,
         ):
             schritt = Transformationsschritt.neu(
                 typ=Transformationsart.TABELLEN_JOIN,
@@ -769,11 +831,175 @@ def _join_konfigurieren(
                 beschreibung=f"{join_art}-Verknüpfung",
             )
             plan = service.schritt_hinzufuegen(plan, schritt)
-            plan = replace(plan, import_ids=(*plan.import_ids, rechte_id))
+            plan = replace(
+                plan,
+                import_ids=tuple(dict.fromkeys((*plan.import_ids, *rechter_datensatz.import_ids))),
+            )
             service.plan_speichern(plan)
             st.session_state.etl_transformationsplan = plan
             st.rerun()
     return plan
+
+
+def _importe_des_plans(
+    service: TransformationsService, projekt_id: UUID, plan: Transformationsplan
+) -> list[Importvorgang]:
+    """Liefert alle dem Ergebnis zugrunde liegenden Importe in stabiler Planreihenfolge."""
+    nach_id = {
+        importvorgang.import_id: importvorgang
+        for importvorgang in service.importe_fuer_projekt(projekt_id)
+    }
+    fehlend = [import_id for import_id in plan.import_ids if import_id not in nach_id]
+    if fehlend:
+        raise Domaenenfehler(
+            "Mindestens ein dem Transformationsplan zugrunde liegender Import fehlt."
+        )
+    return [nach_id[import_id] for import_id in plan.import_ids]
+
+
+def _zeige_datenquellenkatalog_q(
+    *,
+    importe: list[Importvorgang],
+    datenquelle_service: DatenquelleService,
+) -> None:
+    """Zeigt den persistenten Datenquellenkatalog Q für alle Ergebnisimporte."""
+    st.write("### Datenquellenkatalog (Q)")
+    st.caption("Persistierte Herkunfts- und Importbeschreibung der bereitgestellten Datensätze.")
+    for importvorgang in importe:
+        quelle = datenquelle_service.datenquelle_laden(importvorgang.datenquellen_id)
+        if quelle is None:
+            raise Domaenenfehler("Eine Datenquelle eines verwendeten Imports wurde nicht gefunden.")
+        with st.container(border=True):
+            st.write(f"**{quelle.bezeichnung}**")
+            st.write(
+                f"Quellsystem: **{_enum_text(quelle.quellsystemtyp)}** · "
+                f"Dateiformat: **{importvorgang.dateityp.value}** · "
+                f"Datei: **{importvorgang.originaldateiname}**"
+            )
+            if importvorgang.dateityp is Dateityp.XLSX:
+                st.write(f"Tabellenblatt: **{importvorgang.tabellenbezeichnung}**")
+            st.write(
+                "Gemeinsame Schlüsselattribute: **"
+                + (
+                    ", ".join(quelle.bekannte_schluesselattribute)
+                    if quelle.bekannte_schluesselattribute
+                    else "keine deklariert"
+                )
+                + "**"
+            )
+            with st.expander("Verwendete Importeinstellungen"):
+                st.json(asdict(importvorgang.importparameter))
+
+
+def _profilzeilen(gesamtprofil: dict[str, Any]) -> list[dict[str, Any]]:
+    """Projiziert R auf genau die Profilbestandteile der Tabellen 3.8 bis 3.10."""
+    zeilen: list[dict[str, Any]] = []
+    for spalte in gesamtprofil.get("spaltenprofile", []):
+        numerisch = spalte.get("numerisch") or {}
+        kategorial = spalte.get("kategorial") or {}
+        fehlwerte = spalte.get("fehlwerte") or {}
+        klassen = fehlwerte.get("platzhalterklassen", [])
+        zeilen.append(
+            {
+                "Spalte": spalte.get("spaltenname"),
+                "Technischer Datentyp": spalte.get("technischer_datentyp"),
+                "Potenzielle Fehlwertplatzhalter": ", ".join(
+                    f"{wert.get('bezeichnung')}: {wert.get('anzahl')}" for wert in klassen
+                )
+                or "keine",
+                "Unterschiedliche nicht fehlende Ausprägungen (u_j)": kategorial.get(
+                    "eindeutige_auspraegungen"
+                ),
+                "Häufigster Wert/Modus (a*_j)": kategorial.get("haeufigster_wert"),
+                "Minimum": numerisch.get("minimum"),
+                "Maximum": numerisch.get("maximum"),
+                "Arithmetisches Mittel": numerisch.get("mittelwert"),
+                "Median": numerisch.get("median"),
+                "Q1": numerisch.get("q1"),
+                "Q3": numerisch.get("q3"),
+                "IQR": numerisch.get("interquartilsabstand"),
+                "Untere Grenze": numerisch.get("untere_ausreissergrenze"),
+                "Obere Grenze": numerisch.get("obere_ausreissergrenze"),
+                "Potenzielle Ausreißer (o_j)": numerisch.get("potenzielle_ausreisser"),
+            }
+        )
+    return zeilen
+
+
+def _zeige_datenprofile_r(
+    *,
+    importe: list[Importvorgang],
+    service: TransformationsService,
+) -> None:
+    """Zeigt das persistierte Profil R jedes separat bestätigten Imports."""
+    st.write("### Datenprofil (R)")
+    st.caption("Profilbefunde dienen nur als Entscheidungsunterstützung und ändern keine Werte.")
+    for importvorgang in importe:
+        profil = service.ausgangsprofil_laden(importvorgang.import_id).gesamtprofil
+        with st.container(border=True):
+            st.write(f"**{importvorgang.originaldateiname} · {importvorgang.tabellenbezeichnung}**")
+            st.write(
+                f"Zeilenanzahl (n): **{profil['zeilen']:,}** · "
+                f"Spaltenanzahl (m): **{profil['spalten']:,}** · "
+                f"Exakte Tupel-Duplikate (n_dup): **{profil['exakte_duplikate']:,}** · "
+                "Vollständig leere Spalten (m_∅): "
+                f"**{profil['vollstaendig_leere_spalten']:,}**"
+            )
+            zusaetzliche = profil.get("bestaetigte_zusaetzliche_platzhalter", [])
+            st.write(
+                "Bestätigte domänenspezifische Fehlwertplatzhalter: **"
+                + (", ".join(zusaetzliche) if zusaetzliche else "keine")
+                + "**"
+            )
+            st.dataframe(pd.DataFrame(_profilzeilen(profil)), hide_index=True, width="stretch")
+
+
+def _zeige_zwischendatensatz_t(
+    *,
+    importe: list[Importvorgang],
+    plan: Transformationsplan,
+    ergebnis: Any,
+    datensatz: Any,
+) -> None:
+    """Zeigt Umfang, Schritte, Joins, Warnungen und Artefakte von T."""
+    st.write("### Aufbereiteter Zwischendatensatz (T)")
+    st.write(
+        "Zugrunde liegende Datensätze: **"
+        + ", ".join(wert.originaldateiname for wert in importe)
+        + "**"
+    )
+    st.write(
+        f"Umfang: **{len(ergebnis.daten):,} Zeilen · {len(ergebnis.daten.columns):,} Spalten**"
+    )
+    aktive_schritte = [wert for wert in plan.schritte if wert.aktiviert]
+    if aktive_schritte:
+        st.write("**Ausgeführte Transformationen und Verknüpfungen**")
+        st.dataframe([asdict(wert) for wert in ergebnis.historie], hide_index=True)
+        for schritt in aktive_schritte:
+            if schritt.typ is Transformationsart.TABELLEN_JOIN:
+                parameter = schritt.parameter
+                st.write(
+                    f"{parameter['join_art']} JOIN · "
+                    f"Schlüssel links: {', '.join(parameter['linke_schluessel'])} · "
+                    f"Schlüssel rechts: {', '.join(parameter['rechte_schluessel'])}"
+                )
+    else:
+        st.info("Keine Transformation ausgewählt; T entspricht dem unveränderten Import.")
+    if ergebnis.warnungen:
+        for warnung in ergebnis.warnungen:
+            st.warning(warnung)
+    else:
+        st.write("Warnungen: **keine**")
+    if datensatz is None:
+        st.caption(
+            "Nach Bestätigung werden CSV.GZ, Schema-JSON und Herkunfts-/Transformations-JSON "
+            "projektbezogen gespeichert."
+        )
+        return
+    st.success("Der Zwischendatensatz wurde reproduzierbar gespeichert.")
+    st.write(f"**Daten:** `{datensatz.relativer_daten_pfad}`")
+    st.write(f"**Schema:** `{datensatz.relativer_schema_pfad}`")
+    st.write(f"**Herkunft und Transformation:** `{datensatz.relativer_transformation_pfad}`")
 
 
 def _zwischendatensatz(
@@ -782,46 +1008,39 @@ def _zwischendatensatz(
     projekt_id: UUID,
     zustand: dict[str, Any],
 ) -> None:
-    """Fasst Ausgabe und Artefakte zusammen und navigiert nach Erfolg zu Schritt 3."""
+    """Fasst Q, R und T vollständig zusammen und ermöglicht die Wiederaufnahme."""
     st.subheader("Ausgabe dieses Schritts")
-    st.write("### Zwischendatensatz T")
     plan: Transformationsplan = zustand["transformationsplan"]
     ergebnis = service.vorschau(plan)
-    importvorgang: Importvorgang = zustand["bestaetigter_import"]
-    quelle = datenquelle_service.datenquelle_laden(importvorgang.datenquellen_id)
-    join_anzahl = sum(
-        schritt.typ is Transformationsart.TABELLEN_JOIN and schritt.aktiviert
-        for schritt in plan.schritte
+    importe = _importe_des_plans(service, projekt_id, plan)
+    _zeige_datenquellenkatalog_q(
+        importe=importe,
+        datenquelle_service=datenquelle_service,
     )
-    st.write(
-        f"**Datenquelle:** {quelle.bezeichnung if quelle else 'Unbekannt'}  \n"
-        f"**Import:** {importvorgang.originaldateiname}  \n"
-        f"**Tabelle:** {importvorgang.tabellenbezeichnung}  \n"
-        f"**Umfang:** {len(ergebnis.daten):,} Zeilen · "
-        f"{len(ergebnis.daten.columns):,} Spalten  \n"
-        f"**Transformationen:** {sum(s.aktiviert for s in plan.schritte):,} · "
-        f"davon {join_anzahl:,} Tabellenverknüpfungen  \n"
-        f"**Warnungen:** {len(ergebnis.warnungen):,}"
-    )
-    st.caption(
-        "Vorgesehene Artefakte: CSV.GZ, Schema-JSON und reproduzierbarer Transformationsplan."
-    )
+    _zeige_datenprofile_r(importe=importe, service=service)
     datensatz = zustand.get("zwischendatensatz")
+    _zeige_zwischendatensatz_t(
+        importe=importe,
+        plan=plan,
+        ergebnis=ergebnis,
+        datensatz=datensatz,
+    )
     if datensatz is None:
         datensatz_id = zustand.setdefault("zwischendatensatz_id", uuid4())
-        if st.button(
-            "Zwischendatensatz erstellen und mit dem semantischen Mapping fortfahren",
-            type="primary",
-        ):
+        if st.button("Q, R und T verbindlich speichern", type="primary"):
             datensatz = service.zwischendatensatz_erzeugen(plan, ergebnis, datensatz_id)
             zustand["zwischendatensatz"] = datensatz
             st.session_state.aktueller_zwischendatensatz_id = str(datensatz.zwischendatensatz_id)
-            schritt_abschliessen_und_weiter(aktueller_schritt=2, projekt_id=projekt_id)
+            st.rerun()
         return
-    st.success("Der Zwischendatensatz wurde reproduzierbar gespeichert.")
-    st.write(f"**Daten:** `{datensatz.relativer_daten_pfad}`")
-    st.write(f"**Schema:** `{datensatz.relativer_schema_pfad}`")
-    st.write(f"**Transformation:** `{datensatz.relativer_transformation_pfad}`")
+    weiterer_datensatz, weiter = st.columns(2)
+    if weiterer_datensatz.button("Weiteren Datensatz separat aufbereiten"):
+        version = int(zustand.get("durchlauf_version", 0)) + 1
+        zustand.clear()
+        zustand.update({"schritt": 1, "durchlauf_version": version})
+        st.rerun()
+    if weiter.button("Mit dem semantischen Mapping fortfahren", type="primary"):
+        schritt_abschliessen_und_weiter(aktueller_schritt=2, projekt_id=projekt_id)
 
 
 def _kann_weiter(zustand: dict[str, Any]) -> bool:
@@ -871,11 +1090,11 @@ def zeige_etl_seite(
     workspace: WorkspaceKonfiguration,
 ) -> None:
     """Zeigt Framework-Schritt 2 als fokussierten fünfstufigen ETL-Ablauf."""
-    st.header("2 ETL durchführen")
+    st.header("Schritt 2: ETL durchführen")
     st.write(
-        "Eingaben sind der Untersuchungsauftrag U, der Datenquellenkatalog Q und "
-        "ausgewählte Rohdateien. Ausgabe ist der aufbereitete Zwischendatensatz T "
-        "mit reproduzierbarem Transformationsplan und dokumentierter Herkunft."
+        "Eingabe sind die bereitgestellten Datensätze (D). Aus ihnen entstehen der "
+        "Datenquellenkatalog (Q), das Datenprofil (R) und der aufbereitete "
+        "Zwischendatensatz (T). Der gewählte Projektkontext dient nur der technischen Zuordnung."
     )
     try:
         projektkontext = _projektkontext(projekt_service)

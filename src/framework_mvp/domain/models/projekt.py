@@ -3,7 +3,7 @@
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from enum import StrEnum
-from typing import Self
+from typing import Protocol, Self
 from uuid import UUID, uuid4
 
 from framework_mvp.domain.exceptions import (
@@ -35,16 +35,17 @@ class GestaltDerGueter(StrEnum):
     """Physische Gestalt der betrachteten Güter."""
 
     STUECKGUT = "stueckgut"
-    FLIESSGUT = "fliessgut"
+    GEFORMT_UNGEFORMTES_FLIESSGUT = "geformt_ungeformtes_fliessgut"
     MISCHFORM = "mischform"
 
 
-class Materialflussform(StrEnum):
-    """Topologische Form des Materialflusses."""
+class Erzeugnisstrukturtyp(StrEnum):
+    """Strukturtyp des betrachteten Erzeugnisses nach Tabelle 3.4."""
 
+    LINEAR = "linear"
     KONVERGIEREND = "konvergierend"
     DIVERGIEREND = "divergierend"
-    GEMISCHT = "gemischt"
+    GENERELL = "generell"
 
 
 class Materialflusskontinuitaet(StrEnum):
@@ -90,6 +91,19 @@ def _text(wert: str) -> str:
 
 def _texte(werte: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(text for wert in werte if (text := wert.strip()))
+
+
+class _Merkmalsdefinition(Protocol):
+    """Minimale Schnittstelle eines fachlichen Katalogeintrags."""
+
+    @property
+    def feldname(self) -> str: ...
+
+    @property
+    def bezeichnung(self) -> str: ...
+
+    @property
+    def auspraegungen(self) -> tuple[str, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,61 +179,70 @@ class Produktionsklassifikation:
     """Spezifische Merkmale eines Produktionssystems."""
 
     auftragsabwicklungsstrategie: str = ""
-    produktionsart: str = ""
+    auflagegroesse: str = ""
     produktionsstueckzahl: str = ""
-    stueckzahl_grenze_gering_mittel: int | None = None
-    stueckzahl_grenze_mittel_hoch: int | None = None
-    stueckzahl_einheit_zeitraum: str = ""
     produktvielfalt: str = ""
-    varianten_grenze_gering_mittel: int | None = None
-    varianten_grenze_mittel_hoch: int | None = None
     organisationstyp: str = ""
     anzahl_arbeitsgaenge: str = ""
-    produktionsfaktoren: tuple[str, ...] = ()
     ressourcen: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Bereinigt die textuellen Produktionsmerkmale."""
         for feld in (
             "auftragsabwicklungsstrategie",
-            "produktionsart",
+            "auflagegroesse",
             "produktionsstueckzahl",
-            "stueckzahl_einheit_zeitraum",
             "produktvielfalt",
             "organisationstyp",
             "anzahl_arbeitsgaenge",
         ):
             object.__setattr__(self, feld, _text(getattr(self, feld)))
-        object.__setattr__(self, "produktionsfaktoren", _texte(self.produktionsfaktoren))
         object.__setattr__(self, "ressourcen", _texte(self.ressourcen))
+        from framework_mvp.domain.kataloge import PRODUKTIONSSPEZIFISCHE_MERKMALE
+
+        _validiere_merkmalsauspraegungen(self, PRODUKTIONSSPEZIFISCHE_MERKMALE)
 
 
 @dataclass(frozen=True, slots=True)
 class Intralogistikklassifikation:
     """Spezifische Merkmale eines Intralogistiksystems."""
 
-    hauptfunktionen: tuple[str, ...] = ()
-    ladungstraeger: tuple[str, ...] = ()
-    quellen_und_senken: str = ""
+    handlingvorgaenge: tuple[str, ...] = ()
     transportorganisation: str = ""
-    lagerprinzip: str = ""
+    lagerplatzzuordnung: str = ""
+    materialbereitstellungsprinzip: str = ""
     ressourcen: tuple[str, ...] = ()
-    puffer_und_lagerbereiche: str = ""
-    bekannte_kapazitaetsgrenzen: str = ""
 
     def __post_init__(self) -> None:
         """Bereinigt die textuellen Intralogistikmerkmale."""
-        object.__setattr__(self, "hauptfunktionen", _texte(self.hauptfunktionen))
-        object.__setattr__(self, "ladungstraeger", _texte(self.ladungstraeger))
+        object.__setattr__(self, "handlingvorgaenge", _texte(self.handlingvorgaenge))
         object.__setattr__(self, "ressourcen", _texte(self.ressourcen))
         for feld in (
-            "quellen_und_senken",
             "transportorganisation",
-            "lagerprinzip",
-            "puffer_und_lagerbereiche",
-            "bekannte_kapazitaetsgrenzen",
+            "lagerplatzzuordnung",
+            "materialbereitstellungsprinzip",
         ):
             object.__setattr__(self, feld, _text(getattr(self, feld)))
+        from framework_mvp.domain.kataloge import INTRALOGISTIKSPEZIFISCHE_MERKMALE
+
+        _validiere_merkmalsauspraegungen(self, INTRALOGISTIKSPEZIFISCHE_MERKMALE)
+
+
+def _validiere_merkmalsauspraegungen(
+    objekt: object, merkmale: tuple[_Merkmalsdefinition, ...]
+) -> None:
+    """Verhindert nicht in den fachlichen Tabellen definierte Merkmalswerte."""
+    for merkmal in merkmale:
+        feldname = merkmal.feldname
+        wert = getattr(objekt, feldname)
+        werte = wert if isinstance(wert, tuple) else (wert,)
+        ungueltige_werte = [
+            eintrag for eintrag in werte if eintrag and eintrag not in merkmal.auspraegungen
+        ]
+        if ungueltige_werte:
+            raise Domaenenfehler(
+                f"Ungültige Ausprägung für {merkmal.bezeichnung}: {', '.join(ungueltige_werte)}"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,7 +252,7 @@ class Systemklassifikation:
     bereich: str = ""
     objekte_gueter: str = ""
     gestalt_der_gueter: GestaltDerGueter = GestaltDerGueter.MISCHFORM
-    materialflussform: Materialflussform = Materialflussform.GEMISCHT
+    erzeugnisstrukturtyp: Erzeugnisstrukturtyp = Erzeugnisstrukturtyp.GENERELL
     materialflusskontinuitaet: Materialflusskontinuitaet = Materialflusskontinuitaet.GEMISCHT
     kapazitaetsgrenzen: str = ""
     input_beschreibung: str = ""

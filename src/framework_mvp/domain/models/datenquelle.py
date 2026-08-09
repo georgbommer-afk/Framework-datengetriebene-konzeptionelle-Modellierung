@@ -28,6 +28,16 @@ class Quellenart(StrEnum):
     DATENBANK = "datenbank"
 
 
+AUSWAEHLBARE_QUELLSYSTEMTYPEN = (
+    Quellsystemtyp.ERP_SYSTEM,
+    Quellsystemtyp.ME_SYSTEM,
+    Quellsystemtyp.WM_SYSTEM,
+    Quellsystemtyp.SONSTIGES_SYSTEM,
+)
+
+AUSWAEHLBARE_QUELLENARTEN = (Quellenart.CSV, Quellenart.EXCEL)
+
+
 def _text(wert: str) -> str:
     return wert.strip()
 

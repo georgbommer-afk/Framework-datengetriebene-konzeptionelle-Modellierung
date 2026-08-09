@@ -45,19 +45,8 @@ def _gesamtuebersicht(ergebnis: Profilierungsergebnis) -> None:
 
 
 def _verstaendlicher_datentyp(profil: Spaltenprofil) -> str:
-    """Übersetzt Profil und technischen Datentyp in eine fachliche Bezeichnung."""
-    original = profil.originaldatentyp.lower()
-    if "bool" in original:
-        return "Wahr/Falsch"
-    if profil.profiltyp is Profiltyp.ZEITBEZOGEN:
-        return "Datum und Zeit"
-    if profil.profiltyp is Profiltyp.NUMERISCH:
-        return "Ganzzahl" if "int" in original else "Dezimalzahl"
-    if profil.fehlwerte.gueltige_regulaere_werte == 0:
-        return "Leer"
-    if profil.profiltyp is Profiltyp.KATEGORIAL:
-        return "Text"
-    return "Gemischt"
+    """Gibt den fachlichen technischen Datentyp aus Tabelle 3.8 aus."""
+    return profil.technischer_datentyp.value
 
 
 def _spaltenuebersicht(ergebnis: Profilierungsergebnis, daten: pd.DataFrame | None) -> None:
@@ -228,6 +217,7 @@ def _kategoriale_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) 
     kategorial = profil.kategorial
     assert kategorial is not None
     st.metric("Eindeutige reguläre Ausprägungen", kategorial.eindeutige_auspraegungen)
+    st.metric("Häufigster Wert (Modus)", kategorial.haeufigster_wert or "–")
     st.write(
         f"Gültige reguläre Werte: **{kategorial.gueltige_werte:,}** · "
         f"Seltene Werte unter 1 %: **{kategorial.seltene_werte:,}**"
@@ -353,6 +343,7 @@ def zeige_gespeichertes_datenprofil(struktur: dict[str, object]) -> None:
             {
                 "Spaltenname": name,
                 "Originaldatentyp": spaltenprofil.get("originaldatentyp"),
+                "Technischer Datentyp": spaltenprofil.get("technischer_datentyp"),
                 "Profiltyp": spaltenprofil.get("profiltyp"),
                 "Gültige Werte": fehlwerte.get("gueltige_regulaere_werte", 0),
                 "Echte Fehlwerte": fehlwerte.get("echte_fehlwerte", 0),

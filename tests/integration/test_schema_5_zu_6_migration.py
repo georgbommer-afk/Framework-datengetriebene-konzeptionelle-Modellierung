@@ -19,7 +19,7 @@ def test_migration_5_zu_6_ist_additiv_und_indiziert(tmp_path: Path) -> None:
         verbindung.execute("PRAGMA user_version = 5")
         verbindung.commit()
         initialisiere_schema(verbindung)
-        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 7
         assert verbindung.execute("SELECT wert FROM bestand").fetchone()[0] == "unveraendert"
         indizes = {
             zeile[1]
@@ -35,7 +35,7 @@ def test_migration_5_zu_6_ist_additiv_und_indiziert(tmp_path: Path) -> None:
 def test_migration_rollback_und_neuere_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Fehler setzen Version 5 nicht hoch; unbekannte Version 7 bleibt unverändert."""
+    """Fehler setzen Version 5 nicht hoch; unbekannte Version 8 bleibt unverändert."""
     db = tmp_path / "rollback.sqlite"
     with sqlite3.connect(db) as verbindung:
         verbindung.execute("PRAGMA user_version = 5")
@@ -54,7 +54,7 @@ def test_migration_rollback_und_neuere_version(
         )
     neuer = tmp_path / "neuer.sqlite"
     with sqlite3.connect(neuer) as verbindung:
-        verbindung.execute("PRAGMA user_version = 7")
+        verbindung.execute("PRAGMA user_version = 8")
         with pytest.raises(NichtUnterstuetzteSchemaversion):
             initialisiere_schema(verbindung)
-        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 8

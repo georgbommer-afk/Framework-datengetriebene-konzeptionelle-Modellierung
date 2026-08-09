@@ -37,7 +37,7 @@ def test_version_vier_wird_additiv_auf_fuenf_migriert(tmp_path: Path) -> None:
         ).fetchone()
     SQLiteProjektRepository(pfad).auflisten()
     with sqlite3.connect(pfad) as verbindung:
-        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 7
         tabellen = {
             wert[0]
             for wert in verbindung.execute("SELECT name FROM sqlite_master WHERE type='table'")

@@ -6,7 +6,25 @@ from uuid import uuid4
 import pytest
 
 from framework_mvp.domain.exceptions import Domaenenfehler
-from framework_mvp.domain.models import Datenquelle, Quellenart, Quellsystemtyp
+from framework_mvp.domain.models import (
+    AUSWAEHLBARE_QUELLENARTEN,
+    AUSWAEHLBARE_QUELLSYSTEMTYPEN,
+    Datenquelle,
+    Quellenart,
+    Quellsystemtyp,
+)
+
+
+def test_neu_auswaehlbar_sind_exakt_vier_quellsysteme_und_zwei_dateiformate() -> None:
+    assert AUSWAEHLBARE_QUELLSYSTEMTYPEN == (
+        Quellsystemtyp.ERP_SYSTEM,
+        Quellsystemtyp.ME_SYSTEM,
+        Quellsystemtyp.WM_SYSTEM,
+        Quellsystemtyp.SONSTIGES_SYSTEM,
+    )
+    assert AUSWAEHLBARE_QUELLENARTEN == (Quellenart.CSV, Quellenart.EXCEL)
+    assert Quellsystemtyp.DATENBANK not in AUSWAEHLBARE_QUELLSYSTEMTYPEN
+    assert Quellsystemtyp.DATEI_EXPORT not in AUSWAEHLBARE_QUELLSYSTEMTYPEN
 
 
 def test_bezeichnung_darf_nicht_leer_sein() -> None:
@@ -15,7 +33,7 @@ def test_bezeichnung_darf_nicht_leer_sein() -> None:
         Datenquelle.neu(
             projekt_id=uuid4(),
             bezeichnung="   ",
-            quellsystemtyp=Quellsystemtyp.DATEI_EXPORT,
+            quellsystemtyp=Quellsystemtyp.SONSTIGES_SYSTEM,
             quellenart=Quellenart.CSV,
         )
 
@@ -42,7 +60,7 @@ def test_id_und_utc_zeitstempel_werden_automatisch_erzeugt() -> None:
     datenquelle = Datenquelle.neu(
         projekt_id=uuid4(),
         bezeichnung="Export",
-        quellsystemtyp=Quellsystemtyp.DATEI_EXPORT,
+        quellsystemtyp=Quellsystemtyp.SONSTIGES_SYSTEM,
         quellenart=Quellenart.CSV,
     )
     assert datenquelle.datenquellen_id.version == 4

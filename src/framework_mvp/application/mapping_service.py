@@ -1,4 +1,4 @@
-"""Persistenz und erneute Integritätsprüfung semantischer Mappings."""
+"""Kompatible Persistenz der Event-Log-Konfiguration aus Schritt 4."""
 
 import json
 from dataclasses import asdict, replace
@@ -20,11 +20,17 @@ from framework_mvp.infrastructure.persistence.sqlite_mapping_repository import (
     SQLiteMappingRepository,
 )
 
-MAPPING_ARTEFAKT_VERSION = 1
+MAPPING_ARTEFAKT_VERSION = 2
+UNTERSTUETZTE_MAPPING_ARTEFAKTVERSIONEN = {1, MAPPING_ARTEFAKT_VERSION}
+
+
+def _json_kompatibel(wert: object) -> object:
+    """Normalisiert Dataclasses, UUIDs und Zeitwerte wie das gespeicherte JSON."""
+    return json.loads(json.dumps(wert, ensure_ascii=False, default=str))
 
 
 class MappingService:
-    """Validiert, speichert und lädt Mappingkonfigurationen ohne Event-Log-Erzeugung."""
+    """Historischer Servicename für Event-Log-Rollen- und Strukturkonfigurationen."""
 
     def __init__(
         self,
@@ -58,6 +64,22 @@ class MappingService:
 
     def speichern(self, mapping: SemantischesMapping) -> str:
         """Speichert Mapping-JSON atomar und Metadaten anschließend in SQLite."""
+        if mapping.status is not Mappingstatus.VALIDIERT:
+            raise Importintegritaetsfehler(
+                "Nur eine fachlich validierte Event-Log-Konfiguration kann gespeichert werden."
+            )
+        datensatz, daten = self._transformations_service.zwischendatensatz_laden(
+            mapping.zwischendatensatz_id
+        )
+        if datensatz.projekt_id != mapping.projekt_id:
+            raise Importintegritaetsfehler(
+                "Event-Log-Konfiguration und Zwischendatensatz gehören nicht zum selben Projekt."
+            )
+        if not validiere_mapping(daten, mapping).validierung.gueltig:
+            raise Importintegritaetsfehler(
+                "Die Event-Log-Konfiguration ist für ihren gespeicherten Zwischendatensatz "
+                "nicht gültig."
+            )
         relativer_pfad = (
             PurePosixPath("projects")
             / str(mapping.projekt_id)
@@ -94,10 +116,26 @@ class MappingService:
         if not pfad.startswith(f"projects/{mapping.projekt_id}/mappings/"):
             raise Importintegritaetsfehler("Der Mappingpfad passt nicht zum Projekt.")
         struktur = json.loads(self._artefakte.lesen(pfad))
-        if struktur.get("artefakt_version") != MAPPING_ARTEFAKT_VERSION:
+        artefakt_version = struktur.get("artefakt_version")
+        if artefakt_version not in UNTERSTUETZTE_MAPPING_ARTEFAKTVERSIONEN:
             raise Importintegritaetsfehler("Die Mapping-Artefaktversion wird nicht unterstützt.")
+        if artefakt_version == MAPPING_ARTEFAKT_VERSION and struktur.get(
+            "mapping"
+        ) != _json_kompatibel(asdict(mapping)):
+            raise Importintegritaetsfehler(
+                "Mapping-Artefakt und persistierte Event-Log-Konfiguration sind inkonsistent."
+            )
         return mapping
 
     def fuer_projekt(self, projekt_id: UUID) -> list[SemantischesMapping]:
-        """Listet alle Mappingkonfigurationen eines Projekts."""
-        return [wert[0] for wert in self._repository.fuer_projekt(projekt_id)]
+        """Listet alle kompatiblen Event-Log-Konfigurationen eines Projekts."""
+        ergebnis: list[SemantischesMapping] = []
+        for mapping, _ in self._repository.fuer_projekt(projekt_id):
+            geladen = self.laden(mapping.mapping_id)
+            if geladen is not None:
+                ergebnis.append(geladen)
+        return ergebnis
+
+
+# Neuer fachlicher Name; MappingService bleibt für bestehende Aufrufer und Artefakte erhalten.
+EventLogKonfigurationService = MappingService

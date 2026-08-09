@@ -1,4 +1,4 @@
-"""SQLite-Persistenz gespeicherter Qualitätsprüfungen."""
+"""SQLite-Persistenz von E*-Freigaben und getrennten Legacy-Prüfungen."""
 
 import json
 import sqlite3
@@ -10,6 +10,9 @@ from pathlib import Path
 from uuid import UUID
 
 from framework_mvp.domain.models import (
+    Freigabestatus,
+    Mappingzustand,
+    Qualitaetsfreigabe,
     Qualitaetsmassnahmenplan,
     QualitaetspruefungArtefakt,
     Qualitaetsregel,
@@ -21,7 +24,7 @@ from framework_mvp.infrastructure.persistence.sqlite_schema import initialisiere
 
 
 class SQLiteQualitaetRepository:
-    """Speichert Prüfung, Regeln und Maßnahmen in einer Transaktion."""
+    """Speichert neue Freigaben und vorhandene Legacy-Prüfungen getrennt."""
 
     def __init__(self, datenbankpfad: Path | str = STANDARD_DATENBANKPFAD) -> None:
         self._datenbankpfad = Path(datenbankpfad)
@@ -90,7 +93,9 @@ class SQLiteQualitaetRepository:
                 "SELECT * FROM qualitaetspruefungen WHERE quality_run_id=?",
                 (str(quality_run_id),),
             ).fetchone()
-        return None if zeile is None else self._artefakt(zeile)
+        if zeile is None or self._ist_freigabe(zeile):
+            return None
+        return self._artefakt(zeile)
 
     def fuer_projekt(self, projekt_id: UUID) -> list[QualitaetspruefungArtefakt]:
         """Listet Qualitätsprüfungen eines Projekts stabil auf."""
@@ -100,7 +105,92 @@ class SQLiteQualitaetRepository:
                 "ORDER BY erstellt_am_utc, quality_run_id",
                 (str(projekt_id),),
             ).fetchall()
-        return [self._artefakt(zeile) for zeile in zeilen]
+        return [self._artefakt(zeile) for zeile in zeilen if not self._ist_freigabe(zeile)]
+
+    def freigabe_speichern(
+        self,
+        freigabe: Qualitaetsfreigabe,
+        report: dict[str, object],
+        report_sha256: str,
+    ) -> None:
+        """Speichert E* ohne duplizierte oder veränderte Event-Log-CSV."""
+        vergleich = {
+            "artefaktart": "quality_gate_freigabe_e_stern",
+            "report_sha256": report_sha256,
+        }
+        with self._verbindung() as verbindung, verbindung:
+            verbindung.execute(
+                "INSERT OR IGNORE INTO qualitaetspruefungen VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(freigabe.freigabe_id),
+                    str(freigabe.projekt_id),
+                    str(freigabe.event_log_id),
+                    json.dumps(report, ensure_ascii=False, default=str),
+                    json.dumps(vergleich, ensure_ascii=False),
+                    freigabe.relativer_report_pfad,
+                    "",
+                    "",
+                    freigabe.event_log_sha256,
+                    freigabe.erstellt_am.isoformat(),
+                ),
+            )
+
+    def freigabe_laden(self, freigabe_id: UUID) -> Qualitaetsfreigabe | None:
+        """Lädt ausschließlich Metadaten einer neuen E*-Freigabe."""
+        with self._verbindung() as verbindung:
+            zeile = verbindung.execute(
+                "SELECT * FROM qualitaetspruefungen WHERE quality_run_id=?",
+                (str(freigabe_id),),
+            ).fetchone()
+        if zeile is None or not self._ist_freigabe(zeile):
+            return None
+        return self._freigabe(zeile)
+
+    def freigaben_fuer_projekt(self, projekt_id: UUID) -> list[Qualitaetsfreigabe]:
+        """Listet neue Freigaben stabil und ohne Legacy-Arbeitskopien."""
+        with self._verbindung() as verbindung:
+            zeilen = verbindung.execute(
+                "SELECT * FROM qualitaetspruefungen WHERE projekt_id=? "
+                "ORDER BY erstellt_am_utc, quality_run_id",
+                (str(projekt_id),),
+            ).fetchall()
+        return [self._freigabe(zeile) for zeile in zeilen if self._ist_freigabe(zeile)]
+
+    @staticmethod
+    def _ist_freigabe(zeile: sqlite3.Row) -> bool:
+        try:
+            return (
+                json.loads(zeile["vergleich_json"]).get("artefaktart")
+                == "quality_gate_freigabe_e_stern"
+            )
+        except (json.JSONDecodeError, TypeError):
+            return False
+
+    @staticmethod
+    def _freigabe(zeile: sqlite3.Row) -> Qualitaetsfreigabe:
+        report = json.loads(zeile["report_json"])
+        struktur = report["freigabe"]
+        vergleich = json.loads(zeile["vergleich_json"])
+        return Qualitaetsfreigabe(
+            UUID(struktur["freigabe_id"]),
+            UUID(struktur["projekt_id"]),
+            UUID(struktur["event_log_id"]),
+            struktur["event_log_sha256"],
+            UUID(struktur["zwischendatensatz_id"]),
+            struktur["zwischendatensatz_sha256"],
+            UUID(struktur["mapping_id"]),
+            UUID(struktur["mappingtabelle_id"]) if struktur["mappingtabelle_id"] else None,
+            struktur["mappingtabelle_sha256"],
+            Mappingzustand(struktur["mappingzustand"]),
+            tuple(UUID(wert) for wert in struktur["datenquellen_ids"]),
+            struktur["datenquellen_snapshot_sha256"],
+            struktur["konfiguration_sha256"],
+            struktur["kettenfingerabdruck"],
+            struktur["relativer_report_pfad"],
+            vergleich["report_sha256"],
+            Freigabestatus(struktur["status"]),
+            datetime.fromisoformat(struktur["erstellt_am"]),
+        )
 
     @staticmethod
     def _artefakt(zeile: sqlite3.Row) -> QualitaetspruefungArtefakt:

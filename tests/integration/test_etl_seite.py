@@ -39,7 +39,12 @@ def test_etl_seite_startet_und_markiert_schritt_zwei(
     """ETL-Seite, Projektkontext und alle fünf Abschnitte werden angezeigt."""
     anwendung = _etl_starten(tmp_path, monkeypatch)
     assert not anwendung.exception
-    assert any(element.value == "2 ETL durchführen" for element in anwendung.header)
+    assert any(element.value == "Schritt 2: ETL durchführen" for element in anwendung.header)
+    einleitung = "\n".join(element.value for element in anwendung.markdown)
+    assert "bereitgestellten Datensätze (D)" in einleitung
+    assert "Datenquellenkatalog (Q)" in einleitung
+    assert "Datenprofil (R)" in einleitung
+    assert "Zwischendatensatz (T)" in einleitung
     assert anwendung.get("progress")
     assert any("Schritt 1 von 5" in element.value for element in anwendung.caption)
     assert sum("Noch nicht verfügbar" in element.value for element in anwendung.caption) == 0
@@ -94,5 +99,5 @@ def test_projektwechsel_fuehrt_zu_schritt_eins_und_bewahrt_projekt(
     projekt_id = anwendung.session_state["aktuelles_projekt_id"]
     next(e for e in anwendung.button if e.label == "Projekt wechseln").click().run()
     assert not anwendung.exception
-    assert anwendung.radio[0].value == "1 Projekt und Untersuchungsauftrag"
+    assert anwendung.radio[0].value == "Schritt 1: Projektrahmen definieren"
     assert anwendung.session_state["aktuelles_projekt_id"] == projekt_id

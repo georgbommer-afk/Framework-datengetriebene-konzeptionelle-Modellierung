@@ -65,8 +65,8 @@ def test_kategorien_werden_auf_fuenfzehn_plus_weitere_begrenzt() -> None:
     assert diagramm.kategorien[-1].anzahl == 5
 
 
-def test_zeitliche_aggregationsdaten_stammen_aus_dem_profil() -> None:
-    """Diagrammdaten übernehmen ausschließlich die bereits aggregierten Intervalle."""
+def test_zeitliche_aggregation_bleibt_transiente_visualisierung() -> None:
+    """Eine ergänzende Zeitgrafik bleibt von den fachlichen R-Werten getrennt."""
     daten = pd.DataFrame({"zeit": pd.to_datetime(["2024-01-01", "2024-01-01", "2024-01-02"])})
     profil = erstelle_datenprofil(daten)
     diagramm = erstelle_diagrammdaten(daten, profil).spalten[0]

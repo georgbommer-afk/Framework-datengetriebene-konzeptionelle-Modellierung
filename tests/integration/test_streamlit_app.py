@@ -42,6 +42,9 @@ def test_anwendung_startet_mit_fuenf_schritten_und_tooltips(
     """Schritt 1 beginnt kompakt mit genau den beiden fachlichen Textbereichen."""
     anwendung = _anwendung_starten(tmp_path, monkeypatch)
     assert not anwendung.exception
+    assert any(
+        element.value == "Schritt 1: Projektrahmen definieren" for element in anwendung.header
+    )
     assert any("Schritt 1 von 5" in element.value for element in anwendung.caption)
     assert {element.label for element in anwendung.text_area} == {
         "Problemstellung",
@@ -68,7 +71,13 @@ def test_untersuchungszwecke_und_logistikziele_sind_kompakt(
         element.label == "Weiteren Untersuchungszweck hinzufügen …"
         for element in anwendung.checkbox
     )
-    assert any("Logistikziele" in element.value for element in anwendung.markdown)
+    assert any("Logistische Zielgrößen" in element.value for element in anwendung.markdown)
+    assert {
+        "Lieferleistung steigern",
+        "Zeiten verbessern",
+        "Prozessstabilität und Zuverlässigkeit erhöhen",
+        "Ressourcennutzung erhöhen",
+    } <= {element.value.removeprefix("#### ") for element in anwendung.markdown}
     oberziel = "Übergeordnetes Ziel: Leistungsfähigkeit des betrachteten Systems steigern"
     assert sum(oberziel in element.value for element in anwendung.caption) == 1
     assert all(element.label != oberziel for element in anwendung.checkbox)
@@ -126,6 +135,12 @@ def test_systemklassifikation_enthaelt_keine_freien_beschreibungsfelder(
     assert "Produktion" in systemtyp.options
     assert "Intralogistik" in systemtyp.options
     assert "Kombiniert" not in systemtyp.options
+    assert next(
+        element for element in anwendung.selectbox if element.label == "Erzeugnisstrukturtyp"
+    ).options == ["linear", "konvergierend", "divergierend", "generell"]
+    assert next(
+        element for element in anwendung.selectbox if element.label == "Gestalt der Güter"
+    ).options == ["Stückgut", "geformt/ungeformtes Fließgut", "Mischform"]
     entfernte_felder = {
         "Beschreibung des Inputs",
         "Beschreibung der Transformation",
@@ -138,6 +153,44 @@ def test_systemklassifikation_enthaelt_keine_freien_beschreibungsfelder(
     }
 
 
+def test_systemspezifische_merkmale_werden_bedingt_angezeigt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Produktion und Intralogistik zeigen ausschließlich den jeweils relevanten Block."""
+    anwendung = _anwendung_starten(tmp_path, monkeypatch)
+    anwendung.session_state["wizard_schritt"] = 3
+    anwendung.run()
+    systemtyp = next(element for element in anwendung.selectbox if element.label == "Systemtyp")
+    systemtyp.select_index(1).run()
+    labels = {element.label for element in (*anwendung.selectbox, *anwendung.multiselect)}
+    assert {
+        "Auftragsabwicklungsstrategie",
+        "Auflagegröße",
+        "Produktionsstückzahl (p.a.)",
+        "Produktvielfalt (Var.)",
+        "Organisationstyp",
+        "Anzahl der Arbeitsgänge",
+        "Eingesetzte Produktionsressourcen",
+    } <= labels
+    assert "Handlingvorgänge" not in labels
+
+    intralogistik_app = _anwendung_starten(tmp_path, monkeypatch)
+    intralogistik_app.session_state["wizard_entwurf"]["systemtyp"] = Systemtyp.INTRALOGISTIK
+    intralogistik_app.session_state["wizard_schritt"] = 3
+    intralogistik_app.run()
+    labels = {
+        element.label for element in (*intralogistik_app.selectbox, *intralogistik_app.multiselect)
+    }
+    assert {
+        "Handlingvorgänge",
+        "Transportorganisation",
+        "Lagerplatzzuordnung",
+        "Materialbereitstellungsprinzip",
+        "Eingesetzte Intralogistikressourcen",
+    } <= labels
+    assert "Auflagegröße" not in labels
+
+
 def test_kpi_hinweis_und_entfernte_allgemeine_freitexte(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -148,7 +201,7 @@ def test_kpi_hinweis_und_entfernte_allgemeine_freitexte(
     ]
     anwendung.session_state["wizard_schritt"] = 4
     anwendung.run()
-    assert any(element.label == "Gesamtdurchlaufzeit" for element in anwendung.checkbox)
+    assert any(element.label == "Mittlere DLZ Wareneingang" for element in anwendung.checkbox)
     assert any("Analysebedarf" in element.value for element in anwendung.info)
     assert not {
         "Bekannte Annahmen",
@@ -158,27 +211,48 @@ def test_kpi_hinweis_und_entfernte_allgemeine_freitexte(
     } & {element.label for element in anwendung.text_area}
 
 
-def test_ausgaben_u_q_und_zeitraum_sind_schreibgeschuetzt(
+def test_ausgaben_u_und_s_sind_vollstaendig_und_q_ist_abwesend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Der letzte Schritt benennt U und Q und bietet keine Datumseingabe."""
+    """Der letzte Schritt benennt ausschließlich U und S und bietet keine Datumseingabe."""
     anwendung = _anwendung_starten(tmp_path, monkeypatch)
+    anwendung.session_state["wizard_entwurf"].update(
+        {
+            "bezeichnung": "Rahmen A",
+            "problemstellung": "Lange Lieferzeiten",
+            "systemgrenze": "Wareneingang bis Versand",
+            "zwecke": ["System analysieren", "Materialfluss erklären"],
+            "individuelle_zwecke": ["Materialfluss erklären"],
+            "zielgroessen": [LogistischeZielgroesse.LIEFERZEIT],
+            "kpis": ["mittlere_dlz_warenausgang"],
+            "systemtyp": Systemtyp.PRODUKTION,
+            "produktion": {
+                "auflagegroesse": "Serienproduktion",
+                "ressourcen": ("Maschinen", "Personal"),
+            },
+        }
+    )
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
     texte = [element.value for element in anwendung.markdown]
-    assert any("Untersuchungsauftrag U" in text for text in texte)
-    assert any("Datenquellenkatalog Q" in text for text in texte)
-    assert any("Noch keine Datenquelle erfasst" in element.value for element in anwendung.info)
+    assert any("Untersuchungsauftrag (U)" in text for text in texte)
+    assert any("Systemprofil (S)" in text for text in texte)
+    assert any("Projektbezeichnung: Rahmen A" in text for text in texte)
+    assert any("Individueller Untersuchungszweck: Materialfluss erklären" in text for text in texte)
+    assert any("Produktionsspezifische Merkmale" in text for text in texte)
     assert any(
-        "Noch nicht aus den Ereignisdaten ermittelt" in element.value
-        for element in anwendung.markdown
+        "Lieferzeit reduzieren" in str(zelle) or "Mittlere DLZ Warenausgang" in str(zelle)
+        for dataframe in anwendung.dataframe
+        for zelle in dataframe.value.to_numpy().flat
     )
+    assert not any("Datenquellenkatalog Q" in text for text in texte)
+    assert not anwendung.date_input
 
 
-def test_vorhandene_datenquelle_erscheint_im_katalog_q(
+def test_vorhandene_datenquelle_ist_von_schritt_1_entkoppelt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Registrierte Datenquellen sind eindeutig dem gewählten Projekt zugeordnet."""
+    """Eine vorhandene Datenquelle erzeugt in Schritt 1 keine Ausgabe Q mehr."""
     datenbankpfad = tmp_path / "streamlit.sqlite"
     monkeypatch.setenv(DATENBANKPFAD_UMGEBUNGSVARIABLE, str(datenbankpfad))
     projekt = erstelle_projekt_service().projekt_anlegen(
@@ -201,14 +275,10 @@ def test_vorhandene_datenquelle_erscheint_im_katalog_q(
     ).select_index(1).run()
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    assert any(
-        "ERP-Export" in str(zelle)
-        for dataframe in anwendung.dataframe
-        for zelle in dataframe.value.to_numpy().flat
-    )
+    assert not any("ERP-Export" in element.value for element in anwendung.markdown)
     assert not anwendung.date_input
     assert any(
-        element.label == "Untersuchungsauftrag speichern und mit ETL fortfahren"
+        element.label == "Projektrahmen speichern und mit ETL fortfahren"
         for element in anwendung.button
     )
 
@@ -264,7 +334,7 @@ def test_altprojekt_wird_ohne_verlust_verdeckt_geladen(
     systemtyp.select_index(1).run()
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    _schaltflaeche(anwendung, "Untersuchungsauftrag speichern und mit ETL fortfahren").click().run()
+    _schaltflaeche(anwendung, "Projektrahmen speichern und mit ETL fortfahren").click().run()
     erneut = service.projekt_laden(projekt.projekt_id)
     assert erneut is not None
     assert erneut.status is Projektstatus.AKTIV
@@ -289,7 +359,7 @@ def test_vollstaendiges_neues_projekt_navigiert_zu_etl(
     )
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    _schaltflaeche(anwendung, "Untersuchungsauftrag speichern und mit ETL fortfahren").click().run()
+    _schaltflaeche(anwendung, "Projektrahmen speichern und mit ETL fortfahren").click().run()
     assert not anwendung.exception
     assert anwendung.radio[0].value == "2 ETL durchführen"
     gespeicherte = erstelle_projekt_service().projekte_auflisten()
@@ -308,22 +378,23 @@ def test_validierungsfehler_verhindert_navigation(
     )
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    _schaltflaeche(anwendung, "Untersuchungsauftrag speichern und mit ETL fortfahren").click().run()
-    assert anwendung.radio[0].value == "1 Projekt und Untersuchungsauftrag"
+    _schaltflaeche(anwendung, "Projektrahmen speichern und mit ETL fortfahren").click().run()
+    assert anwendung.radio[0].value == "Schritt 1: Projektrahmen definieren"
     assert any("müssen ausgefüllt sein" in element.value for element in anwendung.error)
     assert not erstelle_projekt_service().projekte_auflisten()
 
 
-def test_schritte_zwei_bis_sechs_bleiben_in_der_navigation(
+def test_schritte_zwei_bis_sieben_bleiben_in_der_navigation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Die Reduktion von Schritt 1 verändert keine späteren Hauptbereiche."""
+    """Die Navigation enthält den minimalen Übergabepunkt von Schritt 6 zu Schritt 7."""
     anwendung = _anwendung_starten(tmp_path, monkeypatch)
     assert anwendung.radio[0].options == [
-        "1 Projekt und Untersuchungsauftrag",
+        "Schritt 1: Projektrahmen definieren",
         "2 ETL durchführen",
         "3 Semantisches Mapping",
         "4 Event Log aufbauen",
         "5 Datenqualität prüfen",
         "6 Process Mining durchführen",
+        "7 Ergebnisse aggregieren",
     ]

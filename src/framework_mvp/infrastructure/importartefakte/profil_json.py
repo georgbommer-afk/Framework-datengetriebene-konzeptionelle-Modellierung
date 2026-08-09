@@ -15,15 +15,14 @@ from framework_mvp.infrastructure.persistence.sqlite_importvorgang_repository im
     serialisiere_importparameter,
 )
 
-PROFIL_VERSION = 1
+PROFIL_VERSION = 2
+UNTERSTUETZTE_PROFIL_VERSIONEN = {1, PROFIL_VERSION}
 
 STATISTISCHE_REGELN = (
     "Echte Fehlwerte folgen der Pandas-Semantik.",
     "Textuelle Platzhalter werden nach strip exakt und ohne Beachtung der Schreibweise erkannt.",
-    "Numerische Kennzahlen verwenden ausschließlich endliche Werte.",
+    "Numerische Kennzahlen verwenden ausschließlich endliche Werte und Gleichung 3.10.",
     "Potenzielle Ausreißer liegen außerhalb der 1,5-IQR-Grenzen.",
-    "Zeitspalten benötigen mindestens 90 Prozent interpretierbare reguläre Werte.",
-    "Seltene Kategorien besitzen einen Anteil von weniger als einem Prozent.",
 )
 
 
@@ -58,6 +57,53 @@ def _json_wert(wert: Any) -> Any:
     return wert
 
 
+def _fachliches_gesamtprofil(profil: Datenprofil) -> dict[str, Any]:
+    """Projiziert das persistierte R auf Tabellen 3.7 bis 3.10."""
+    roh = _json_wert(asdict(profil))
+    spaltenprofile = []
+    numerische_felder = (
+        "gueltige_werte",
+        "minimum",
+        "maximum",
+        "mittelwert",
+        "median",
+        "q1",
+        "q3",
+        "interquartilsabstand",
+        "untere_ausreissergrenze",
+        "obere_ausreissergrenze",
+        "potenzielle_ausreisser",
+    )
+    for spalte in roh["spaltenprofile"]:
+        eintrag = {
+            "spaltenname": spalte["spaltenname"],
+            "originaldatentyp": spalte["originaldatentyp"],
+            "technischer_datentyp": spalte["technischer_datentyp"],
+            "profiltyp": spalte["profiltyp"],
+            "fehlwerte": spalte["fehlwerte"],
+        }
+        numerisch = spalte.get("numerisch")
+        if numerisch is not None:
+            eintrag["numerisch"] = {name: numerisch[name] for name in numerische_felder}
+        kategorial = spalte.get("kategorial")
+        if kategorial is not None:
+            eintrag["kategorial"] = {
+                "eindeutige_auspraegungen": kategorial["eindeutige_auspraegungen"],
+                "haeufigster_wert": kategorial["haeufigster_wert"],
+            }
+        spaltenprofile.append(eintrag)
+    return {
+        "zeilen": roh["zeilen"],
+        "spalten": roh["spalten"],
+        "exakte_duplikate": roh["exakte_duplikate"],
+        "vollstaendig_leere_spalten": roh["vollstaendig_leere_spalten"],
+        "echte_fehlwerte": roh["echte_fehlwerte"],
+        "textuelle_platzhalter": roh["textuelle_platzhalter"],
+        "spaltenprofile": spaltenprofile,
+        "bestaetigte_zusaetzliche_platzhalter": roh["bestaetigte_zusaetzliche_platzhalter"],
+    }
+
+
 def erstelle_profil_json(
     *,
     import_id: UUID,
@@ -76,7 +122,7 @@ def erstelle_profil_json(
         "importparameter": serialisiere_importparameter(importparameter),
         "tabellenbezeichnung": tabellenbezeichnung,
         "erstellt_am": erstellt_am.isoformat(),
-        "gesamtprofil": _json_wert(asdict(profil)),
+        "gesamtprofil": _fachliches_gesamtprofil(profil),
         "statistische_regeln": list(STATISTISCHE_REGELN),
         "warnungen": list(warnungen),
     }
@@ -89,12 +135,75 @@ def erstelle_profil_json(
     ).encode("utf-8")
 
 
+def _migriere_gesamtprofil(gesamtprofil: dict[str, Any]) -> dict[str, Any]:
+    """Ergänzt fachliche Profilfelder beim kontrollierten Laden von Version 1."""
+    gesamtprofil.setdefault("bestaetigte_zusaetzliche_platzhalter", [])
+    for spalte in gesamtprofil.get("spaltenprofile", []):
+        if not isinstance(spalte, dict):
+            continue
+        original = str(spalte.get("originaldatentyp", "")).lower()
+        profiltyp = spalte.get("profiltyp")
+        if "bool" in original:
+            fachtyp = "Boolean"
+        elif profiltyp == "zeitbezogen":
+            fachtyp = "Datum und Uhrzeit"
+        elif profiltyp == "numerisch":
+            fachtyp = "Ganzzahl" if "int" in original else "Fließkommazahl"
+        else:
+            fachtyp = "Text"
+        spalte.setdefault("technischer_datentyp", fachtyp)
+        numerisch = spalte.get("numerisch")
+        if isinstance(numerisch, dict):
+            numerisch.pop("standardabweichung", None)
+        kategorial = spalte.get("kategorial")
+        if isinstance(kategorial, dict):
+            haeufigkeiten = kategorial.get("haeufigste_werte", [])
+            modus = (
+                haeufigkeiten[0].get("bezeichnung")
+                if haeufigkeiten and isinstance(haeufigkeiten[0], dict)
+                else None
+            )
+            kategorial.setdefault("haeufigster_wert", modus)
+            spalte["kategorial"] = {
+                "eindeutige_auspraegungen": kategorial.get("eindeutige_auspraegungen", 0),
+                "haeufigster_wert": kategorial.get("haeufigster_wert"),
+            }
+        spalte.pop("zeitbezogen", None)
+        spalte.pop("eindeutige_werte", None)
+        if isinstance(numerisch, dict):
+            erlaubte_numerische_felder = {
+                "gueltige_werte",
+                "minimum",
+                "maximum",
+                "mittelwert",
+                "median",
+                "q1",
+                "q3",
+                "interquartilsabstand",
+                "untere_ausreissergrenze",
+                "obere_ausreissergrenze",
+                "potenzielle_ausreisser",
+            }
+            spalte["numerisch"] = {
+                name: wert for name, wert in numerisch.items() if name in erlaubte_numerische_felder
+            }
+    for name in (
+        "speicherbedarf_bytes",
+        "numerische_spalten",
+        "kategoriale_spalten",
+        "zeitbezogene_spalten",
+        "sonstige_spalten",
+    ):
+        gesamtprofil.pop(name, None)
+    return gesamtprofil
+
+
 def lade_profil_json(pfad: Path) -> ProfilArtefakt:
     """Lädt und validiert ein unterstütztes Profil-JSON."""
     try:
         struktur = json.loads(pfad.read_text(encoding="utf-8"))
         version = int(struktur["profil_version"])
-        if version != PROFIL_VERSION:
+        if version not in UNTERSTUETZTE_PROFIL_VERSIONEN:
             raise Importintegritaetsfehler(
                 f"Die Profilversion {version} wird nicht unterstützt; "
                 f"erwartet wird {PROFIL_VERSION}."
@@ -109,7 +218,7 @@ def lade_profil_json(pfad: Path) -> ProfilArtefakt:
             importparameter=dict(struktur["importparameter"]),
             tabellenbezeichnung=str(struktur["tabellenbezeichnung"]),
             erstellt_am=datetime.fromisoformat(struktur["erstellt_am"]),
-            gesamtprofil=gesamtprofil,
+            gesamtprofil=_migriere_gesamtprofil(gesamtprofil),
             statistische_regeln=tuple(struktur["statistische_regeln"]),
             warnungen=tuple(struktur["warnungen"]),
         )

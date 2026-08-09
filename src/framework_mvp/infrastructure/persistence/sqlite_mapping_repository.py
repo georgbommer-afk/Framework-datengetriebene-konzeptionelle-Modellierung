@@ -162,4 +162,6 @@ class SQLiteMappingRepository:
             datetime.fromisoformat(struktur["geaendert_am"]),
             Mappingstatus(struktur["status"]),
             aktivitaetsdefinition,
+            UUID(struktur["mappingtabelle_id"]) if struktur.get("mappingtabelle_id") else None,
+            int(struktur.get("konfigurationsversion", 1)),
         )

@@ -42,7 +42,7 @@ def _regel(
             "fehlende_aktivitaet",
             "fehlender_zeitstempel",
         }:
-            reaktion = "Semantische Rollen in Framework-Schritt 3 prüfen."
+            reaktion = "Event-Log-Konfiguration in Framework-Schritt 4 prüfen."
         elif regel_id in {"doppelte_quellzeile", "lifecycle_paarung"}:
             reaktion = "Event-Log-Aufbau in Framework-Schritt 4 prüfen."
         else:

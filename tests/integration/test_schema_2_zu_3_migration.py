@@ -13,10 +13,10 @@ from framework_mvp.domain.models import (
     BeteiligtePerson,
     Betrachtungszeitraum,
     BetrachtungszeitraumModus,
+    Erzeugnisstrukturtyp,
     GestaltDerGueter,
     Intralogistikklassifikation,
     LogistischeZielgroesse,
-    Materialflussform,
     Materialflusskontinuitaet,
     Produktionsklassifikation,
     Projekt,
@@ -36,35 +36,26 @@ ANWENDUNGSPFAD = Path(__file__).parents[2] / "streamlit_app.py"
 
 def _vollstaendiges_projekt() -> Projekt:
     produktion = Produktionsklassifikation(
-        auftragsabwicklungsstrategie="MTO – Make-to-Order",
-        produktionsart="Serienproduktion",
-        produktionsstueckzahl="mittel (101–10.000 Stück)",
-        stueckzahl_grenze_gering_mittel=120,
-        stueckzahl_grenze_mittel_hoch=12_000,
-        stueckzahl_einheit_zeitraum="Stück pro Quartal",
-        produktvielfalt="mittel (11–100 Varianten)",
-        varianten_grenze_gering_mittel=12,
-        varianten_grenze_mittel_hoch=110,
+        auftragsabwicklungsstrategie="Make-to-Order (MTO)",
+        auflagegroesse="Serienproduktion",
+        produktionsstueckzahl="mittel (101-10 000 Stück)",
+        produktvielfalt="mittel (11-100 Var.)",
         organisationstyp="Inselfertigung",
         anzahl_arbeitsgaenge="mehrstufig",
-        produktionsfaktoren=("materialintensiv", "anlagenintensiv"),
         ressourcen=("Maschinen", "Personal"),
     )
     intralogistik = Intralogistikklassifikation(
-        hauptfunktionen=("Transport", "Lagerung"),
-        ladungstraeger=("Palette", "KLT"),
-        quellen_und_senken="Wareneingang und Montagelinie",
-        transportorganisation="bedarfsgesteuerter Transport",
-        lagerprinzip="FIFO",
-        ressourcen=("Stapler", "Routenzug"),
-        puffer_und_lagerbereiche="Puffer A",
-        bekannte_kapazitaetsgrenzen="Maximal 40 Paletten",
+        handlingvorgaenge=("Einlagerung", "Auslagerung"),
+        transportorganisation="gebündelter Rundlauf (“Milk-Run”)",
+        lagerplatzzuordnung="Zonenzuordnung",
+        materialbereitstellungsprinzip="Vorratshaltung",
+        ressourcen=("Gabelstapler", "Routenzüge"),
     )
     klassifikation = Systemklassifikation(
         bereich="Werk 1",
         objekte_gueter="Montageaufträge",
         gestalt_der_gueter=GestaltDerGueter.STUECKGUT,
-        materialflussform=Materialflussform.KONVERGIEREND,
+        erzeugnisstrukturtyp=Erzeugnisstrukturtyp.KONVERGIEREND,
         materialflusskontinuitaet=Materialflusskontinuitaet.DISKONTINUIERLICH,
         kapazitaetsgrenzen="Zwei Schichten",
         input_beschreibung="Material und Auftrag",
@@ -130,7 +121,7 @@ def test_vollstaendiges_schema_2_projekt_wird_unveraendert_auf_3_migriert(
 
     assert geladen == erwartet
     with sqlite3.connect(pfad) as verbindung:
-        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 7
         spalten = {zeile[1] for zeile in verbindung.execute("PRAGMA table_info(projekte)")}
         tabellen = {
             zeile[0]
@@ -191,7 +182,7 @@ def test_streamlit_seiten_starten_mit_migrierter_version_2_datenbank(
         for element in anwendung.title
     )
     if etl_oeffnen:
-        assert anwendung.radio[0].value == "1 Projekt und Untersuchungsauftrag"
+        assert anwendung.radio[0].value == "Schritt 1: Projektrahmen definieren"
 
 
 def test_nicht_unterstuetzte_version_zeigt_fehlermeldung_statt_traceback(
@@ -200,8 +191,8 @@ def test_nicht_unterstuetzte_version_zeigt_fehlermeldung_statt_traceback(
     """Ein erwartbarer Migrationsfehler bleibt innerhalb der kontrollierten UI-Fehleranzeige."""
     pfad = tmp_path / "version-6.sqlite"
     with sqlite3.connect(pfad) as verbindung:
-        verbindung.execute("PRAGMA user_version = 7")
+        verbindung.execute("PRAGMA user_version = 8")
     monkeypatch.setenv(DATENBANKPFAD_UMGEBUNGSVARIABLE, str(pfad))
     anwendung = AppTest.from_file(ANWENDUNGSPFAD).run()
     assert not anwendung.exception
-    assert any("neuere Schemaversion 7" in element.value for element in anwendung.error)
+    assert any("neuere Schemaversion 8" in element.value for element in anwendung.error)
