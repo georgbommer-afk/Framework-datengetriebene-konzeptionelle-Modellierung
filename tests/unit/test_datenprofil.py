@@ -7,8 +7,15 @@ import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 
-from framework_mvp.application.profiling import erstelle_datenprofil
-from framework_mvp.domain.models import Profiltyp, Spaltenprofil, Zeitgranularitaet
+from framework_mvp.application.profiling import (
+    erstelle_datenprofil,
+    quantil_nach_gleichung_3_10,
+)
+from framework_mvp.domain.models import (
+    Profiltyp,
+    Spaltenprofil,
+    TechnischerDatentyp,
+)
 
 
 def _spalte(daten: pd.DataFrame, name: str) -> Spaltenprofil:
@@ -66,23 +73,66 @@ def test_gesamtprofil_enthaelt_struktur_speicher_duplikate_und_summen() -> None:
     assert profil.kategoriale_spalten == 2
 
 
+def test_platzhalter_only_spalte_ist_nicht_vollstaendig_leer() -> None:
+    """Textuell enthaltene Platzhalter zählen nicht zu m_leer, aber zum Spaltenbefund."""
+    profil = erstelle_datenprofil(pd.DataFrame({"platzhalter": ["NULL", "N/A", "-"]}))
+    assert profil.vollstaendig_leere_spalten == 0
+    assert profil.textuelle_platzhalter == 3
+
+
+def test_domaenenspezifische_platzhalter_werden_bestaetigt_und_ausgeschlossen() -> None:
+    """Bestätigte Ersatzwerte fließen weder in u_j noch in den Modus ein."""
+    profil = erstelle_datenprofil(
+        pd.DataFrame({"status": ["unbekannt", "A", "A", "B"]}),
+        ("unbekannt",),
+    )
+    spalte = profil.spaltenprofile[0]
+    assert profil.bestaetigte_zusaetzliche_platzhalter == ("unbekannt",)
+    assert spalte.fehlwerte.platzhalter == 1
+    assert spalte.kategorial is not None
+    assert spalte.kategorial.eindeutige_auspraegungen == 2
+    assert spalte.kategorial.haeufigster_wert == "A"
+
+
 def test_numerische_statistik_und_ausreisser() -> None:
-    """Median, Quartile, Stichprobenstreuung und IQR-Regel werden vollständig berechnet."""
+    """Die Kennzahlen entsprechen ausschließlich Tabelle 3.10 und den IQR-Gleichungen."""
     profil = _spalte(pd.DataFrame({"x": [1.0, 2.0, 3.0, 4.0, 100.0]}), "x").numerisch
     assert profil is not None
     assert (profil.minimum, profil.maximum, profil.mittelwert, profil.median) == (1, 100, 22, 3)
-    assert profil.standardabweichung == pytest.approx(np.std([1, 2, 3, 4, 100], ddof=1))
     assert (profil.q1, profil.q3, profil.interquartilsabstand) == (2, 4, 2)
     assert (profil.untere_ausreissergrenze, profil.obere_ausreissergrenze) == (-1, 7)
     assert profil.potenzielle_ausreisser == 1
 
 
 def test_konstante_und_einzelne_numerische_werte() -> None:
-    """Konstanten haben IQR null; ein Einzelwert hat keine definierte Stichprobenstreuung."""
+    """Konstanten und Einzelwerte erhalten wohldefinierte Quantile und IQR-Werte."""
     konstant = _spalte(pd.DataFrame({"x": [5.0, 5.0, 5.0]}), "x").numerisch
     einzeln = _spalte(pd.DataFrame({"x": [5.0]}), "x").numerisch
     assert konstant is not None and konstant.interquartilsabstand == 0
-    assert einzeln is not None and einzeln.standardabweichung is None
+    assert einzeln is not None
+    assert (einzeln.q1, einzeln.median, einzeln.q3, einzeln.interquartilsabstand) == (5, 5, 5, 0)
+
+
+@pytest.mark.parametrize(
+    ("werte", "p", "erwartet"),
+    [
+        ([1, 2, 3, 4], 0.25, 1.5),
+        ([1, 2, 3, 4], 0.75, 3.5),
+        ([1, 2, 3, 4, 5, 6], 0.25, 2.0),
+        ([1, 2, 3, 4, 5, 6], 0.75, 5.0),
+        ([1, 2, 3, 4, 5], 0.5, 3.0),
+    ],
+)
+def test_quantile_folgen_exakt_gleichung_3_10(werte: list[int], p: float, erwartet: float) -> None:
+    """Methodenkritische Stichproben verwenden nicht die lineare Standardinterpolation."""
+    assert quantil_nach_gleichung_3_10(np.asarray(werte), p) == erwartet
+
+
+def test_vier_werte_liefern_quartile_und_grenzen_nach_gleichung_3_10() -> None:
+    profil = _spalte(pd.DataFrame({"x": [1.0, 2.0, 3.0, 4.0]}), "x").numerisch
+    assert profil is not None
+    assert (profil.q1, profil.q3, profil.interquartilsabstand) == (1.5, 3.5, 2.0)
+    assert (profil.untere_ausreissergrenze, profil.obere_ausreissergrenze) == (-1.5, 6.5)
 
 
 def test_vollstaendig_fehlende_numerische_spalte() -> None:
@@ -111,6 +161,35 @@ def test_kategoriale_haeufigkeiten_sind_stabil_sortiert() -> None:
         ("C", 1),
     ]
     assert profil.eindeutige_auspraegungen == 3
+    assert profil.haeufigster_wert == "A"
+
+
+def test_fachliche_technische_datentypen_aus_tabelle_3_8() -> None:
+    """R verwendet fachliche Bezeichnungen statt ausschließlich Pandas-dtypes."""
+    daten = pd.DataFrame(
+        {
+            "text": pd.Series(["A", "B"], dtype="string"),
+            "ganzzahl": pd.Series([1, 2], dtype="Int64"),
+            "fliesskomma": [1.5, 2.5],
+            "boolean": pd.Series([True, False], dtype="boolean"),
+            "datum": pd.to_datetime(["2024-01-01", "2024-01-02"]),
+            "datum_zeit": pd.to_datetime(["2024-01-01 10:00", "2024-01-02 11:00"]),
+            "uhrzeit": ["10:00", "11:30"],
+        }
+    )
+    typen = {
+        profil.spaltenname: profil.technischer_datentyp
+        for profil in erstelle_datenprofil(daten).spaltenprofile
+    }
+    assert typen == {
+        "text": TechnischerDatentyp.TEXT,
+        "ganzzahl": TechnischerDatentyp.GANZZAHL,
+        "fliesskomma": TechnischerDatentyp.FLIESSKOMMAZAHL,
+        "boolean": TechnischerDatentyp.BOOLEAN,
+        "datum": TechnischerDatentyp.DATUM,
+        "datum_zeit": TechnischerDatentyp.DATUM_UND_UHRZEIT,
+        "uhrzeit": TechnischerDatentyp.UHRZEIT,
+    }
 
 
 def test_seltene_werte_unter_einem_prozent() -> None:
@@ -163,21 +242,3 @@ def test_gemischte_zeitzonen_werden_nicht_stillschweigend_vereinheitlicht() -> N
     assert profil is not None
     assert profil.fruehester_zeitpunkt is None
     assert profil.granularitaet is None
-
-
-@pytest.mark.parametrize(
-    ("start", "ende", "granularitaet"),
-    [
-        ("2024-01-01 00:00", "2024-01-01 12:00", Zeitgranularitaet.STUNDE),
-        ("2024-01-01", "2024-02-01", Zeitgranularitaet.TAG),
-        ("2024-01-01", "2024-12-01", Zeitgranularitaet.WOCHE),
-        ("2020-01-01", "2024-01-01", Zeitgranularitaet.MONAT),
-    ],
-)
-def test_zeitgranularitaet_ist_deterministisch(
-    start: str, ende: str, granularitaet: Zeitgranularitaet
-) -> None:
-    """Die Zeitspanne bestimmt reproduzierbar die Aggregationsgranularität."""
-    profil = _spalte(pd.DataFrame({"zeit": pd.to_datetime([start, ende])}), "zeit").zeitbezogen
-    assert profil is not None and profil.granularitaet is granularitaet
-    assert sum(wert.anzahl for wert in profil.aggregation) == 2

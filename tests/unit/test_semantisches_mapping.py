@@ -1,4 +1,4 @@
-"""Unit-Tests für Mappingmodi und Validierungswarnungen."""
+"""Schritt-4-Tests für Event-Log-Struktur und Rollenvalidierung."""
 
 from dataclasses import replace
 from datetime import UTC, datetime

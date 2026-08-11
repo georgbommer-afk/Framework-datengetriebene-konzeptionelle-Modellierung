@@ -11,6 +11,7 @@ from typing import Any, cast
 
 import pandas as pd
 import pm4py
+from pm4py.visualization.bpmn import visualizer as bpmn_visualizer
 from pm4py.visualization.dfg import visualizer as dfg_visualizer
 from pm4py.visualization.petri_net import visualizer as petri_visualizer
 from pm4py.visualization.process_tree import visualizer as process_tree_visualizer
@@ -21,9 +22,9 @@ from framework_mvp.domain.models import (
     DfgErgebnis,
     DiscoveryErgebnisse,
     DiscoveryKonfiguration,
-    DiscoveryVerfahren,
     ModellStatistik,
     ProcessMiningWarnung,
+    Prozessnotation,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -44,9 +45,8 @@ class Pm4pyDiscoveryErgebnis:
     """Discovery-Ergebnis einschließlich nicht persistierbarer Laufzeitobjekte."""
 
     ergebnisse: DiscoveryErgebnisse
-    netz: Any
-    initial_marking: Any
-    final_marking: Any
+    prozessbaum: Any
+    prozessmodell: Any
 
 
 class Pm4pyAdapter:
@@ -111,21 +111,13 @@ class Pm4pyAdapter:
     def entdecken(
         self, daten: pd.DataFrame, konfiguration: DiscoveryKonfiguration
     ) -> Pm4pyDiscoveryErgebnis:
-        """Führt eines der zwei explizit unterstützten Discovery-Verfahren aus."""
+        """Erzeugt PT genau einmal und leitet daraus die gewählte Notation P ab."""
         log = self.arbeitskopie(daten)
-        process_tree = None
-        if konfiguration.verfahren is DiscoveryVerfahren.INDUCTIVE_MINER:
-            process_tree = pm4py.discover_process_tree_inductive(
-                log, noise_threshold=konfiguration.noise_threshold
-            )
-            netz, initial, final = pm4py.convert_to_petri_net(process_tree)
-        else:
-            netz, initial, final = pm4py.discover_petri_net_heuristics(
-                log,
-                dependency_threshold=konfiguration.dependency_threshold,
-                and_threshold=konfiguration.and_threshold,
-                loop_two_threshold=konfiguration.loop_two_threshold,
-            )
+        process_tree = pm4py.discover_process_tree_inductive(
+            log,
+            noise_threshold=konfiguration.schwellwert_k,
+        )
+        netz, initial, final = pm4py.convert_to_petri_net(process_tree)
         sichtbar = sum(transition.label is not None for transition in netz.transitions)
         statistik = ModellStatistik(
             sichtbar,
@@ -134,53 +126,76 @@ class Pm4pyAdapter:
             len(netz.arcs),
         )
         warnungen: list[ProcessMiningWarnung] = []
-        modell_svg = None
         process_tree_svg = None
         try:
-            modell_graph = petri_visualizer.apply(netz, initial, final)
-            modell_svg = self._graph_svg(modell_graph)
+            process_tree_graph = process_tree_visualizer.apply(process_tree)
+            process_tree_svg = self._graph_svg(process_tree_graph)
         except Exception as fehler:
-            LOGGER.exception("Die Petri-Netz-Visualisierung ist fehlgeschlagen.")
+            LOGGER.exception("Die Prozessbaum-Visualisierung ist fehlgeschlagen.")
             warnungen.append(
                 ProcessMiningWarnung(
-                    "MODELL_VISUALISIERUNG_NICHT_VERFUEGBAR",
-                    f"Die Modellvisualisierung ist lokal nicht verfügbar: {fehler}",
+                    "PROZESSBAUM_VISUALISIERUNG_NICHT_VERFUEGBAR",
+                    f"Die Prozessbaumdarstellung ist lokal nicht verfügbar: {fehler}",
                 )
             )
-        if process_tree is not None:
+
+        prozessmodell: Any = process_tree
+        modell_svg = process_tree_svg
+        if konfiguration.prozessnotation is Prozessnotation.PETRINETZ:
+            prozessmodell = (netz, initial, final)
             try:
-                process_tree_graph = process_tree_visualizer.apply(process_tree)
-                process_tree_svg = self._graph_svg(process_tree_graph)
+                modell_svg = self._graph_svg(petri_visualizer.apply(netz, initial, final))
             except Exception as fehler:
-                LOGGER.exception("Die Process-Tree-Visualisierung ist fehlgeschlagen.")
+                LOGGER.exception("Die Petrinetz-Visualisierung ist fehlgeschlagen.")
                 warnungen.append(
                     ProcessMiningWarnung(
-                        "PROCESS_TREE_VISUALISIERUNG_NICHT_VERFUEGBAR",
-                        f"Die Process-Tree-Visualisierung ist lokal nicht verfügbar: {fehler}",
+                        "MODELL_VISUALISIERUNG_NICHT_VERFUEGBAR",
+                        f"Die Petrinetzdarstellung ist lokal nicht verfügbar: {fehler}",
                     )
                 )
+                modell_svg = None
+        elif konfiguration.prozessnotation is Prozessnotation.BPMN:
+            prozessmodell = pm4py.convert_to_bpmn(process_tree)
+            try:
+                modell_svg = self._graph_svg(bpmn_visualizer.apply(prozessmodell))
+            except Exception as fehler:
+                LOGGER.exception("Die BPMN-Visualisierung ist fehlgeschlagen.")
+                warnungen.append(
+                    ProcessMiningWarnung(
+                        "MODELL_VISUALISIERUNG_NICHT_VERFUEGBAR",
+                        f"Die BPMN-Darstellung ist lokal nicht verfügbar: {fehler}",
+                    )
+                )
+                modell_svg = None
+
         with tempfile.TemporaryDirectory(prefix="framework-pm-") as verzeichnis:
             basis = Path(verzeichnis)
-            pnml_pfad = basis / "modell.pnml"
-            pm4py.write_pnml(netz, initial, final, str(pnml_pfad))
-            pnml = pnml_pfad.read_bytes()
-            ptml = None
-            if process_tree is not None:
-                ptml_pfad = basis / "prozessbaum.ptml"
-                pm4py.write_ptml(process_tree, str(ptml_pfad))
-                ptml = ptml_pfad.read_bytes()
+            ptml_pfad = basis / "prozessbaum.ptml"
+            pm4py.write_ptml(process_tree, str(ptml_pfad))
+            ptml = ptml_pfad.read_bytes()
+            if konfiguration.prozessnotation is Prozessnotation.PROZESSBAUM:
+                modell_bytes = ptml
+            elif konfiguration.prozessnotation is Prozessnotation.PETRINETZ:
+                modell_pfad = basis / "modell.pnml"
+                pm4py.write_pnml(netz, initial, final, str(modell_pfad))
+                modell_bytes = modell_pfad.read_bytes()
+            else:
+                modell_pfad = basis / "modell.bpmn"
+                pm4py.write_bpmn(prozessmodell, str(modell_pfad))
+                modell_bytes = modell_pfad.read_bytes()
         return Pm4pyDiscoveryErgebnis(
             DiscoveryErgebnisse(
+                konfiguration.prozessnotation,
+                konfiguration.miner_variante,
                 statistik,
-                pnml,
+                modell_bytes,
                 ptml,
                 modell_svg,
                 process_tree_svg,
                 tuple(warnungen),
             ),
-            netz,
-            initial,
-            final,
+            process_tree,
+            prozessmodell,
         )
 
     def dfg_visualisieren(

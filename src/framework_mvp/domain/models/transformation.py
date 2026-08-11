@@ -17,6 +17,8 @@ class Transformationsart(StrEnum):
     UMBENENNEN = "umbenennen"
     WERTE_ERSETZEN = "werte_ersetzen"
     DATENTYP_KONVERTIEREN = "datentyp_konvertieren"
+    EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN = "exakte_tupel_duplikate_entfernen"
+    VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN = "vollstaendig_leere_spalten_entfernen"
     PLATZHALTER_BEHANDELN = "platzhalter_behandeln"
     FEHLWERTE_BEHANDELN = "fehlwerte_behandeln"
     DUPLIKATE_BEHANDELN = "duplikate_behandeln"
@@ -24,6 +26,23 @@ class Transformationsart(StrEnum):
     ZEILEN_FILTERN = "zeilen_filtern"
     ABGELEITETE_SPALTE = "abgeleitete_spalte"
     TABELLEN_JOIN = "tabellen_join"
+
+
+FRAMEWORKKONFORME_TRANSFORMATIONSARTEN = (
+    Transformationsart.DATENTYP_KONVERTIEREN,
+    Transformationsart.WERTE_ERSETZEN,
+    Transformationsart.EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN,
+    Transformationsart.VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN,
+)
+
+TRANSFORMATIONSART_BEZEICHNUNGEN = {
+    Transformationsart.DATENTYP_KONVERTIEREN: "Datentyp konvertieren",
+    Transformationsart.WERTE_ERSETZEN: "Werte ersetzen",
+    Transformationsart.EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN: ("Exakte Tupel-Duplikate entfernen"),
+    Transformationsart.VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN: (
+        "Vollständig leere Spalten entfernen"
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +85,14 @@ class Transformationsschritt:
     def parameter(self) -> dict[str, Any]:
         """Liefert eine neue Parameterstruktur für die Ausführung."""
         return dict(json.loads(self.parameter_json))
+
+    @property
+    def frameworkkonform(self) -> bool:
+        """Kennzeichnet aktuelle Schritt-2-Transformationen und die separate Join-Operation."""
+        return self.typ in (
+            *FRAMEWORKKONFORME_TRANSFORMATIONSARTEN,
+            Transformationsart.TABELLEN_JOIN,
+        )
 
     @classmethod
     def neu(

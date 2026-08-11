@@ -45,19 +45,8 @@ def _gesamtuebersicht(ergebnis: Profilierungsergebnis) -> None:
 
 
 def _verstaendlicher_datentyp(profil: Spaltenprofil) -> str:
-    """Übersetzt Profil und technischen Datentyp in eine fachliche Bezeichnung."""
-    original = profil.originaldatentyp.lower()
-    if "bool" in original:
-        return "Wahr/Falsch"
-    if profil.profiltyp is Profiltyp.ZEITBEZOGEN:
-        return "Datum und Zeit"
-    if profil.profiltyp is Profiltyp.NUMERISCH:
-        return "Ganzzahl" if "int" in original else "Dezimalzahl"
-    if profil.fehlwerte.gueltige_regulaere_werte == 0:
-        return "Leer"
-    if profil.profiltyp is Profiltyp.KATEGORIAL:
-        return "Text"
-    return "Gemischt"
+    """Gibt den fachlichen technischen Datentyp aus Tabelle 3.8 aus."""
+    return profil.technischer_datentyp.value
 
 
 def _spaltenuebersicht(ergebnis: Profilierungsergebnis, daten: pd.DataFrame | None) -> None:
@@ -102,7 +91,7 @@ def _spaltenuebersicht(ergebnis: Profilierungsergebnis, daten: pd.DataFrame | No
     if auffaellig:
         st.write("**Auffällige Spalten**")
         for zeile in auffaellig:
-            st.info(f"{zeile['Spaltenname']}: {zeile['Erkannte Auffälligkeiten']}")
+            st.info(f"**{zeile['Spaltenname']}:** {zeile['Erkannte Auffälligkeiten']}")
 
 
 def _fehlwertdiagramm(ergebnis: Profilierungsergebnis) -> None:
@@ -111,7 +100,10 @@ def _fehlwertdiagramm(ergebnis: Profilierungsergebnis) -> None:
         "Leere Zellen sind echte fehlende Werte. Einträge wie NULL, N/A oder - "
         "können textuelle Platzhalter für fehlende Angaben sein."
     )
-    daten = [asdict(wert) for wert in ergebnis.diagramme.fehlwerte]
+    daten = [asdict(wert) for wert in ergebnis.diagramme.fehlwerte if wert.anzahl > 0]
+    if not daten:
+        st.info("Keine entsprechenden Werte vorhanden.")
+        return
     st.vega_lite_chart(
         {"values": daten},
         {
@@ -121,14 +113,14 @@ def _fehlwertdiagramm(ergebnis: Profilierungsergebnis) -> None:
                     "field": "spaltenname",
                     "type": "nominal",
                     "sort": None,
-                    "title": "Spalte",
+                    "title": None,
                 },
                 "x": {
                     "field": "anteil",
                     "type": "quantitative",
                     "stack": "zero",
                     "axis": {"format": ".1%"},
-                    "title": "Anteil",
+                    "title": None,
                 },
                 "color": {"field": "art", "type": "nominal", "title": "Art"},
                 "tooltip": [
@@ -141,7 +133,6 @@ def _fehlwertdiagramm(ergebnis: Profilierungsergebnis) -> None:
         },
         width="stretch",
     )
-    st.dataframe(pd.DataFrame(daten), hide_index=True)
 
 
 def _numerische_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) -> None:
@@ -228,6 +219,7 @@ def _kategoriale_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) 
     kategorial = profil.kategorial
     assert kategorial is not None
     st.metric("Eindeutige reguläre Ausprägungen", kategorial.eindeutige_auspraegungen)
+    st.metric("Häufigster Wert (Modus)", kategorial.haeufigster_wert or "–")
     st.write(
         f"Gültige reguläre Werte: **{kategorial.gueltige_werte:,}** · "
         f"Seltene Werte unter 1 %: **{kategorial.seltene_werte:,}**"
@@ -238,14 +230,13 @@ def _kategoriale_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) 
         st.info("Diese Spalte enthält keine regulären kategorialen Werte.")
         return
     daten = [asdict(wert) for wert in diagramm.kategorien]
-    st.dataframe(pd.DataFrame(daten), hide_index=True)
     st.vega_lite_chart(
         {"values": daten},
         {
             "mark": "bar",
             "encoding": {
-                "y": {"field": "bezeichnung", "type": "nominal", "sort": "-x", "title": "Wert"},
-                "x": {"field": "anzahl", "type": "quantitative", "title": "Häufigkeit"},
+                "y": {"field": "bezeichnung", "type": "nominal", "sort": "-x", "title": None},
+                "x": {"field": "anzahl", "type": "quantitative", "title": None},
                 "tooltip": ["bezeichnung", "anzahl", {"field": "anteil", "format": ".2%"}],
             },
         },
@@ -353,6 +344,7 @@ def zeige_gespeichertes_datenprofil(struktur: dict[str, object]) -> None:
             {
                 "Spaltenname": name,
                 "Originaldatentyp": spaltenprofil.get("originaldatentyp"),
+                "Technischer Datentyp": spaltenprofil.get("technischer_datentyp"),
                 "Profiltyp": spaltenprofil.get("profiltyp"),
                 "Gültige Werte": fehlwerte.get("gueltige_regulaere_werte", 0),
                 "Echte Fehlwerte": fehlwerte.get("echte_fehlwerte", 0),

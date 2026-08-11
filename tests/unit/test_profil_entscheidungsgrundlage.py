@@ -27,8 +27,8 @@ def test_auffaelligkeiten_werden_korrekten_spalten_zugeordnet() -> None:
     """Fehlwerte, Platzhalter und Ausreißer bleiben spaltenbezogen unterscheidbar."""
     daten = pd.DataFrame(
         {
-            "wert": [1.0, 2.0, 3.0, 100.0, None],
-            "text": ["ok", "NULL", "N/A", "ok", "ok"],
+            "wert": [1.0, 2.0, 3.0, 4.0, 100.0, None],
+            "text": ["ok", "NULL", "N/A", "ok", "ok", "ok"],
         }
     )
     auffaelligkeiten = ermittle_auffaelligkeiten(_profil(daten), daten)
@@ -49,11 +49,20 @@ def test_filter_nur_spalten_mit_auffaelligkeiten() -> None:
     assert [(wert.spaltenname, wert.art) for wert in gefiltert] == [("a", "Fehlwerte")]
 
 
-def test_median_wird_nur_fuer_numerische_spalten_angeboten() -> None:
-    """Statistische Ersetzungen sind für kategoriale Spalten ausgeschlossen."""
+def test_ersatzstrategien_sind_exakt_datentypabhaengig() -> None:
+    """Nur die Ersatzwerte aus Tabelle 3.11 werden typabhängig angeboten."""
     profil = _profil(pd.DataFrame({"zahl": [1, None], "text": ["a", None]}))
-    assert "Median einsetzen" in fachlich_zulaessige_fehlwertstrategien(profil, ("zahl",))
-    assert "Median einsetzen" not in fachlich_zulaessige_fehlwertstrategien(profil, ("text",))
+    assert fachlich_zulaessige_fehlwertstrategien(profil, ("zahl",)) == (
+        "Frei definierter Wert",
+        "Minimum",
+        "Maximum",
+        "Arithmetisches Mittel",
+        "Median",
+    )
+    assert fachlich_zulaessige_fehlwertstrategien(profil, ("text",)) == (
+        "Frei definierter Wert",
+        "Häufigster Wert (Modus)",
+    )
 
 
 def test_vorher_nachher_vergleich_zeigt_korrekte_veraenderung_ohne_mutation() -> None:
@@ -88,7 +97,7 @@ def test_direkte_aktion_liefert_nur_formularvorauswahl() -> None:
     jetzt = datetime.now(UTC)
     plan = Transformationsplan(uuid4(), uuid4(), (uuid4(),), (), jetzt, jetzt)
     art = transformationsart_fuer_auffaelligkeit("Ausreißer")
-    assert art is Transformationsart.AUSREISSER_BEHANDELN
+    assert art is Transformationsart.WERTE_ERSETZEN
     assert plan.schritte == ()
 
 

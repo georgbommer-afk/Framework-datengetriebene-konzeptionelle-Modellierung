@@ -1,4 +1,4 @@
-# ADR-006: Kanonisches Event Log und regelbasierte Datenqualität
+# ADR-006: Kanonisches Event Log und unveränderte E*-Freigabe
 
 ## Kontext
 
@@ -9,41 +9,88 @@ verschleiern.
 
 ## Entscheidung
 
-Das kanonische Event Log besitzt mindestens `case_id`, `activity`, `timestamp` und eine stabile
-technische `event_id`. Optionale Standardspalten und gemappte Fall-, Ereignis-, Ressourcen- und
-Objektattribute bleiben erhalten. Technische Herkunftsspalten sichern Quellzeile und bei breiten
-Datensätzen die ursprüngliche Zeitstempelspalte. Ereignisorientierte Daten werden zeilenweise
-übernommen; breite Zeitstempeldaten werden anhand der gespeicherten Zuordnungen kontrolliert
-unpivotiert. Zeitzonenlose Werte erhalten keine stillschweigende UTC-Annahme.
+Mappingtabelle M und Event-Log-Konfiguration sind getrennte Artefakte. M enthält ausschließlich
+fachliche Zuordnungen technischer Spaltenbezeichnungen und typisierter technischer Werte. Die
+Event-Log-Konfiguration aus Schritt 4 bindet sich an genau ein Projekt und T und enthält optional
+die ID von M, die Strukturart, genau eine Fallidentifikationsspalte, die Aktivitätsdefinition,
+die Zeitstempelquellen und die ausdrücklich ausgewählten zusätzlichen Attribute.
 
-CSV.GZ ist das führende Event-Log-Artefakt. Schema-JSON dokumentiert Spalten, Typen, Rollen,
-Zeitformat und Prüfsumme; Lineage-JSON verweist auf Projekt, Zwischendatensatz, Mapping,
+Das kanonische Event Log besitzt mindestens `case_id`, `activity`, `timestamp` und eine stabile
+technische `event_id`. Bei ereignisorientierten Daten wird jede Zeile von T zu genau einem
+Ereignis. Eine Aktivität stammt entweder aus einer vorhandenen Spalte oder aus mindestens zwei
+geordneten Attributen mit optionalem Verknüpfungselement. Breite Zeitstempeldaten werden nur über
+ausgewählte Zeitstempelspalten unpivotiert; jeder vorhandene Wert erzeugt ein Ereignis mit der
+für diese Spalte konfigurierten Aktivitätsbeschreibung. Nur ausdrücklich ausgewählte zusätzliche
+Attribute werden übernommen.
+
+Fachliche Spalten- und Wertzuordnungen aus M werden auf einer tiefen Arbeitskopie angewandt. T und
+M werden nicht verändert. Nicht gemappte Werte bleiben erhalten, Wertzuordnungen sind an
+Quellspalte und Datentyp gebunden und gleiche fachliche Spaltennamen werden kollisionssicher
+aufgelöst. Technische Herkunftsspalten sichern Rohwerte, Quellzeile und bei breiten Datensätzen
+die ursprüngliche Zeitstempelspalte. Innerhalb eines Falls wird chronologisch sowie bei
+Gleichständen stabil nach Quellzeile und Zeitstempelspaltenreihenfolge geordnet. Zeitzonenlose
+Werte erhalten keine stillschweigende UTC-Annahme.
+
+CSV.GZ ist das führende Event-Log-Artefakt. Schema-JSON dokumentiert fachliche und technische
+Spalten, Typen, Zeitformat und Prüfsumme. Lineage-JSON enthält Projekt, T, optionale M-ID, die
+vollständige Event-Log-Konfiguration, angewandte Zuordnungen, technische Quellen,
 Transformationsplan und Quellimporte. XES wird nicht erzeugt: Obwohl PM4Py vorhanden ist, bleibt
 CSV.GZ in diesem Inkrement der eindeutig prüfbare Vertrag, und ein optionaler Export soll nicht
 zusätzliche Semantik vorwegnehmen.
 
-Die Datenqualität wird durch typisierte, konfigurierbare Regeln für Vollständigkeit, Validität,
-Konsistenz, Eindeutigkeit und zeitliche Plausibilität geprüft. Befunde verändern keine Daten.
-Maßnahmen sind unveränderlich, geordnet und müssen ausdrücklich gewählt werden. Ihre Vorschau
-arbeitet auf einer Kopie und wird erneut geprüft. Das Original-Event-Log bleibt unverändert.
+Schritt 4 prüft ausschließlich die Struktur der Konfiguration und die Existenz ihrer Referenzen.
+Fehlende oder nicht interpretierbare Werte werden weder entfernt noch ersetzt, sondern mit ihren
+Rohwerten in E erhalten. Ihre vollständige Qualitätsbewertung und eine mögliche Freigabe als
+`E*` gehören ausschließlich zum Quality-Gate in Schritt 5.
 
-Rückkopplungen werden als Empfehlungen dargestellt: Import- und Typfehler verweisen auf Schritt
-2, Rollenprobleme auf Schritt 3, Aufbau- oder Unpivotingprobleme auf Schritt 4 und rein
-qualitative Entscheidungen verbleiben in Schritt 5. Es erfolgt keine automatische Navigation.
+Schritt 5 prüft stets die aus E abgeleitete und integritätsgeprüfte Kette aus Q, T, optional M,
+Event-Log-Konfiguration und E. Maßgeblich sind die vier Kriterien aus Tabelle 3.14:
+
+- Q dokumentiert Herkunft und Grundlagen der verwendeten Daten nachvollziehbar.
+- T enthält die für die weitere Verarbeitung tatsächlich erforderlichen Daten vollständig.
+- Ein vorhandenes M ordnet technische Bezeichnungen eindeutig und fachlich verständlich zu.
+- E enthält seine Mindestbestandteile vollständig und interpretierbar.
+
+Strukturelle Bindungen, Prüfsummen, technische Referenzen und die benötigten Spalten und Werte
+werden automatisch geprüft. Die Nachvollziehbarkeit von Q, die Verständlichkeit eines befüllten
+M und die Interpretierbarkeit von E erfordern zusätzlich begründete menschliche Bestätigungen.
+Fachlich erklärbare Abwesenheiten in breiten Zeitstempelspalten oder zusätzlichen Attributen
+werden transparent ausgewiesen und begründet bewertet. Es gibt weder deaktivierbare
+Prüfbereiche noch einen numerischen Qualitätsscore.
+
+Schritt 5 besitzt keine Korrektur- oder Maßnahmenlogik. Er verändert Q, T, M und E nicht, schließt
+keine Ereignisse oder Fälle aus und erzeugt keine Qualitäts-CSV. Nicht behobene Mängel blockieren
+die Freigabe und ermöglichen einen tatsächlichen Rücksprung zur Ursache: Q zu Schritt 1, T zu
+Schritt 2, M zu Schritt 3 sowie Konfiguration oder Erzeugung von E zu Schritt 4.
+
+Bei bestandenem Gate gilt `E* ← E`: E* ist eine Freigabereferenz auf exakt dasselbe E, keine
+Datenkopie. Ein projektbezogener JSON-Bericht speichert Artefakt- und Softwareversion, die
+vollständige Kettenbindung und ihre Prüfsummen, Befunde, Entscheidungen und Begründungen. Beim
+erneuten Laden werden Bericht und aktuelle Artefaktkette vollständig geprüft. Änderungen an Q,
+T, M, Konfiguration oder E entwerten die Freigabe.
+
+Vorhandene regelbasierte Qualitätsberichte, Maßnahmenpläne und veränderte Arbeitskopien bleiben
+über die Legacy-Schnittstelle kontrolliert lesbar. Sie werden nicht als E* interpretiert und
+nicht an den regulären Schritt 6 übergeben. Process Mining lädt ausschließlich eine gültige
+Freigabe desselben Projekts und damit wieder den ursprünglichen Event Log E.
 
 ## Konsequenzen
 
-- Event-IDs und technische Herkunft machen Quellereignisse reproduzierbar unterscheidbar.
-- Process Mining kann später auf einen stabilen kanonischen Vertrag aufbauen.
-- Qualitätsberichte und Maßnahmen bleiben prüfbar und wiederholbar.
-- Ausschlüsse oder Ersetzungen erscheinen nur in einer neuen qualitätsgeprüften Arbeitskopie.
+- Event-IDs, vollständige Konfiguration und technische Herkunft machen E reproduzierbar.
+- Zusätzliche Attribute werden nicht durch frühere Rollengruppen erweitert, sondern explizit
+  ausgewählt.
+- Process Mining baut ausschließlich auf einer erneut validierten E*-Freigabe auf.
+- Der Freigabebericht ist ein Audit- und Reproduzierbarkeitsartefakt, kein zusätzliches
+  Frameworkergebnis und keine Datenkopie.
+- Alte Qualitätskopien bleiben aus Rückwärtskompatibilitätsgründen lesbar, sind aber klar vom
+  regulären Gate getrennt.
 - CSV bewahrt spezialisierte Datentypen nicht vollständig; Schema und ISO-Zeitvertrag
   dokumentieren die Rekonstruktion.
 
 ## Verworfene Alternativen
 
-- Direkte Mutation des ursprünglichen Event Logs wurde verworfen.
-- Automatische destruktive Maßnahmen wurden verworfen.
-- Freie Regel- oder Python-Code-Eingabe wurde aus Sicherheitsgründen verworfen.
+- Direkte Mutation oder eine bereinigte Qualitätskopie von E wurde verworfen.
+- Automatische und manuelle Korrekturmaßnahmen innerhalb von Schritt 5 wurden verworfen.
+- Konfigurierbare Pflichtregeln und ein numerischer Gesamtscore wurden verworfen.
 - XES als führendes Format wurde wegen des zusätzlichen semantischen Übersetzungsschritts
   verworfen.

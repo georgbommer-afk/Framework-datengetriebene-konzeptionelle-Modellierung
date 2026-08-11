@@ -1,0 +1,324 @@
+"""Fachliche Unit-Tests der festen Zuordnung aus Tabelle 3.15."""
+
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from pathlib import Path
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pandas as pd
+import pm4py
+import pytest
+from pm4py.objects.petri_net.obj import Marking, PetriNet
+from pm4py.objects.petri_net.utils import petri_utils
+from pm4py.objects.process_tree.obj import Operator, ProcessTree
+
+from framework_mvp.application.ergebnisaggregation.sollprozess import (
+    erzeuge_lineares_sollmodell,
+)
+from framework_mvp.application.modellableitung import (
+    MODELLBESTANDTEILE,
+    extrahiere_sichtbare_aktivitaeten,
+    leite_modellbestandteile_ab,
+)
+from framework_mvp.domain.models import (
+    Datenquelle,
+    Eingangsartefakt,
+    Intralogistikklassifikation,
+    Kennzeichnungsherkunft,
+    LogistischeZielgroesse,
+    ModellbestandteilId,
+    Offenheitskategorie,
+    Produktionsklassifikation,
+    Projekt,
+    Projektstatus,
+    Prozessnotation,
+    Quellenart,
+    Quellsystemtyp,
+    Systemklassifikation,
+    Systemtyp,
+    Untersuchungsauftrag,
+)
+
+
+def _prozessbaum() -> ProcessTree:
+    a = ProcessTree(label="A")
+    b = ProcessTree(label="B")
+    wurzel = ProcessTree(operator=Operator.SEQUENCE, children=[a, b])
+    a.parent = wurzel
+    b.parent = wurzel
+    return wurzel
+
+
+def _modellbytes(tmp_path: Path, notation: Prozessnotation) -> bytes:
+    baum = _prozessbaum()
+    pfad = tmp_path / f"modell.{notation.dateiendung}"
+    if notation is Prozessnotation.PROZESSBAUM:
+        pm4py.write_ptml(baum, str(pfad))
+    elif notation is Prozessnotation.BPMN:
+        pm4py.write_bpmn(pm4py.convert_to_bpmn(baum), str(pfad))
+    else:
+        netz, start, ende = pm4py.convert_to_petri_net(baum)
+        stille = PetriNet.Transition("tau", None)
+        netz.transitions.add(stille)
+        lose_stelle = PetriNet.Place("lose")
+        netz.places.add(lose_stelle)
+        petri_utils.add_arc_from_to(lose_stelle, stille, netz)
+        pm4py.write_pnml(netz, start, ende, str(pfad))
+    return pfad.read_bytes()
+
+
+@pytest.mark.parametrize("notation", tuple(Prozessnotation))
+def test_aktivitaeten_werden_aus_drei_notationen_unveraendert_gelesen(
+    tmp_path: Path, notation: Prozessnotation
+) -> None:
+    assert extrahiere_sichtbare_aktivitaeten(_modellbytes(tmp_path, notation), notation) == (
+        "A",
+        "B",
+    )
+
+
+def test_unsichtbare_petrinetztransition_ist_keine_fachliche_aktivitaet(tmp_path: Path) -> None:
+    netz = PetriNet("mit-tau")
+    start, ende = PetriNet.Place("start"), PetriNet.Place("ende")
+    sichtbar, unsichtbar = PetriNet.Transition("A", "A"), PetriNet.Transition("tau", None)
+    netz.places.update({start, ende})
+    netz.transitions.update({sichtbar, unsichtbar})
+    petri_utils.add_arc_from_to(start, unsichtbar, netz)
+    petri_utils.add_arc_from_to(unsichtbar, start, netz)
+    petri_utils.add_arc_from_to(start, sichtbar, netz)
+    petri_utils.add_arc_from_to(sichtbar, ende, netz)
+    pfad = tmp_path / "tau.pnml"
+    pm4py.write_pnml(netz, Marking({start: 1}), Marking({ende: 1}), str(pfad))
+
+    assert extrahiere_sichtbare_aktivitaeten(pfad.read_bytes(), Prozessnotation.PETRINETZ) == ("A",)
+
+
+@dataclass(frozen=True)
+class _Datensatz:
+    zwischendatensatz_id: object
+    zeilenanzahl: int
+    spaltenanzahl: int
+    relativer_daten_pfad: str
+    relativer_schema_pfad: str
+
+
+def _basis(tmp_path: Path):  # type: ignore[no-untyped-def]
+    projekt_id = uuid4()
+    auftrag = Untersuchungsauftrag(
+        "Unveränderte Problemstellung",
+        "Leistung bewerten",
+        Systemtyp.KOMBINIERT,
+        "Werk A",
+        logistische_zielgroessen=(LogistischeZielgroesse.WARTEZEIT,),
+        ausgewaehlte_kpi_ids=("tatsaechliche_wartezeit_aqt", "servicegrad"),
+        systemklassifikation=Systemklassifikation(
+            objekte_gueter="Produktionsauftrag",
+            produktion=Produktionsklassifikation(ressourcen=("Maschinen",)),
+            intralogistik=Intralogistikklassifikation(ressourcen=("Personal",)),
+        ),
+        untersuchungszwecke=("Leistung bewerten",),
+    )
+    projekt = Projekt(
+        projekt_id,
+        "Ableitung",
+        (),
+        Projektstatus.AKTIV,
+        datetime.now(UTC),
+        datetime.now(UTC),
+        auftrag,
+    )
+    quelle = Datenquelle.neu(
+        projekt_id=projekt_id,
+        bezeichnung="ERP Export",
+        quellsystemtyp=Quellsystemtyp.ERP_SYSTEM,
+        quellenart=Quellenart.CSV,
+    )
+    modell = erzeuge_lineares_sollmodell(
+        projekt_id=projekt_id,
+        aktivitaeten=("A", "B"),
+        bezeichnung="Technisches Testmodell",
+        fachliche_grundlage="Test",
+        modellversion="1",
+        person="Test",
+        freigabedatum=date.today(),
+        menschlich_bestaetigt=True,
+    ).original_pnml
+    referenzen = {
+        quelle: {"id": f"id-{quelle.value}", "sha256": "a" * 64} for quelle in Eingangsartefakt
+    }
+    return SimpleNamespace(
+        projekt=projekt,
+        datenquellen=(quelle,),
+        profilreferenzen=(
+            {"import_id": str(uuid4()), "profil_sha256": "b" * 64, "gesamtprofil": {}},
+        ),
+        zwischendatensatz=_Datensatz(uuid4(), 2, 2, "t.csv.gz", "t.schema.json"),
+        zwischendaten=pd.DataFrame({"auftrag": [1, 2], "wert": [3.0, 4.0]}),
+        event_log=pd.DataFrame(
+            {
+                "case_id": ["1", "1"],
+                "activity": ["A", "B"],
+                "timestamp": pd.to_datetime(["2026-01-01", "2026-01-02"], utc=True),
+                "resource": ["M1", "M1"],
+            }
+        ),
+        freigabe=SimpleNamespace(event_log_id=uuid4()),
+        analyse=SimpleNamespace(analyse_id=uuid4(), relativer_modell_pfad="p.pnml"),
+        discovery_ergebnisse={
+            "schwellwert_k": 0.2,
+            "miner_variante": "inductive_miner_infrequent",
+            "prozessnotation": "petrinetz",
+            "warnungen": [],
+            "dfg_daten": {
+                "startaktivitaeten": [["A", 1]],
+                "endaktivitaeten": [["B", 1]],
+            },
+        },
+        prozessmodell=modell,
+        prozessnotation=Prozessnotation.PETRINETZ,
+        a_g={
+            "kpi_ergebnisse": [
+                {
+                    "kpi_id": "tatsaechliche_wartezeit_aqt",
+                    "status": "berechnet",
+                    "ergebnis": 4.0,
+                },
+                {"kpi_id": "servicegrad", "status": "nicht_berechenbar", "ergebnis": None},
+            ],
+            "optionale_artefakte": {
+                "prozessmodell_p_soll": {"sha256": "c" * 64},
+                "conformance_ergebnisse_a_c": {"sha256": "d" * 64},
+            },
+        },
+        quellreferenzen=referenzen,
+    )
+
+
+def test_elf_bestandteile_und_quellenmatrix_sind_exakt_und_stabil() -> None:
+    assert [wert.bezeichnung for wert in MODELLBESTANDTEILE] == [
+        "Problemstellung",
+        "Zielsetzung",
+        "Ausgaben und Eingaben",
+        "Modellumfang, Modellgrenzen und Detaillierungsgrad",
+        "Entitäten",
+        "Aktivitäten",
+        "Warteschlangen",
+        "Ressourcen",
+        "Annahmen und Vereinfachungen",
+        "Datenauswahl und Daten",
+        "Darstellung der Vorgänge des Systems",
+    ]
+    assert [wert.bestandteil_id for wert in MODELLBESTANDTEILE] == list(ModellbestandteilId)
+    assert {wert.bestandteil_id for wert in MODELLBESTANDTEILE if wert.teilweise_offen} == {
+        ModellbestandteilId.AUSGABEN_UND_EINGABEN,
+        ModellbestandteilId.WARTESCHLANGEN,
+        ModellbestandteilId.ANNAHMEN_UND_VEREINFACHUNGEN,
+    }
+    assert {
+        wert.bestandteil_id: tuple(quelle.value for quelle in wert.zulaessige_quellen)
+        for wert in MODELLBESTANDTEILE
+    } == {
+        ModellbestandteilId.PROBLEMSTELLUNG: ("U",),
+        ModellbestandteilId.ZIELSETZUNG: ("U",),
+        ModellbestandteilId.AUSGABEN_UND_EINGABEN: ("U", "A_G"),
+        ModellbestandteilId.MODELLUMFANG_GRENZEN_DETAILLIERUNG: ("U", "S", "P", "A_G"),
+        ModellbestandteilId.ENTITAETEN: ("S", "E*"),
+        ModellbestandteilId.AKTIVITAETEN: ("P", "A_G"),
+        ModellbestandteilId.WARTESCHLANGEN: ("A_G",),
+        ModellbestandteilId.RESSOURCEN: ("S", "E*", "A_G"),
+        ModellbestandteilId.ANNAHMEN_UND_VEREINFACHUNGEN: ("P", "A_G"),
+        ModellbestandteilId.DATENAUSWAHL_UND_DATEN: ("Q", "R", "T", "E*"),
+        ModellbestandteilId.DARSTELLUNG_DER_VORGAENGE: ("P",),
+    }
+
+
+def test_ableitung_bleibt_belegt_offen_und_schliesst_p_soll_aus(tmp_path: Path) -> None:
+    basis = _basis(tmp_path)
+    bestandteile, offen = leite_modellbestandteile_ab(basis)
+    definitionen = {wert.bestandteil_id: wert for wert in MODELLBESTANDTEILE}
+
+    assert len(bestandteile) == 11
+    assert [wert.bestandteil_id for wert in bestandteile] == list(ModellbestandteilId)
+    for bestandteil in bestandteile:
+        assert set(bestandteil.verwendete_quellen) <= set(
+            definitionen[bestandteil.bestandteil_id].zulaessige_quellen
+        )
+    problem = bestandteile[0]
+    assert [wert.wert for wert in problem.informationen] == ["Unveränderte Problemstellung"]
+    ausgaben = bestandteile[2]
+    nicht_berechenbar = next(
+        wert
+        for wert in ausgaben.informationen
+        if isinstance(wert.wert, dict) and wert.wert.get("kpi_id") == "servicegrad"
+    )
+    assert nicht_berechenbar.wert["status"] == "nicht_berechenbar"
+    assert nicht_berechenbar.wert["ergebnis"] is None
+    assert "prozessmodell_p_soll" not in repr(bestandteile)
+    assert any(
+        wert.bestandteil_id is ModellbestandteilId.ANNAHMEN_UND_VEREINFACHUNGEN
+        and wert.kategorie is Offenheitskategorie.FACHLICH_UNSICHER
+        and "k > 0" in wert.begruendung
+        for wert in offen
+    )
+
+
+def test_menschliche_unsicherheit_erzeugt_nur_offenen_eintrag(tmp_path: Path) -> None:
+    bestandteile, offen = leite_modellbestandteile_ab(
+        _basis(tmp_path),
+        fachlich_unsichere_bestandteile=frozenset({ModellbestandteilId.AKTIVITAETEN}),
+    )
+    aktivitaeten = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
+    )
+    markierung = next(
+        wert
+        for wert in offen
+        if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
+        and wert.kennzeichnungsherkunft is Kennzeichnungsherkunft.MENSCHLICH_MARKIERT
+    )
+    assert [wert.wert for wert in aktivitaeten.informationen if wert.herkunftsartefakt == "P"] == [
+        ("A", "B")
+    ]
+    assert markierung.status == "offen"
+
+
+def test_fehlende_problemstellung_und_widerspruechliche_grenzen_bleiben_offen(
+    tmp_path: Path,
+) -> None:
+    basis = _basis(tmp_path)
+    basis.projekt = Projekt(
+        basis.projekt.projekt_id,
+        basis.projekt.bezeichnung,
+        (),
+        Projektstatus.ENTWURF,
+        basis.projekt.erstellt_am,
+        basis.projekt.geaendert_am,
+        Untersuchungsauftrag(
+            "",
+            "Leistung bewerten",
+            Systemtyp.PRODUKTION,
+            "Fachliche Grenze",
+            systemklassifikation=Systemklassifikation(bereich="Abweichender Datenbereich"),
+        ),
+    )
+
+    bestandteile, offen = leite_modellbestandteile_ab(basis)
+
+    problem = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.PROBLEMSTELLUNG
+    )
+    assert problem.status.value == "offen"
+    assert any(
+        wert.bestandteil_id is ModellbestandteilId.PROBLEMSTELLUNG
+        and wert.kategorie is Offenheitskategorie.FEHLEND
+        for wert in offen
+    )
+    konflikt = next(
+        wert
+        for wert in offen
+        if wert.bestandteil_id is ModellbestandteilId.MODELLUMFANG_GRENZEN_DETAILLIERUNG
+        and "unterschiedliche Belege" in wert.begruendung
+    )
+    assert konflikt.kategorie is Offenheitskategorie.FACHLICH_UNSICHER
+    assert len(konflikt.belegreferenzen) == 2

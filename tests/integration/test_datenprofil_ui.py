@@ -6,6 +6,37 @@ from streamlit.testing.v1 import AppTest
 
 ANWENDUNGSPFAD = Path(__file__).parents[1] / "streamlit_datenprofil_app.py"
 
+PLATZHALTER_APP = r"""
+from uuid import UUID
+
+import pandas as pd
+import streamlit as st
+
+from framework_mvp.application.datenimport_service import DatenimportService, bereite_vorschau_auf
+from framework_mvp.domain.models import CsvImportparameter, DateiMetadaten, Dateityp
+from framework_mvp.ui.pages.etl import _datenprofil_und_bestaetigung
+
+zustand = st.session_state.setdefault("zustand", {})
+if not zustand:
+    daten = pd.DataFrame({"Status": ["ok", "unbekannt"]})
+    zustand.update({
+        "vorschau": bereite_vorschau_auf(
+            daten, CsvImportparameter(erkanntes_trennzeichen=",")
+        ),
+        "vorschau_schluessel": "vorschau-1",
+        "datei_metadaten": DateiMetadaten(
+            "daten.csv", "daten.csv", 10, Dateityp.CSV, "a" * 64
+        ),
+    })
+
+_datenprofil_und_bestaetigung(
+    datenimport_service=DatenimportService(),
+    importvorgang_service=object(),
+    projekt_id=UUID("11111111-1111-1111-1111-111111111111"),
+    zustand=zustand,
+)
+"""
+
 
 def _starten() -> AppTest:
     return AppTest.from_file(ANWENDUNGSPFAD).run()
@@ -17,7 +48,7 @@ def test_kennzahlen_spaltenuebersicht_und_fehlwertdiagramm() -> None:
     assert not anwendung.exception
     labels = {wert.label for wert in anwendung.metric}
     assert {"Zeilen", "Spalten", "Echte Fehlwerte", "Textuelle Platzhalter"} <= labels
-    assert len(anwendung.dataframe) >= 2
+    assert len(anwendung.dataframe) == 1
     assert anwendung.get("vega_lite_chart")
 
 
@@ -58,3 +89,29 @@ def test_vollstaendig_leere_spalte_zeigt_hinweis() -> None:
     ).set_value("Leer").run()
     assert not anwendung.exception
     assert any("vollständig leer" in wert.value for wert in anwendung.info)
+
+
+def test_fehlwertplatzhalter_bleiben_ueber_reruns_erhalten() -> None:
+    anwendung = AppTest.from_string(PLATZHALTER_APP).run()
+    eingabe = next(
+        wert
+        for wert in anwendung.text_input
+        if wert.label.startswith("Bestätigte domänenspezifische Fehlwertplatzhalter")
+    )
+
+    eingabe.set_value("-, n/a, unbekannt").run()
+    anwendung.run()
+
+    assert anwendung.session_state["zustand"]["zusaetzliche_platzhalter"] == (
+        "-",
+        "n/a",
+        "unbekannt",
+    )
+    assert (
+        next(
+            wert
+            for wert in anwendung.text_input
+            if wert.label.startswith("Bestätigte domänenspezifische Fehlwertplatzhalter")
+        ).value
+        == "-, n/a, unbekannt"
+    )

@@ -16,7 +16,7 @@ from framework_mvp.application.datenimport_service import (
     DatenimportService,
     Profilierungsergebnis,
 )
-from framework_mvp.application.importvorgang_service import ImportvorgangService
+from framework_mvp.application.importvorgang_service import GeladenerImport, ImportvorgangService
 from framework_mvp.application.profiling.entscheidungsgrundlage import (
     ermittle_auffaelligkeiten,
 )
@@ -41,7 +41,7 @@ from framework_mvp.infrastructure.importartefakte.artefakt_speicher import (
 from framework_mvp.infrastructure.importartefakte.profil_json import ProfilArtefakt
 from framework_mvp.infrastructure.persistence.sqlite_etl_repository import SQLiteETLRepository
 
-TRANSFORMATIONS_ARTEFAKT_VERSION = 1
+TRANSFORMATIONS_ARTEFAKT_VERSION = 2
 
 
 class TransformationsService:
@@ -138,6 +138,23 @@ class TransformationsService:
         """Listet die bestätigten Importquellen für Transformation und Join."""
         return self._import_service.importe_fuer_projekt(projekt_id)
 
+    def import_laden(self, import_id: UUID) -> GeladenerImport | None:
+        """Lädt einen Ausgangsimport über dessen vollständige Integritätsprüfung."""
+        return self._import_service.import_laden(import_id)
+
+    def _importe_des_plans(self, plan: Transformationsplan) -> list[Importvorgang]:
+        """Validiert den Projektbezug und liefert die Importe in Planreihenfolge."""
+        nach_id = {
+            importvorgang.import_id: importvorgang
+            for importvorgang in self.importe_fuer_projekt(plan.projekt_id)
+        }
+        fehlend = [import_id for import_id in plan.import_ids if import_id not in nach_id]
+        if fehlend:
+            raise Domaenenfehler(
+                "Mindestens ein Ausgangsimport fehlt oder gehört nicht zum Projekt des Plans."
+            )
+        return [nach_id[import_id] for import_id in plan.import_ids]
+
     def ausgangsprofil_laden(self, import_id: UUID) -> ProfilArtefakt:
         """Lädt das unveränderte, bestätigte technische Ausgangsprofil."""
         geladen = self._import_service.import_laden(import_id)
@@ -157,12 +174,18 @@ class TransformationsService:
 
     def vorschau(self, plan: Transformationsplan) -> Transformationsergebnis:
         """Wendet alle Schritte streng geordnet neu auf unveränderte Raw-Daten an."""
+        self._importe_des_plans(plan)
         daten = self.import_dataframe_laden(plan.import_ids[0])
         historie: list[Transformationshistorie] = []
         warnungen: list[str] = []
         for schritt in sorted(plan.schritte, key=lambda wert: wert.reihenfolge):
             if not schritt.aktiviert:
                 continue
+            if not schritt.frameworkkonform:
+                raise Domaenenfehler(
+                    f"Der Legacy-Schritt '{schritt.typ.value}' ist nicht mehr "
+                    "frameworkkonform und wird nicht ausgeführt."
+                )
             if schritt.typ.value != "tabellen_join":
                 einzelplan = replace(plan, schritte=(replace(schritt, reihenfolge=1),))
                 ergebnis = fuehre_transformationsplan_aus(daten, einzelplan)
@@ -173,8 +196,17 @@ class TransformationsService:
                 warnungen.extend(ergebnis.warnungen)
                 continue
             parameter = schritt.parameter
-            rechte_import_id = UUID(str(parameter["rechte_import_id"]))
-            rechte_daten = self.import_dataframe_laden(rechte_import_id)
+            rechte_datensatz_id = parameter.get("rechter_zwischendatensatz_id")
+            if not rechte_datensatz_id:
+                raise Domaenenfehler(
+                    "Eine Legacy-Verknüpfung mit einem unaufbereiteten rechten Rohimport "
+                    "ist nicht mehr frameworkkonform."
+                )
+            rechter_datensatz, rechte_daten = self.zwischendatensatz_laden(
+                UUID(str(rechte_datensatz_id))
+            )
+            if rechter_datensatz.projekt_id != plan.projekt_id:
+                raise Domaenenfehler("Die Join-Datensätze gehören nicht zum selben Projekt.")
             suffixe_roh = parameter.get("suffixe", ["_links", "_rechts"])
             suffixe = (str(suffixe_roh[0]), str(suffixe_roh[1]))
             zeilen_vorher, spalten_vorher = daten.shape
@@ -242,13 +274,21 @@ class TransformationsService:
         daten_pfad = (basis / f"{datensatz_id}.csv.gz").as_posix()
         schema_pfad = (basis / f"{datensatz_id}.schema.json").as_posix()
         transformation_pfad = (basis / f"{datensatz_id}.transformation.json").as_posix()
+        ausgangsimporte = self._importe_des_plans(plan)
+        ausgangsprofile = [self.ausgangsprofil_laden(wert.import_id) for wert in ausgangsimporte]
         schema = {
             "artefakt_version": 1,
             "spalten": [
                 {"name": str(name), "technischer_datentyp": str(ergebnis.daten[name].dtype)}
                 for name in ergebnis.daten.columns
             ],
-            "urspruengliche_quellspalten": [str(name) for name in ergebnis.daten.columns],
+            "urspruengliche_quellspalten_nach_import": {
+                str(importvorgang.import_id): [
+                    str(name)
+                    for name in self.import_dataframe_laden(importvorgang.import_id).columns
+                ]
+                for importvorgang in ausgangsimporte
+            },
             "datumsformat": "ISO-8601",
             "fehlwertdarstellung": "leeres CSV-Feld",
             "zeilenanzahl": len(ergebnis.daten),
@@ -260,8 +300,21 @@ class TransformationsService:
         transformation = {
             "artefakt_version": TRANSFORMATIONS_ARTEFAKT_VERSION,
             "software_schema_version": 4,
-            "ausgangsprofil_version": self.ausgangsprofil_laden(plan.import_ids[0]).profil_version,
+            "ausgangsprofil_version": ausgangsprofile[0].profil_version,
             "ausgangsimport_id": str(plan.import_ids[0]),
+            "ausgangsimporte": [
+                {
+                    "import_id": str(importvorgang.import_id),
+                    "datenquellen_id": str(importvorgang.datenquellen_id),
+                    "originaldateiname": importvorgang.originaldateiname,
+                    "tabellenbezeichnung": importvorgang.tabellenbezeichnung,
+                    "dateiformat": importvorgang.dateityp.value,
+                    "datei_pruefsumme": importvorgang.sha256,
+                    "profil_version": profil.profil_version,
+                    "profil_pfad": importvorgang.relativer_profil_pfad,
+                }
+                for importvorgang, profil in zip(ausgangsimporte, ausgangsprofile, strict=True)
+            ],
             "relevante_auffaelligkeiten": [
                 asdict(wert)
                 for wert in ermittle_auffaelligkeiten(
@@ -271,6 +324,7 @@ class TransformationsService:
                 if wert.anzahl > 0
             ],
             "transformationsplan": asdict(plan),
+            "transformationshistorie": [asdict(wert) for wert in ergebnis.historie],
             "ergebniskennzahlen": {
                 "zeilen": len(ergebnis.daten),
                 "spalten": len(ergebnis.daten.columns),
@@ -317,6 +371,7 @@ class TransformationsService:
         if hashlib.sha256(inhalt).hexdigest() != datensatz.sha256:
             raise Domaenenfehler("Die Prüfsumme des Zwischendatensatzes stimmt nicht überein.")
         schema = json.loads(self._artefakte.lesen(datensatz.relativer_schema_pfad))
+        transformation = json.loads(self._artefakte.lesen(datensatz.relativer_transformation_pfad))
         daten = pd.read_csv(BytesIO(gzip.decompress(inhalt)), keep_default_na=False, na_values=[""])
         schema_spalten = [str(spalte["name"]) for spalte in schema["spalten"]]
         if (
@@ -324,9 +379,22 @@ class TransformationsService:
             or schema_spalten != [str(wert) for wert in daten.columns]
             or int(schema.get("zeilenanzahl", -1)) != len(daten)
             or int(schema.get("spaltenanzahl", -1)) != len(daten.columns)
+            or schema.get("sha256") != datensatz.sha256
+            or schema.get("import_ids") != [str(wert) for wert in datensatz.import_ids]
         ):
             raise Importintegritaetsfehler(
                 "Schema-JSON und CSV.GZ des Zwischendatensatzes sind inkonsistent."
+            )
+        plan_roh = transformation.get("transformationsplan", {})
+        ausgangsimporte = transformation.get("ausgangsimporte", [])
+        if (
+            plan_roh.get("transformationsplan_id") != str(datensatz.transformationsplan_id)
+            or plan_roh.get("projekt_id") != str(datensatz.projekt_id)
+            or [wert.get("import_id") for wert in ausgangsimporte]
+            != [str(wert) for wert in datensatz.import_ids]
+        ):
+            raise Importintegritaetsfehler(
+                "Transformations-Lineage und Zwischendatensatz sind inkonsistent."
             )
         for spalte in schema["spalten"]:
             name, typ = spalte["name"], spalte["technischer_datentyp"]

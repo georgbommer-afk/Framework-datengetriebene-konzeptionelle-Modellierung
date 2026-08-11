@@ -14,6 +14,18 @@ class Profiltyp(StrEnum):
     SONSTIG = "sonstig"
 
 
+class TechnischerDatentyp(StrEnum):
+    """Fachliche technische Datentypen gemäß Tabelle 3.8."""
+
+    TEXT = "Text"
+    GANZZAHL = "Ganzzahl"
+    FLIESSKOMMAZAHL = "Fließkommazahl"
+    BOOLEAN = "Boolean"
+    DATUM = "Datum"
+    UHRZEIT = "Uhrzeit"
+    DATUM_UND_UHRZEIT = "Datum und Uhrzeit"
+
+
 class Zeitgranularitaet(StrEnum):
     """Deterministische Granularität einer zeitlichen Aggregation."""
 
@@ -53,7 +65,6 @@ class NumerischesSpaltenprofil:
     maximum: float | None
     mittelwert: float | None
     median: float | None
-    standardabweichung: float | None
     q1: float | None
     q3: float | None
     interquartilsabstand: float | None
@@ -77,6 +88,7 @@ class KategorialesSpaltenprofil:
 
     gueltige_werte: int
     eindeutige_auspraegungen: int
+    haeufigster_wert: str | None
     haeufigste_werte: tuple[KategorieHaeufigkeit, ...]
     seltene_werte: int
 
@@ -108,6 +120,7 @@ class Spaltenprofil:
 
     spaltenname: str
     originaldatentyp: str
+    technischer_datentyp: TechnischerDatentyp
     profiltyp: Profiltyp
     fehlwerte: Fehlwertprofil
     eindeutige_werte: int
@@ -132,6 +145,7 @@ class Datenprofil:
     echte_fehlwerte: int
     textuelle_platzhalter: int
     spaltenprofile: tuple[Spaltenprofil, ...]
+    bestaetigte_zusaetzliche_platzhalter: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

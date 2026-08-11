@@ -1,4 +1,4 @@
-"""Integrationstests der neuen SQLite-Persistenz für ETL und Mapping."""
+"""Integrationstests für ETL und die kompatible Schritt-4-Konfiguration."""
 
 from datetime import UTC, datetime
 from pathlib import Path

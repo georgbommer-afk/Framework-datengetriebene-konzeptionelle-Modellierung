@@ -10,6 +10,7 @@ import streamlit as st
 
 from framework_mvp.application.datenquelle_service import DatenquelleService
 from framework_mvp.application.mapping_service import MappingService
+from framework_mvp.application.mappingtabelle_service import MappingtabelleService
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.application.transformation import kombiniere_textspalten
 from framework_mvp.application.transformations_service import TransformationsService
@@ -19,8 +20,12 @@ from framework_mvp.domain.models import (
     Aktivitaetsdefinition,
     Attributrolle,
     Ereignisrolle,
+    Mappingeintrag,
+    Mappingeintragsart,
     MappingModus,
     Mappingstatus,
+    Mappingtabelle,
+    Mappingtabellenstatus,
     SemantischesMapping,
     Spaltenzuordnung,
     Warnungsstufe,
@@ -30,6 +35,7 @@ from framework_mvp.domain.models import (
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
+from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import (
     framework_bereich_oeffnen,
     schritt_abschliessen_und_weiter,
@@ -624,7 +630,7 @@ def _pruefen_und_speichern(
         "Ich habe die Warnungen geprüft und möchte das Mapping speichern."
     )
     if st.button(
-        "Mapping speichern und Event Log aufbauen",
+        "Event-Log-Konfiguration speichern",
         type="primary",
         disabled=bool(fehler) or not warnungen_bestaetigt,
     ):
@@ -635,7 +641,8 @@ def _pruefen_und_speichern(
         zustand["mapping_pfad"] = service.speichern(erneut)
         st.session_state.aktuelle_mapping_id = str(erneut.mapping_id)
         st.session_state.mapping_id = erneut.mapping_id
-        schritt_abschliessen_und_weiter(aktueller_schritt=3, projekt_id=erneut.projekt_id)
+        st.success("Die Event-Log-Konfiguration wurde für Schritt 4 gespeichert.")
+        st.rerun()
 
 
 def _navigation(zustand: dict[str, Any]) -> None:
@@ -658,17 +665,17 @@ def _navigation(zustand: dict[str, Any]) -> None:
         st.rerun()
 
 
-def zeige_semantisches_mapping(
+def zeige_event_log_konfiguration(
     projekt_service: ProjektService,
     transformations_service: TransformationsService,
     mapping_service: MappingService,
     datenquelle_service: DatenquelleService | None = None,
 ) -> None:
-    """Zeigt Framework-Schritt 3 für den zentral aktiven Zwischendatensatz."""
-    st.header("3 Semantisches Mapping")
+    """Erfasst in Schritt 4 die Rollen zur technischen Event-Log-Erzeugung."""
+    st.subheader("Event-Log-Konfiguration")
     st.write(
-        "Der Zwischendatensatz T wird semantisch beschrieben: Fall-ID, Aktivität, "
-        "Zeitbezug und zusätzliche Attribute. Die Daten selbst werden nicht verändert."
+        "Legen Sie erst jetzt Fall-ID, Aktivität, Zeitbezug und Event-Log-Attribute fest. "
+        "Diese Funktionen gehören zur Bildung des Event Logs und nicht zu M."
     )
     try:
         projektkontext = _projektkontext(projekt_service)
@@ -698,5 +705,229 @@ def zeige_semantisches_mapping(
         else:
             _pruefen_und_speichern(mapping_service, projektname, datensatz, daten, zustand)
         _navigation(zustand)
+    except (Domaenenfehler, Importintegritaetsfehler) as fehler:
+        st.error(str(fehler))
+
+
+def _mappingtabelle_zustand(
+    projekt_id: UUID, datensatz_id: UUID, service: MappingtabelleService
+) -> dict[str, Any]:
+    """Bindet den UI-Entwurf strikt an das zentral aktive T und lädt vorhandenes M."""
+    zustaende = st.session_state.setdefault("mappingtabelle_zustaende", {})
+    schluessel = str(projekt_id)
+    zustand = zustaende.setdefault(schluessel, {})
+    aktuelle_id = str(datensatz_id)
+    if zustand.get("datensatz_id") != aktuelle_id:
+        vorhanden = service.fuer_datensatz(projekt_id, datensatz_id)
+        zustand.clear()
+        zustand.update(
+            {
+                "datensatz_id": aktuelle_id,
+                "mappingtabelle": vorhanden
+                if vorhanden is not None
+                else Mappingtabelle.neu(projekt_id, datensatz_id),
+            }
+        )
+    return zustand
+
+
+def _mappingtabelle_anzeigen(mapping: Mappingtabelle) -> None:
+    """Zeigt M mit den beiden Kernspalten und dem nötigen Wertkontext."""
+    zeilen = [
+        {
+            "Art": eintrag.art.value,
+            "Technische Bezeichnung": eintrag.technische_bezeichnung,
+            "Fachliche Bezeichnung": eintrag.fachliche_bezeichnung,
+            "Technische Quellspalte": eintrag.technische_quellspalte or "–",
+            "Technischer Datentyp": (
+                eintrag.wertreferenz.technischer_datentyp
+                if eintrag.wertreferenz is not None
+                else "–"
+            ),
+        }
+        for eintrag in mapping.eintraege
+    ]
+    st.write("### Mappingtabelle (M)")
+    if zeilen:
+        st.dataframe(pd.DataFrame(zeilen), hide_index=True, width="stretch")
+    else:
+        st.info("M ist leer: Alle technischen Bezeichnungen werden unverändert weitergegeben.")
+
+
+def _spaltenzuordnung_erfassen(daten: pd.DataFrame, mapping: Mappingtabelle) -> Mappingtabelle:
+    """Erfasst eine Abbildung eines tatsächlichen Spaltennamens b_tech auf b_fach."""
+    st.write("#### Spaltenbezeichnung interpretieren")
+    spalten = [str(wert) for wert in daten.columns]
+    spalte = fachliche_auswahl("Technische Spaltenbezeichnung", spalten)
+    fachlich = st.text_input("Fachliche Spaltenbezeichnung")
+    if st.button("Spaltenzuordnung hinzufügen", disabled=spalte is None):
+        assert spalte is not None
+        mapping = mapping.eintrag_hinzufuegen(Mappingeintrag.fuer_spalte(spalte, fachlich))
+        st.success("Die Spaltenzuordnung wurde zu M hinzugefügt.")
+    return mapping
+
+
+def _eindeutige_werte(serie: pd.Series) -> list[object]:
+    """Liefert vorhandene, nicht fehlende Werte in stabiler Reihenfolge."""
+    ergebnis: list[object] = []
+    schluessel: set[tuple[str, str]] = set()
+    for wert in serie:
+        try:
+            if bool(pd.isna(wert)):
+                continue
+        except (TypeError, ValueError):
+            pass
+        referenz = Mappingeintrag.fuer_wert(str(serie.name), wert, "temporär").wertreferenz
+        assert referenz is not None
+        if referenz.schluessel not in schluessel:
+            schluessel.add(referenz.schluessel)
+            ergebnis.append(wert)
+    return ergebnis
+
+
+def _wertzuordnung_erfassen(daten: pd.DataFrame, mapping: Mappingtabelle) -> Mappingtabelle:
+    """Erfasst paginiert einen tatsächlich vorhandenen, typisierten technischen Wert."""
+    st.write("#### Enthaltenen Wert interpretieren")
+    spalten = [str(wert) for wert in daten.columns]
+    quellspalte = fachliche_auswahl("Technische Quellspalte für Wert", spalten)
+    if quellspalte is None:
+        st.info("Wählen Sie zuerst eine technische Quellspalte aus.")
+        return mapping
+    position = spalten.index(quellspalte)
+    alle_werte = _eindeutige_werte(daten.iloc[:, position])
+    suchtext = st.text_input("Technische Werte durchsuchen").casefold().strip()
+    gefiltert = [wert for wert in alle_werte if suchtext in str(wert).casefold()]
+    seitengroesse = 100
+    seitenanzahl = max(1, (len(gefiltert) + seitengroesse - 1) // seitengroesse)
+    seite = int(
+        st.number_input(
+            "Werteseite",
+            min_value=1,
+            max_value=seitenanzahl,
+            value=1,
+            help="Je Seite werden höchstens 100 unterschiedliche vorhandene Werte gezeigt.",
+        )
+    )
+    start = (seite - 1) * seitengroesse
+    werte = gefiltert[start : start + seitengroesse]
+    st.caption(f"{len(gefiltert):,} passende unterschiedliche Werte · Seite {seite}/{seitenanzahl}")
+    if not werte:
+        st.info("Für den Suchtext ist kein technischer Wert vorhanden.")
+        return mapping
+    auswahl = fachliche_auswahl(
+        "Technischer Wert",
+        range(len(werte)),
+        format_func=lambda index: f"{werte[index]!s}  [{type(werte[index]).__name__}]",
+    )
+    fachlich = st.text_input("Fachliche Wertbezeichnung")
+    if st.button("Wertzuordnung hinzufügen", disabled=auswahl is None):
+        assert auswahl is not None
+        mapping = mapping.eintrag_hinzufuegen(
+            Mappingeintrag.fuer_wert(quellspalte, werte[auswahl], fachlich)
+        )
+        st.success("Die Wertzuordnung wurde zu M hinzugefügt.")
+    return mapping
+
+
+def _mappingeintrag_bearbeiten(mapping: Mappingtabelle) -> Mappingtabelle:
+    """Erlaubt Bearbeitung von b_fach und Entfernung ohne Verlust der Referenz."""
+    if not mapping.eintraege:
+        return mapping
+    st.write("#### Vorhandene Zuordnung bearbeiten")
+    nach_id = {eintrag.mappingeintrag_id: eintrag for eintrag in mapping.eintraege}
+    eintrag_id = fachliche_auswahl(
+        "Mappingeintrag",
+        list(nach_id),
+        format_func=lambda wert: (
+            f"{nach_id[wert].technische_bezeichnung} → {nach_id[wert].fachliche_bezeichnung}"
+        ),
+    )
+    if eintrag_id is None:
+        st.info("Wählen Sie den zu bearbeitenden Mappingeintrag aus.")
+        return mapping
+    eintrag = nach_id[eintrag_id]
+    fachlich = st.text_input(
+        "Bearbeitete fachliche Bezeichnung",
+        value=eintrag.fachliche_bezeichnung,
+        key=f"mappingtabelle_bearbeiten_{eintrag_id}",
+    )
+    links, rechts = st.columns(2)
+    if links.button("Fachliche Bezeichnung übernehmen"):
+        mapping = mapping.eintrag_bearbeiten(eintrag_id, fachlich)
+    if rechts.button("Zuordnung entfernen"):
+        mapping = mapping.eintrag_entfernen(eintrag_id)
+    return mapping
+
+
+def zeige_semantisches_mapping(
+    projekt_service: ProjektService,
+    transformations_service: TransformationsService,
+    mappingtabelle_service: MappingtabelleService,
+    datenquelle_service: DatenquelleService | None = None,
+) -> None:
+    """Erzeugt in Schritt 3 ausschließlich die optionale Mappingtabelle M."""
+    st.header("3 Semantisches Mapping")
+    st.write(
+        "Interpretieren Sie bei Bedarf technische Spaltenbezeichnungen oder enthaltene "
+        "technische Werte. T bleibt unverändert; Fall-ID, Aktivität und Zeitbezug werden "
+        "erst in Schritt 4 festgelegt."
+    )
+    try:
+        projektkontext = _projektkontext(projekt_service)
+        if projektkontext is None:
+            return
+        projekt_id, _ = projektkontext
+        geladen = _aktiven_datensatz_laden(transformations_service, projekt_id)
+        if geladen is None:
+            st.warning(
+                "Für das aktuelle Projekt ist kein konsistenter Zwischendatensatz vorhanden."
+            )
+            if st.button("Zurück zu ETL", type="primary"):
+                framework_bereich_oeffnen(schritt=2, projekt_id=projekt_id)
+            return
+        datensatz, daten = geladen
+        _datensatzkontext(transformations_service, datenquelle_service, datensatz)
+        st.write("### Unveränderte Vorschau des Zwischendatensatzes T")
+        st.dataframe(daten.head(100), width="stretch")
+        zustand = _mappingtabelle_zustand(
+            projekt_id, datensatz.zwischendatensatz_id, mappingtabelle_service
+        )
+        mapping: Mappingtabelle = zustand["mappingtabelle"]
+        modus = st.radio(
+            "Ist eine Interpretation technischer Bezeichnungen erforderlich?",
+            ("Semantische Zuordnungen erfassen", "Kein semantisches Mapping erforderlich"),
+            index=1 if mapping.kein_mapping_erforderlich else 0,
+        )
+        if modus == "Semantische Zuordnungen erfassen":
+            art = st.radio(
+                "Art der technischen Bezeichnung",
+                (Mappingeintragsart.SPALTENBEZEICHNUNG, Mappingeintragsart.TECHNISCHER_WERT),
+                format_func=lambda wert: wert.value,
+                horizontal=True,
+            )
+            mapping = (
+                _spaltenzuordnung_erfassen(daten, mapping)
+                if art is Mappingeintragsart.SPALTENBEZEICHNUNG
+                else _wertzuordnung_erfassen(daten, mapping)
+            )
+            mapping = _mappingeintrag_bearbeiten(mapping)
+        _mappingtabelle_anzeigen(mapping)
+        zustand["mappingtabelle"] = mapping
+        speichern, weiter = st.columns(2)
+        if speichern.button("Mappingtabelle M speichern", type="primary"):
+            mapping = mapping.bestaetigen(
+                kein_mapping_erforderlich=(modus == "Kein semantisches Mapping erforderlich")
+            )
+            zustand["mappingtabelle"] = mapping
+            zustand["mapping_pfad"] = mappingtabelle_service.speichern(mapping)
+            st.session_state.aktuelle_mappingtabelle_id = str(mapping.mapping_id)
+            st.success("Mappingtabelle (M) wurde gespeichert und T unverändert weitergegeben.")
+        gespeichert = mapping.status is Mappingtabellenstatus.BESTAETIGT
+        if pfad := zustand.get("mapping_pfad"):
+            st.caption(f"Gespeichertes Artefakt: `{pfad}`")
+        if weiter.button("Weiter", disabled=not gespeichert):
+            schritt_abschliessen_und_weiter(aktueller_schritt=3, projekt_id=projekt_id)
+        if not gespeichert:
+            st.info("Speichern Sie zuerst die Mappingtabelle M, bevor Sie fortfahren.")
     except (Domaenenfehler, Importintegritaetsfehler) as fehler:
         st.error(str(fehler))

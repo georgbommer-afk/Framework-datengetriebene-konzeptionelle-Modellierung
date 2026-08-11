@@ -1,5 +1,6 @@
 """Integrationstests für das SQLite-Projektrepository."""
 
+import json
 import sqlite3
 from dataclasses import replace
 from datetime import date, timedelta
@@ -11,8 +12,15 @@ from framework_mvp.domain.models import (
     BeteiligtePerson,
     Betrachtungszeitraum,
     BetrachtungszeitraumModus,
+    Erzeugnisstrukturtyp,
+    GestaltDerGueter,
+    Intralogistikklassifikation,
+    LogistischeZielgroesse,
+    Materialflusskontinuitaet,
+    Produktionsklassifikation,
     Projekt,
     Projektstatus,
+    Systemklassifikation,
     Systemtyp,
     Untersuchungsauftrag,
 )
@@ -46,6 +54,158 @@ def test_mehrere_untersuchungszwecke_werden_additiv_persistiert(tmp_path: Path) 
         "System analysieren",
         "Materialfluss erklären",
         "Bestände verstehen",
+    )
+
+
+@pytest.mark.parametrize(
+    ("systemtyp", "produktion", "intralogistik"),
+    [
+        (
+            Systemtyp.PRODUKTION,
+            Produktionsklassifikation(
+                auftragsabwicklungsstrategie="Make-to-Order (MTO)",
+                auflagegroesse="Massenproduktion (ggfs. mit Sorten)",
+                produktionsstueckzahl="hoch (mehr als 10 000 Stück)",
+                produktvielfalt="mittel (11-100 Var.)",
+                organisationstyp="Fließproduktion",
+                anzahl_arbeitsgaenge="mehrstufig",
+                ressourcen=("Maschinen", "Informationssysteme"),
+            ),
+            None,
+        ),
+        (
+            Systemtyp.INTRALOGISTIK,
+            None,
+            Intralogistikklassifikation(
+                handlingvorgaenge=("Einlagerung", "Sortierung", "Verteilung"),
+                transportorganisation="gebündelter Rundlauf (“Milk-Run”)",
+                lagerplatzzuordnung="Zonenzuordnung",
+                materialbereitstellungsprinzip="einsatzsynchrone Bereitstellung",
+                ressourcen=("Routenzüge", "Personal"),
+            ),
+        ),
+    ],
+)
+def test_vollstaendiges_u_und_s_werden_unveraendert_persistiert(
+    tmp_path: Path,
+    systemtyp: Systemtyp,
+    produktion: Produktionsklassifikation | None,
+    intralogistik: Intralogistikklassifikation | None,
+) -> None:
+    """Der JSON-Rundlauf bewahrt alle in U und S ausgegebenen Fachwerte."""
+    repository = SQLiteProjektRepository(tmp_path / f"u-s-{systemtyp.value}.sqlite")
+    auftrag = Untersuchungsauftrag(
+        problemstellung="Fehlende Transparenz",
+        untersuchungszweck="System analysieren",
+        untersuchungszwecke=("System analysieren", "Materialfluss erklären"),
+        individuelles_ziel="Materialfluss erklären",
+        systemtyp=systemtyp,
+        systemgrenze="Wareneingang bis Versand",
+        logistische_zielgroessen=(
+            LogistischeZielgroesse.LIEFERZEIT,
+            LogistischeZielgroesse.PROZESSSICHERHEIT,
+        ),
+        ausgewaehlte_kpi_ids=(
+            "mittlere_dlz_warenausgang",
+            "anteil_regulaer_abgeschlossener_faelle",
+        ),
+        systemklassifikation=Systemklassifikation(
+            gestalt_der_gueter=GestaltDerGueter.STUECKGUT,
+            erzeugnisstrukturtyp=Erzeugnisstrukturtyp.KONVERGIEREND,
+            materialflusskontinuitaet=Materialflusskontinuitaet.DISKONTINUIERLICH,
+            produktion=produktion,
+            intralogistik=intralogistik,
+        ),
+    )
+    projekt = Projekt.neu("Vollständiger Projektrahmen", auftrag)
+
+    repository.speichern(projekt)
+
+    assert repository.laden(projekt.projekt_id) == projekt
+
+
+def test_alte_klassifikationswerte_werden_robust_auf_den_neuen_katalog_geladen(
+    tmp_path: Path,
+) -> None:
+    """Umbenannte Felder und alte Werte verursachen keinen Ladefehler und werden bereinigt."""
+    datenbankpfad = tmp_path / "altwerte.sqlite"
+    repository = SQLiteProjektRepository(datenbankpfad)
+    projekt = Projekt.neu(
+        "Altbestand",
+        Untersuchungsauftrag(
+            "Problem",
+            "System analysieren",
+            Systemtyp.KOMBINIERT,
+            "Grenze",
+            logistische_zielgroessen=(
+                LogistischeZielgroesse.DURCHLAUFZEIT,
+                LogistischeZielgroesse.WARTEZEIT,
+            ),
+            systemklassifikation=Systemklassifikation(
+                produktion=Produktionsklassifikation(),
+                intralogistik=Intralogistikklassifikation(),
+            ),
+        ),
+    )
+    repository.speichern(projekt)
+    with sqlite3.connect(datenbankpfad) as verbindung:
+        text = verbindung.execute(
+            "SELECT untersuchungsauftrag_json FROM projekte WHERE projekt_id = ?",
+            (str(projekt.projekt_id),),
+        ).fetchone()[0]
+        daten = json.loads(text)
+        system = daten["systemklassifikation"]
+        system["materialflussform"] = "gemischt"
+        system.pop("erzeugnisstrukturtyp")
+        system["gestalt_der_gueter"] = "fliessgut"
+        system["produktion"] = {
+            "auftragsabwicklungsstrategie": "MTO – Make-to-Order",
+            "produktionsart": "Sortenproduktion",
+            "produktionsstueckzahl": "mittel (101–10.000 Stück)",
+            "produktvielfalt": "mittel (11–100 Varianten)",
+            "organisationstyp": "Inselfertigung",
+            "anzahl_arbeitsgaenge": "mehrstufig",
+            "produktionsfaktoren": ["anlagenintensiv"],
+            "ressourcen": ["Maschinen", "Fördertechnik"],
+        }
+        system["intralogistik"] = {
+            "hauptfunktionen": ["Lagerung", "Kommissionierung"],
+            "transportorganisation": "Linien- beziehungsweise Routenzugverkehr",
+            "lagerprinzip": "Supermarktprinzip",
+            "ressourcen": ["Stapler", "AMR"],
+        }
+        daten["ausgewaehlte_kpi_ids"] = ["gesamtdurchlaufzeit", "wartezeit_aktivitaet"]
+        verbindung.execute(
+            "UPDATE projekte SET untersuchungsauftrag_json = ? WHERE projekt_id = ?",
+            (json.dumps(daten), str(projekt.projekt_id)),
+        )
+
+    geladen = repository.laden(projekt.projekt_id)
+
+    assert geladen is not None
+    auftrag = geladen.untersuchungsauftrag
+    assert auftrag.ausgewaehlte_kpi_ids == (
+        "mittlere_dlz_wareneingang",
+        "tatsaechliche_wartezeit_aqt",
+    )
+    assert auftrag.systemklassifikation.gestalt_der_gueter is (
+        GestaltDerGueter.GEFORMT_UNGEFORMTES_FLIESSGUT
+    )
+    assert auftrag.systemklassifikation.erzeugnisstrukturtyp is Erzeugnisstrukturtyp.GENERELL
+    assert auftrag.systemklassifikation.produktion == Produktionsklassifikation(
+        auftragsabwicklungsstrategie="Make-to-Order (MTO)",
+        auflagegroesse="Massenproduktion (ggfs. mit Sorten)",
+        produktionsstueckzahl="mittel (101-10 000 Stück)",
+        produktvielfalt="mittel (11-100 Var.)",
+        organisationstyp="Inselfertigung",
+        anzahl_arbeitsgaenge="mehrstufig",
+        ressourcen=("Maschinen",),
+    )
+    assert auftrag.systemklassifikation.intralogistik == Intralogistikklassifikation(
+        handlingvorgaenge=("Einlagerung", "Auslagerung", "Kommissionierung"),
+        transportorganisation="gebündelter Rundlauf (“Milk-Run”)",
+        materialbereitstellungsprinzip="Vorratshaltung",
+        ressourcen=("Gabelstapler",),
     )
 
 
@@ -145,7 +305,7 @@ def test_schemaversion_ist_fuenf(tmp_path: Path) -> None:
     with sqlite3.connect(datenbankpfad) as verbindung:
         schemaversion = verbindung.execute("PRAGMA user_version").fetchone()[0]
 
-    assert schemaversion == 6
+    assert schemaversion == 10
 
 
 def test_neuere_schemaversion_wird_abgelehnt_und_nicht_zurueckgesetzt(
@@ -154,7 +314,7 @@ def test_neuere_schemaversion_wird_abgelehnt_und_nicht_zurueckgesetzt(
     """Eine neuere Datenbankversion bleibt unverändert und verhindert den Zugriff."""
     datenbankpfad = tmp_path / "projekte.sqlite"
     with sqlite3.connect(datenbankpfad) as verbindung:
-        verbindung.execute("PRAGMA user_version = 7")
+        verbindung.execute("PRAGMA user_version = 11")
     repository = SQLiteProjektRepository(datenbankpfad)
 
     with pytest.raises(NichtUnterstuetzteSchemaversion):
@@ -163,7 +323,7 @@ def test_neuere_schemaversion_wird_abgelehnt_und_nicht_zurueckgesetzt(
     with sqlite3.connect(datenbankpfad) as verbindung:
         schemaversion = verbindung.execute("PRAGMA user_version").fetchone()[0]
 
-    assert schemaversion == 7
+        assert schemaversion == 11
 
 
 def test_upsert_erhaelt_urspruenglichen_erstellungszeitpunkt(tmp_path: Path) -> None:

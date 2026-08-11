@@ -41,17 +41,17 @@ class GeneratorKonfiguration:
     anteil_kurz: float = 0.20
     anteil_nacharbeit: float = 0.15
     anteil_transport_loop: float = 0.05
-    fehlende_bearbeitungszeiten: int = 60
-    ausreisser: int = 30
-    platzhalter_ressource: int = 100
-    platzhalter_status: int = 30
-    fehlende_aktivitaeten: int = 5
-    fehlende_zeitstempel: int = 5
-    fehlende_lagerplaetze: int = 30
-    platzhalter_lagerplaetze: int = 30
-    identische_zeitstempel_faelle: int = 20
-    ruecklaeufige_zeit_faelle: int = 10
-    exakte_duplikate: int = 50
+    fehlende_bearbeitungszeiten: int = 0
+    ausreisser: int = 0
+    platzhalter_ressource: int = 0
+    platzhalter_status: int = 0
+    fehlende_aktivitaeten: int = 0
+    fehlende_zeitstempel: int = 0
+    fehlende_lagerplaetze: int = 0
+    platzhalter_lagerplaetze: int = 0
+    identische_zeitstempel_faelle: int = 0
+    ruecklaeufige_zeit_faelle: int = 0
+    exakte_duplikate: int = 0
 
 
 def argumente_lesen() -> GeneratorKonfiguration:
@@ -102,17 +102,17 @@ def argumente_lesen() -> GeneratorKonfiguration:
         ausgabe=args.ausgabe,
         seed=args.seed,
         startzeitpunkt=startzeitpunkt,
-        fehlende_bearbeitungszeiten=skaliert(60),
-        ausreisser=skaliert(30),
-        platzhalter_ressource=skaliert(100),
-        platzhalter_status=skaliert(30),
-        fehlende_aktivitaeten=skaliert(5),
-        fehlende_zeitstempel=skaliert(5),
-        fehlende_lagerplaetze=skaliert(30),
-        platzhalter_lagerplaetze=skaliert(30),
-        identische_zeitstempel_faelle=min(args.faelle, skaliert(20)),
-        ruecklaeufige_zeit_faelle=min(args.faelle, skaliert(10)),
-        exakte_duplikate=skaliert(50),
+        fehlende_bearbeitungszeiten=skaliert(0),
+        ausreisser=skaliert(5),
+        platzhalter_ressource=skaliert(0),
+        platzhalter_status=skaliert(0),
+        fehlende_aktivitaeten=skaliert(0),
+        fehlende_zeitstempel=skaliert(0),
+        fehlende_lagerplaetze=skaliert(0),
+        platzhalter_lagerplaetze=skaliert(0),
+        identische_zeitstempel_faelle=min(args.faelle, skaliert(0)),
+        ruecklaeufige_zeit_faelle=min(args.faelle, skaliert(0)),
+        exakte_duplikate=skaliert(0),
     )
 
 

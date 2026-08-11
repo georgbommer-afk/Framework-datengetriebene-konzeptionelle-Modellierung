@@ -2,7 +2,7 @@
 
 ## Status
 
-Teilweise abgelöst durch ADR-005
+Aktualisiert durch die Umsetzung von Abschnitt 3.6.6 und ADR-005
 
 ## Kontext
 
@@ -18,23 +18,27 @@ Die ursprüngliche Entscheidung für eine globale SVG-Prozessgrafik wurde mit AD
 Die Hauptnavigation verwendet seither klar benannte Framework-Bereiche; Wizards besitzen lokale
 Fortschrittsanzeigen.
 
-Der Datenquellenkatalog verwendet das unveränderliche Domänenmodell `Datenquelle`, einen
-Anwendungsservice und ein Repository-Protocol. CSV, Excel und Datenbanken werden fachlich
-modelliert. Eine technische Datenbankanbindung ist noch nicht enthalten.
+Der Datenquellenkatalog Q gehört ausschließlich zu Schritt 2 und verwendet das unveränderliche
+Domänenmodell `Datenquelle`, einen Anwendungsservice und ein Repository-Protocol. Neu auswählbar
+sind die Quellsystemtypen ERP-System, ME-System, WM-System und sonstiges System. Als Dateiformate
+sind ausschließlich CSV und XLSX vorgesehen. Historische Werte für Datenbank und Dateiexport
+bleiben kontrolliert ladbar, werden aber nicht mehr als neue Sollausprägungen angeboten. Eine
+direkte technische Datenbankanbindung ist nicht Bestandteil des Schritts.
 
-CSV- und XLSX-Dateien werden ausschließlich im projektbezogenen Streamlit-Sitzungszustand
-verarbeitet. Unveränderliche Importparameter, Datei-Metadaten, technische Leselogik,
+CSV- und XLSX-Dateien werden projektbezogen verarbeitet. Unveränderliche Importparameter,
+Datei-Metadaten, technische Leselogik,
 Vorschauaufbereitung und Oberfläche sind getrennt. Cache-Schlüssel kombinieren SHA-256-Prüfsumme
-und Importparameter. Damit lösen nur Datei- oder Parameteränderungen ein erneutes vollständiges
-Einlesen aus. Uploadbytes werden weder in SQLite noch im Workspace gespeichert. Die maximale
-Dateigröße beträgt standardmäßig 50 MB und ist über `FRAMEWORK_MVP_MAX_UPLOAD_MB` konfigurierbar.
+und Importparameter. Bestätigte Raw-Dateien und Profile werden integritätsgesichert im Workspace
+gespeichert. Gemeinsame Schlüsselattribute sind Bestandteil von Q und werden in SQLite dauerhaft
+bewahrt. Die maximale Dateigröße beträgt standardmäßig 50 MB und ist über
+`FRAMEWORK_MVP_MAX_UPLOAD_MB` konfigurierbar.
 
-Das ebenfalls temporäre Datenprofil trennt Berechnung, unveränderliche Profilmodelle,
+Das persistierte Datenprofil R trennt Berechnung, unveränderliche Profilmodelle,
 Diagrammdaten und Streamlit-Darstellung. Echte Pandas-Fehlwerte und exakt erkannte textuelle
-Platzhalter werden getrennt ausgewiesen. Numerische Kennzahlen verwenden nur endliche Werte;
-Unendlichkeiten werden separat gezählt. Histogramme, Boxplots, Kategoriehäufigkeiten und
-Zeitverteilungen gelangen ausschließlich aggregiert in die Oberfläche. Sämtliche Kennzahlen
-basieren auf dem vollständigen DataFrame.
+Platzhalter werden getrennt ausgewiesen. Die fachliche JSON-Projektion folgt den Tabellen 3.7
+bis 3.10 und Gleichung 3.10. Histogramme, Kategoriehäufigkeiten und Zeitverteilungen bleiben
+ergänzende, transient berechnete Visualisierungen und sind keine zusätzlichen Bestandteile von R.
+Sämtliche Kennzahlen basieren auf dem vollständigen DataFrame.
 
 ## Persistenz und Migration
 
@@ -59,11 +63,10 @@ Pfad hat Vorrang vor `FRAMEWORK_MVP_WORKSPACE_PATH`; andernfalls wird das Reposi
 - Weitere ETL-Inkremente können auf stabilen Quellen-IDs aufbauen.
 - Die Hauptbereiche sind über die Streamlit-Navigation erreichbar.
 - Die gemeinsame SQLite-Datei bleibt die eindeutige Metadatenquelle.
-- CSV- und XLSX-Vorschauen sind ohne persistente Rohdatei möglich.
+- CSV- und XLSX-Vorschauen sind vor der ausdrücklichen Bestätigung möglich.
 - Das SQLite-Schema bleibt in Version 3 unverändert.
-- Technische Datenprofile und Qualitätsdiagramme sind temporär verfügbar.
-- Datenbereinigung, Transformation, dauerhafte Profilspeicherung und Importbestätigung bleiben
-  späteren Inkrementen vorbehalten.
+- Bestätigte Profile und unveränderte Raw-Dateien sind dauerhaft und integritätsgesichert.
+- Schritt 2 fasst Q, R und T als drei getrennte Ausgaben zusammen.
 
 ## Verworfene Alternativen
 

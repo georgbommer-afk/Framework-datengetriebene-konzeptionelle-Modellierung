@@ -92,6 +92,51 @@ def test_profil_json_utf8_iso_version_und_endliche_jsonwerte(tmp_path: Path) -> 
     assert lade_profil_json(pfad).import_id == import_id
 
 
+def test_persistiertes_r_enthaelt_nur_fachliche_profilwerte_und_keine_zeitaggregation(
+    tmp_path: Path,
+) -> None:
+    profil = erstelle_datenprofil(
+        pd.DataFrame(
+            {
+                "kategorie": ["A", "A", "B"],
+                "zahl": [1.0, 2.0, 100.0],
+                "zeit": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
+            }
+        )
+    )
+    inhalt = erstelle_profil_json(
+        import_id=uuid4(),
+        datei_pruefsumme="b" * 64,
+        importparameter=CsvImportparameter(trennzeichenwahl=Trennzeichenwahl.KOMMA),
+        tabellenbezeichnung="daten",
+        erstellt_am=datetime.now(UTC),
+        profil=profil,
+        warnungen=(),
+    )
+    struktur = json.loads(inhalt)["gesamtprofil"]
+    assert set(struktur) == {
+        "zeilen",
+        "spalten",
+        "exakte_duplikate",
+        "vollstaendig_leere_spalten",
+        "echte_fehlwerte",
+        "textuelle_platzhalter",
+        "spaltenprofile",
+        "bestaetigte_zusaetzliche_platzhalter",
+    }
+    kategorie = next(
+        wert for wert in struktur["spaltenprofile"] if wert["spaltenname"] == "kategorie"
+    )
+    assert kategorie["kategorial"] == {
+        "eindeutige_auspraegungen": 2,
+        "haeufigster_wert": "A",
+    }
+    zahl = next(wert for wert in struktur["spaltenprofile"] if wert["spaltenname"] == "zahl")
+    assert "standardabweichung" not in zahl["numerisch"]
+    assert "unendliche_werte" not in zahl["numerisch"]
+    assert all("zeitbezogen" not in wert for wert in struktur["spaltenprofile"])
+
+
 def test_ungueltiges_profil_json_wird_abgelehnt(tmp_path: Path) -> None:
     """Beschädigtes oder unvollständiges Profil-JSON gilt als Integritätsfehler."""
     pfad = tmp_path / "profil.json"

@@ -47,7 +47,7 @@ def _services(tmp_path: Path, quellenart: Quellenart):  # type: ignore[no-untype
     datenquelle = DatenquelleService(datenquelle_repository).datenquelle_anlegen(
         projekt_id=projekt.projekt_id,
         bezeichnung="Quelldatei",
-        quellsystemtyp=Quellsystemtyp.DATEI_EXPORT,
+        quellsystemtyp=Quellsystemtyp.SONSTIGES_SYSTEM,
         quellenart=quellenart,
     )
     service = ImportvorgangService(

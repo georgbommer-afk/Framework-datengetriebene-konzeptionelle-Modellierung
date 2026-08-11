@@ -179,7 +179,7 @@ class MappingValidierung:
 
 @dataclass(frozen=True, slots=True)
 class SemantischesMapping:
-    """Vollständige Konfiguration zwischen Interim-Spalten und semantischen Rollen."""
+    """Historische Event-Log-Konfiguration; ausdrücklich nicht Mappingtabelle M."""
 
     mapping_id: UUID
     projekt_id: UUID
@@ -199,6 +199,8 @@ class SemantischesMapping:
     geaendert_am: datetime
     status: Mappingstatus
     aktivitaetsdefinition: Aktivitaetsdefinition | None = None
+    mappingtabelle_id: UUID | None = None
+    konfigurationsversion: int = 1
 
     def __post_init__(self) -> None:
         """Bereinigt Namen und normalisiert Zeitstempel nach UTC."""
@@ -215,6 +217,80 @@ class SemantischesMapping:
             raise Domaenenfehler("Zeitstempel eines Mappings müssen zeitzonenbewusst sein.")
         object.__setattr__(self, "erstellt_am", self.erstellt_am.astimezone(UTC))
         object.__setattr__(self, "geaendert_am", self.geaendert_am.astimezone(UTC))
+        if self.konfigurationsversion < 1:
+            raise Domaenenfehler("Die Event-Log-Konfigurationsversion ist ungültig.")
+        if self.konfigurationsversion >= 2:
+            self._aktuelle_fachregeln_pruefen()
+
+    def _aktuelle_fachregeln_pruefen(self) -> None:
+        """Begrenzt neue Konfigurationen auf Abschnitt 3.6.8."""
+        if len(self.fall_id.spalten) != 1:
+            raise Domaenenfehler(
+                "Neue Event-Log-Konfigurationen benötigen genau eine Fallidentifikationsspalte."
+            )
+        if any(
+            (
+                self.startzeitstempelspalte,
+                self.endzeitstempelspalte,
+                self.lifecycle_spalte,
+                self.ressourcen_spalte,
+            )
+        ):
+            raise Domaenenfehler(
+                "Start, Ende, Lifecycle und Ressource sind keine besonderen Rollen der "
+                "aktuellen Schritt-4-Konfiguration."
+            )
+        if len({wert.spaltenname for wert in self.spaltenzuordnungen}) != len(
+            self.spaltenzuordnungen
+        ):
+            raise Domaenenfehler("Ein zusätzliches Attribut darf nur einmal ausgewählt werden.")
+        if any(
+            wert.rolle is not Attributrolle.EREIGNISATTRIBUT for wert in self.spaltenzuordnungen
+        ):
+            raise Domaenenfehler(
+                "Neue Konfigurationen behandeln weitere Spalten nur als ausgewählte Attribute."
+            )
+        definition = self.wirksame_aktivitaetsdefinition
+        if self.mapping_modus is MappingModus.EREIGNISORIENTIERT:
+            if definition is None or not self.zeitstempelspalte:
+                raise Domaenenfehler(
+                    "Aktivitätsbeschreibung und Ereigniszeitstempel müssen festgelegt sein."
+                )
+            if self.zeitstempelzuordnungen:
+                raise Domaenenfehler(
+                    "Ein ereignisorientierter Datensatz besitzt keine breiten "
+                    "Zeitstempelzuordnungen."
+                )
+            if definition.bildungsart is Aktivitaetsbildungsart.ZUSAMMENGESETZT and (
+                definition.praefix
+                or definition.suffix
+                or definition.ersatztext
+                or definition.fehlwertstrategie != "Ergebnis leer lassen"
+            ):
+                raise Domaenenfehler(
+                    "Neue zusammengesetzte Aktivitäten erlauben nur Reihenfolge und "
+                    "Verknüpfungselement."
+                )
+        else:
+            if self.zeitstempelspalte or definition is not None:
+                raise Domaenenfehler(
+                    "Ein breiter Datensatz verwendet ausschließlich seine Zeitstempelzuordnungen."
+                )
+            if not self.zeitstempelzuordnungen:
+                raise Domaenenfehler("Wählen Sie mindestens eine relevante Zeitstempelspalte aus.")
+            if any(
+                not wert.zeitstempelspalte
+                or not wert.aktivitaetsbezeichnung
+                or wert.ressourcenspalte
+                or wert.statusspalte
+                for wert in self.zeitstempelzuordnungen
+            ):
+                raise Domaenenfehler(
+                    "Jede Zeitstempelspalte benötigt genau eine Aktivitätsbeschreibung."
+                )
+            zeitspalten = [wert.zeitstempelspalte for wert in self.zeitstempelzuordnungen]
+            if len(zeitspalten) != len(set(zeitspalten)):
+                raise Domaenenfehler("Eine Zeitstempelspalte darf nur einmal ausgewählt werden.")
 
     @property
     def wirksame_aktivitaetsdefinition(self) -> Aktivitaetsdefinition | None:
@@ -227,3 +303,16 @@ class SemantischesMapping:
                 (self.aktivitaetsspalte,),
             )
         return None
+
+    @property
+    def zusaetzliche_attribute(self) -> tuple[str, ...]:
+        """Liefert für neue Konfigurationen die ausdrücklich ausgewählten Spalten."""
+        return tuple(
+            wert.spaltenname
+            for wert in self.spaltenzuordnungen
+            if wert.rolle is not Attributrolle.IGNORIERT
+        )
+
+
+# Fachlich korrekter Name für neue Schritt-4-Verwendungen bei kompatiblem Altformat.
+EventLogKonfiguration = SemantischesMapping

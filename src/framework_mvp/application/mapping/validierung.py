@@ -196,7 +196,7 @@ def validiere_mapping(daten: pd.DataFrame, mapping: SemantischesMapping) -> Mapp
                     "Mindestens eine Zeitstempelspalte mit Aktivitätsbezeichnung ist erforderlich.",
                 )
             )
-        if len(bezeichnungen) != len(set(bezeichnungen)):
+        if mapping.konfigurationsversion < 2 and len(bezeichnungen) != len(set(bezeichnungen)):
             warnungen.append(
                 MappingWarnung(
                     Warnungsstufe.FEHLER,
@@ -212,16 +212,21 @@ def validiere_mapping(daten: pd.DataFrame, mapping: SemantischesMapping) -> Mapp
                 "Aktivität und Ereigniszeitstempel müssen definiert sein.",
             )
         )
-    fehler = (
+    inhaltsbefunde = (
         ("FEHLENDE_FALL_ID", "Fall-IDs fehlen oder sind leer.", fehlende_ids),
         ("FEHLENDE_AKTIVITAET", "Aktivitäten fehlen oder sind leer.", fehlende_aktivitaeten),
         ("FEHLENDE_ZEIT", "Ereigniszeitstempel fehlen oder sind leer.", fehlende_zeit),
         ("UNGUELTIGE_ZEIT", "Zeitstempel sind nicht interpretierbar.", nicht_zeit),
         ("START_NACH_ENDE", "Startzeitpunkte liegen nach Endzeitpunkten.", start_nach_ende),
     )
-    for code, meldung, anzahl in fehler:
+    for code, meldung, anzahl in inhaltsbefunde:
         if anzahl:
-            warnungen.append(MappingWarnung(Warnungsstufe.FEHLER, code, meldung, anzahl))
+            stufe = (
+                Warnungsstufe.WARNUNG
+                if mapping.konfigurationsversion >= 2
+                else Warnungsstufe.FEHLER
+            )
+            warnungen.append(MappingWarnung(stufe, code, meldung, anzahl))
     for code, meldung, anzahl in (
         ("DOPPELTE_EREIGNISSE", "Mögliche doppelte Ereignisse wurden erkannt.", moeglich),
         (

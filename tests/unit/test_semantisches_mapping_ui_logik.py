@@ -1,4 +1,4 @@
-"""Tests der kontextbezogenen Logik des semantischen Mappings."""
+"""Tests der Schritt-4-Logik für Event-Log-Struktur und Rollen."""
 
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4

@@ -18,6 +18,32 @@ from framework_mvp.domain.models import (
 MAXIMALE_VORSCHAUZEILEN = 200
 
 
+def ermittle_ersatzwert_aus_profil(
+    spaltenprofil: dict[str, Any], strategie: str, freier_wert: object = ""
+) -> object:
+    """Liefert den in R gespeicherten Ersatzwert gemäß Tabelle 3.11."""
+    if strategie == "Frei definierter Wert":
+        return freier_wert
+    numerisch = spaltenprofil.get("numerisch")
+    if isinstance(numerisch, dict) and strategie in {
+        "Minimum",
+        "Maximum",
+        "Arithmetisches Mittel",
+        "Median",
+    }:
+        schluessel = {
+            "Minimum": "minimum",
+            "Maximum": "maximum",
+            "Arithmetisches Mittel": "mittelwert",
+            "Median": "median",
+        }[strategie]
+        return numerisch.get(schluessel)
+    kategorial = spaltenprofil.get("kategorial")
+    if strategie == "Häufigster Wert (Modus)" and isinstance(kategorial, dict):
+        return kategorial.get("haeufigster_wert")
+    raise Domaenenfehler("Die Ersatzstrategie passt nicht zum Datentyp der Spalte.")
+
+
 @dataclass(frozen=True, slots=True)
 class Transformationsergebnis:
     """Ergebnis, Vorschau, Warnungen und vollständige Transformationshistorie."""
@@ -54,11 +80,13 @@ def _konvertiere(spalte: pd.Series, parameter: dict[str, Any]) -> tuple[pd.Serie
         konvertiert = normalisiert.map(
             lambda wert: True if wert in wahr else False if wert in falsch else pd.NA
         ).astype("boolean")
-    elif zieltyp in {"Datum", "Datum und Uhrzeit"}:
+    elif zieltyp in {"Datum", "Uhrzeit", "Datum und Uhrzeit"}:
         formatwert = parameter.get("datumsformat") or None
         konvertiert = pd.to_datetime(spalte, format=formatwert, errors="coerce")
         if zieltyp == "Datum":
             konvertiert = pd.Series(konvertiert).dt.normalize()
+        elif zieltyp == "Uhrzeit":
+            konvertiert = pd.Series(konvertiert).dt.time
     else:
         raise Domaenenfehler(f"Der Zieldatentyp {zieltyp} wird nicht unterstützt.")
     fehler_maske = spalte.notna() & pd.Series(konvertiert).isna()
@@ -276,6 +304,11 @@ def _wende_schritt_an(
     daten: pd.DataFrame, schritt: Transformationsschritt
 ) -> tuple[pd.DataFrame, str]:
     parameter = schritt.parameter
+    if not schritt.frameworkkonform:
+        raise Domaenenfehler(
+            f"Der Legacy-Transformationsschritt '{schritt.typ.value}' ist nicht mehr "
+            "frameworkkonform und wird nicht ausgeführt."
+        )
     if schritt.typ is Transformationsart.SPALTENAUSWAHL:
         spalten = list(schritt.betroffene_spalten)
         return daten.loc[
@@ -290,17 +323,13 @@ def _wende_schritt_an(
             raise Domaenenfehler("Technische Zielnamen müssen eindeutig und nicht leer sein.")
         return daten.rename(columns=mapping).copy(), f"{len(mapping)} Spalten umbenannt"
     if schritt.typ is Transformationsart.WERTE_ERSETZEN:
-        gesucht = str(parameter.get("gesuchter_wert", ""))
+        gesuchte_werte = parameter.get("gesuchte_werte")
+        if not isinstance(gesuchte_werte, list):
+            gesuchte_werte = [parameter.get("gesuchter_wert")]
         ersatz = parameter.get("ersatzwert")
-        normalisiert = bool(parameter.get("normalisierte_uebereinstimmung", False))
         anzahl = 0
         for name in schritt.betroffene_spalten:
-            maske = (
-                daten[name].astype("string").str.strip().str.casefold()
-                == gesucht.strip().casefold()
-                if normalisiert
-                else daten[name].astype("string") == gesucht
-            )
+            maske = daten[name].isin(gesuchte_werte)
             anzahl += int(maske.sum())
             daten.loc[maske.fillna(False), name] = ersatz
         return daten, f"{anzahl} Werte ersetzt"
@@ -310,6 +339,24 @@ def _wende_schritt_an(
             daten[name], anzahl = _konvertiere(daten[name], parameter)
             fehler += anzahl
         return daten, f"{fehler} nicht konvertierbare Werte"
+    if schritt.typ is Transformationsart.EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN:
+        anzahl = int(daten.duplicated(keep="first").sum())
+        return daten.drop_duplicates(keep="first").copy(), f"{anzahl} zusätzliche Tupel entfernt"
+    if schritt.typ is Transformationsart.VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN:
+        leere_positionen = [
+            position
+            for position in range(len(daten.columns))
+            if daten.iloc[:, position].isna().to_numpy().all()
+        ]
+        leere_spalten = [str(daten.columns[position]) for position in leere_positionen]
+        behalten = [
+            position for position in range(len(daten.columns)) if position not in leere_positionen
+        ]
+        return (
+            daten.iloc[:, behalten].copy(),
+            f"{len(leere_spalten)} vollständig leere Spalten entfernt: "
+            + (", ".join(leere_spalten) if leere_spalten else "keine"),
+        )
     if schritt.typ is Transformationsart.PLATZHALTER_BEHANDELN:
         strategie = parameter["strategie"]
         ausgewaehlt = {str(wert) for wert in parameter.get("platzhalterarten", ())}
