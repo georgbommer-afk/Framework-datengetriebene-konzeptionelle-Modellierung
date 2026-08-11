@@ -15,6 +15,7 @@ from framework_mvp.domain.models import (
     Transformationsplan,
     Transformationsschritt,
 )
+from framework_mvp.ui.helpers import fachliche_auswahl
 
 TECHNISCHE_ZIELTYPEN = (
     "Text",
@@ -56,9 +57,14 @@ def _jsonfaehiger_wert(wert: object) -> object:
     return wert
 
 
-def _konvertierung_formular(daten: pd.DataFrame) -> tuple[tuple[str, ...], dict[str, Any], str]:
-    spalte = st.selectbox("Spalte", [str(name) for name in daten.columns])
-    zieltyp = st.selectbox("Bestätigter technischer Zieldatentyp", TECHNISCHE_ZIELTYPEN)
+def _konvertierung_formular(
+    daten: pd.DataFrame,
+) -> tuple[tuple[str, ...], dict[str, Any], str] | None:
+    spalte = fachliche_auswahl("Spalte", [str(name) for name in daten.columns])
+    zieltyp = fachliche_auswahl("Bestätigter technischer Zieldatentyp", TECHNISCHE_ZIELTYPEN)
+    if spalte is None or zieltyp is None:
+        st.info("Wählen Sie eine Spalte und einen Zieldatentyp aus.")
+        return None
     parameter: dict[str, Any] = {"zieltyp": zieltyp, "fehlerverhalten": "Vorgang abbrechen"}
     if zieltyp in {"Datum", "Uhrzeit", "Datum und Uhrzeit"}:
         parameter["datumsformat"] = st.text_input("Datums-/Zeitformat (optional)")
@@ -68,14 +74,17 @@ def _konvertierung_formular(daten: pd.DataFrame) -> tuple[tuple[str, ...], dict[
 
 def _wertersetzung_formular(
     daten: pd.DataFrame, profil: dict[str, Any]
-) -> tuple[tuple[str, ...], dict[str, Any], str]:
+) -> tuple[tuple[str, ...], dict[str, Any], str] | None:
     profile = _profil_spalten(profil)
-    spalte = st.selectbox("Spalte", [str(name) for name in daten.columns])
-    spaltenprofil = profile.get(spalte, {})
-    auswahlart = st.selectbox(
+    spalte = fachliche_auswahl("Spalte", [str(name) for name in daten.columns])
+    auswahlart = fachliche_auswahl(
         "Zu ersetzende Werte",
         ("Einzelne konkrete Werte", "Fehlwertplatzhalter", "Potenzielle Ausreißer"),
     )
+    if spalte is None or auswahlart is None:
+        st.info("Wählen Sie eine Spalte und die Art der zu ersetzenden Werte aus.")
+        return None
+    spaltenprofil = profile.get(spalte, {})
     position = [str(name) for name in daten.columns].index(spalte)
     serie = cast(pd.Series, daten.iloc[:, position])
     if auswahlart == "Einzelne konkrete Werte":
@@ -108,13 +117,20 @@ def _wertersetzung_formular(
         strategien.extend(("Minimum", "Maximum", "Arithmetisches Mittel", "Median"))
     if isinstance(kategorial, dict):
         strategien.append("Häufigster Wert (Modus)")
-    strategie = st.selectbox("Ersatz", strategien)
+    strategie = fachliche_auswahl("Ersatz", strategien)
+    if strategie is None:
+        st.info("Wählen Sie eine Ersatzstrategie aus.")
+        return None
     freier_wert: object = ""
     if strategie == "Frei definierter Wert":
         if isinstance(numerisch, dict):
             freier_wert = st.number_input("Frei definierter Ersatzwert")
         elif spaltenprofil.get("technischer_datentyp") == "Boolean":
-            freier_wert = st.selectbox("Frei definierter Ersatzwert", (True, False))
+            boolescher_wert = fachliche_auswahl("Frei definierter Ersatzwert", (True, False))
+            if boolescher_wert is None:
+                st.info("Wählen Sie einen booleschen Ersatzwert aus.")
+                return None
+            freier_wert = boolescher_wert
         else:
             freier_wert = st.text_input("Frei definierter Ersatzwert")
     ersatz = ermittle_ersatzwert_aus_profil(spaltenprofil, strategie, freier_wert)
@@ -168,15 +184,18 @@ def _neuer_schritt(
     daten: pd.DataFrame,
     profil: dict[str, Any],
     reihenfolge: int,
-) -> Transformationsschritt:
+) -> Transformationsschritt | None:
     if art is Transformationsart.DATENTYP_KONVERTIEREN:
-        spalten, parameter, beschreibung = _konvertierung_formular(daten)
+        ergebnis = _konvertierung_formular(daten)
     elif art is Transformationsart.WERTE_ERSETZEN:
-        spalten, parameter, beschreibung = _wertersetzung_formular(daten, profil)
+        ergebnis = _wertersetzung_formular(daten, profil)
     elif art is Transformationsart.EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN:
-        spalten, parameter, beschreibung = _duplikate_formular(daten)
+        ergebnis = _duplikate_formular(daten)
     else:
-        spalten, parameter, beschreibung = _leere_spalten_formular(daten)
+        ergebnis = _leere_spalten_formular(daten)
+    if ergebnis is None:
+        return None
+    spalten, parameter, beschreibung = ergebnis
     return Transformationsschritt.neu(
         typ=art,
         betroffene_spalten=spalten,
@@ -215,13 +234,20 @@ def zeige_transformationseditor(
             st.rerun()
 
     st.write("**Transformation hinzufügen**")
-    art = st.selectbox(
+    art = fachliche_auswahl(
         "Transformationsart",
         FRAMEWORKKONFORME_TRANSFORMATIONSARTEN,
         format_func=TRANSFORMATIONSART_BEZEICHNUNGEN.__getitem__,
     )
-    schritt = _neuer_schritt(art, ausgangsdaten, ausgangsprofil, len(plan.schritte) + 1)
-    if st.button("Transformation zum Plan hinzufügen"):
+    schritt = (
+        _neuer_schritt(art, ausgangsdaten, ausgangsprofil, len(plan.schritte) + 1)
+        if art is not None
+        else None
+    )
+    if art is None:
+        st.info("Wählen Sie zuerst eine Transformationsart aus.")
+    if st.button("Transformation zum Plan hinzufügen", disabled=schritt is None):
+        assert schritt is not None
         plan = service.schritt_hinzufuegen(plan, schritt)
         service.plan_speichern(plan)
         st.session_state.etl_transformationsplan = plan

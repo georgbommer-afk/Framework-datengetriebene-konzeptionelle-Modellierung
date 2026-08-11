@@ -6,6 +6,7 @@ from pathlib import Path
 from framework_mvp.application.datenimport_service import DatenimportService
 from framework_mvp.application.datenqualitaet_service import DatenqualitaetService
 from framework_mvp.application.datenquelle_service import DatenquelleService
+from framework_mvp.application.ergebnisaggregation_service import ErgebnisaggregationService
 from framework_mvp.application.event_log_service import EventLogService
 from framework_mvp.application.importvorgang_service import ImportvorgangService
 from framework_mvp.application.mapping_service import (
@@ -13,12 +14,18 @@ from framework_mvp.application.mapping_service import (
     MappingService,
 )
 from framework_mvp.application.mappingtabelle_service import MappingtabelleService
+from framework_mvp.application.modellableitung_service import ModellableitungService
+from framework_mvp.application.modellausgabe_service import ModellausgabeService
+from framework_mvp.application.modellvalidierung_service import ModellvalidierungService
 from framework_mvp.application.process_mining_service import ProcessMiningService
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.application.transformations_service import TransformationsService
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
 from framework_mvp.infrastructure.persistence.sqlite_datenquelle_repository import (
     SQLiteDatenquelleRepository,
+)
+from framework_mvp.infrastructure.persistence.sqlite_ergebnisaggregation_repository import (
+    SQLiteErgebnisaggregationRepository,
 )
 from framework_mvp.infrastructure.persistence.sqlite_etl_repository import SQLiteETLRepository
 from framework_mvp.infrastructure.persistence.sqlite_event_log_repository import (
@@ -32,6 +39,12 @@ from framework_mvp.infrastructure.persistence.sqlite_mapping_repository import (
 )
 from framework_mvp.infrastructure.persistence.sqlite_mappingtabelle_repository import (
     SQLiteMappingtabelleRepository,
+)
+from framework_mvp.infrastructure.persistence.sqlite_modellableitung_repository import (
+    SQLiteModellableitungRepository,
+)
+from framework_mvp.infrastructure.persistence.sqlite_modellvalidierung_repository import (
+    SQLiteModellvalidierungRepository,
 )
 from framework_mvp.infrastructure.persistence.sqlite_process_mining_repository import (
     SQLiteProcessMiningRepository,
@@ -192,3 +205,58 @@ def erstelle_process_mining_service(
         erstelle_datenqualitaet_service(pfad, workspace_konfiguration),
         ImportartefaktSpeicher(workspace_konfiguration),
     )
+
+
+def erstelle_ergebnisaggregation_service(
+    datenbankpfad: Path | str | None = None,
+    workspace: WorkspaceKonfiguration | None = None,
+) -> ErgebnisaggregationService:
+    """Erzeugt Algorithmus 7 mit der bestehenden, validierten Artefaktkette."""
+    pfad = ermittle_datenbankpfad(datenbankpfad)
+    workspace_konfiguration = workspace or WorkspaceKonfiguration.ermitteln()
+    return ErgebnisaggregationService(
+        SQLiteErgebnisaggregationRepository(pfad),
+        erstelle_projekt_service(pfad),
+        erstelle_transformations_service(pfad, workspace_konfiguration),
+        erstelle_datenqualitaet_service(pfad, workspace_konfiguration),
+        erstelle_process_mining_service(pfad, workspace_konfiguration),
+        ImportartefaktSpeicher(workspace_konfiguration),
+    )
+
+
+def erstelle_modellableitung_service(
+    datenbankpfad: Path | str | None = None,
+    workspace: WorkspaceKonfiguration | None = None,
+) -> ModellableitungService:
+    """Erzeugt Algorithmus 8 auf der validierten Übergabe von P und A_G."""
+    pfad = ermittle_datenbankpfad(datenbankpfad)
+    workspace_konfiguration = workspace or WorkspaceKonfiguration.ermitteln()
+    return ModellableitungService(
+        SQLiteModellableitungRepository(pfad),
+        erstelle_ergebnisaggregation_service(pfad, workspace_konfiguration),
+        erstelle_transformations_service(pfad, workspace_konfiguration),
+        erstelle_datenquelle_service(pfad),
+        ImportartefaktSpeicher(workspace_konfiguration),
+    )
+
+
+def erstelle_modellvalidierung_service(
+    datenbankpfad: Path | str | None = None,
+    workspace: WorkspaceKonfiguration | None = None,
+) -> ModellvalidierungService:
+    """Erzeugt Algorithmus 9 auf dem validierten K/O-Paar aus Schritt 8."""
+    pfad = ermittle_datenbankpfad(datenbankpfad)
+    workspace_konfiguration = workspace or WorkspaceKonfiguration.ermitteln()
+    return ModellvalidierungService(
+        SQLiteModellvalidierungRepository(pfad),
+        erstelle_modellableitung_service(pfad, workspace_konfiguration),
+        ImportartefaktSpeicher(workspace_konfiguration),
+    )
+
+
+def erstelle_modellausgabe_service(
+    datenbankpfad: Path | str | None = None,
+    workspace: WorkspaceKonfiguration | None = None,
+) -> ModellausgabeService:
+    """Erzeugt Algorithmus 10 ohne zusätzliche Exportpersistenz."""
+    return ModellausgabeService(erstelle_modellvalidierung_service(datenbankpfad, workspace))

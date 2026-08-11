@@ -30,6 +30,7 @@ from framework_mvp.domain.models import (
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
+from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import framework_bereich_oeffnen, schritt_abschliessen_und_weiter
 from framework_mvp.ui.pages.semantisches_mapping import (
     _aktiven_datensatz_laden,
@@ -160,14 +161,19 @@ def _aktivitaetsquellen(
         optionen = [w for w in spalten if w not in auswahl]
         if not optionen:
             break
-        auswahl.append(
-            st.selectbox(
-                f"{position + 1}. Bestandteil",
-                optionen,
-                format_func=lambda w: _spaltenlabel(mapping, w),
-                key=(f"event_aktivitaetsbestandteil_{zustand['datensatz_id']}_{position}"),
-            )
+        wert = fachliche_auswahl(
+            f"{position + 1}. Bestandteil",
+            optionen,
+            wert=(
+                zustand.get("aktivitaetsquellen", ())[position]
+                if len(zustand.get("aktivitaetsquellen", ())) > position
+                else None
+            ),
+            format_func=lambda w: _spaltenlabel(mapping, w),
+            key=(f"event_aktivitaetsbestandteil_{zustand['datensatz_id']}_{position}"),
         )
+        if wert is not None:
+            auswahl.append(wert)
     zustand["aktivitaetsquellen"] = tuple(auswahl)
     return tuple(auswahl)
 
@@ -182,9 +188,10 @@ def _mindestbestandteile(
     def label(wert: str) -> str:
         return _spaltenlabel(mapping, wert)
 
-    zustand["fall_id"] = st.selectbox(
+    zustand["fall_id"] = fachliche_auswahl(
         "Fallidentifikation",
         spalten,
+        wert=zustand.get("fall_id"),
         format_func=label,
         key=f"event_fall_id_{datensatz_id}",
     )
@@ -196,14 +203,14 @@ def _mindestbestandteile(
             key=f"event_aktivitaetsart_{datensatz_id}",
         )
         if art == "Vorhandene Spalte":
-            zustand["aktivitaetsquellen"] = (
-                st.selectbox(
-                    "Aktivitätsspalte",
-                    spalten,
-                    format_func=label,
-                    key=f"event_aktivitaetsspalte_{datensatz_id}",
-                ),
+            aktivitaet = fachliche_auswahl(
+                "Aktivitätsspalte",
+                spalten,
+                wert=(zustand.get("aktivitaetsquellen") or (None,))[0],
+                format_func=label,
+                key=f"event_aktivitaetsspalte_{datensatz_id}",
             )
+            zustand["aktivitaetsquellen"] = () if aktivitaet is None else (aktivitaet,)
             zustand["verknuepfungselement"] = ""
         else:
             if len(_aktivitaetsquellen(spalten, mapping, zustand)) < 2:
@@ -213,13 +220,21 @@ def _mindestbestandteile(
                 value=" → ",
                 key=f"event_verknuepfung_{datensatz_id}",
             )
-        zustand["zeitstempelspalte"] = st.selectbox(
+        zustand["zeitstempelspalte"] = fachliche_auswahl(
             "Ereigniszeitstempel",
             spalten,
+            wert=zustand.get("zeitstempelspalte"),
             format_func=label,
             key=f"event_zeitstempel_{datensatz_id}",
         )
         zustand["zeitstempelzuordnungen"] = ()
+        if (
+            zustand["fall_id"] is None
+            or not zustand["aktivitaetsquellen"]
+            or zustand["zeitstempelspalte"] is None
+        ):
+            st.info("Wählen Sie Fallidentifikation, Aktivität und Ereigniszeitstempel aus.")
+            return False
         return True
     zeitspalten = tuple(
         st.multiselect(
@@ -447,18 +462,25 @@ def _speichern(
     _ergebnis(zustand["ergebnis"], konfiguration, projektname, datensatz, mapping)
     event_log_id = zustand.setdefault("event_log_id", uuid4())
     artefakt = zustand.get("artefakt")
-    if artefakt is None and st.button("Event Log E reproduzierbar speichern", type="primary"):
-        zustand["artefakt"] = service.speichern(event_log_id, konfiguration.mapping_id)
-        st.session_state.aktuelles_event_log_id = str(event_log_id)
-        st.session_state.event_log_id = event_log_id
-        st.rerun()
-    elif artefakt is not None:
+    if artefakt is not None:
         st.success("Der fallbezogene Event Log (E) wurde gespeichert.")
         st.write(f"**CSV.GZ:** {artefakt.relativer_csv_pfad}")
         st.write(f"**Schema:** {artefakt.relativer_schema_pfad}")
         st.write(f"**Lineage:** {artefakt.relativer_lineage_pfad}")
-        if st.button("Weiter zu Schritt 5: Datenqualität prüfen"):
-            schritt_abschliessen_und_weiter(aktueller_schritt=4, projekt_id=projekt_id)
+    speichern, weiter = st.columns(2)
+    if speichern.button(
+        "Fallbezogenen Event Log speichern",
+        type="primary",
+        disabled=artefakt is not None,
+    ):
+        zustand["artefakt"] = service.speichern(event_log_id, konfiguration.mapping_id)
+        st.session_state.aktuelles_event_log_id = str(event_log_id)
+        st.session_state.event_log_id = event_log_id
+        st.rerun()
+    if weiter.button("Weiter", disabled=artefakt is None):
+        schritt_abschliessen_und_weiter(aktueller_schritt=4, projekt_id=projekt_id)
+    if artefakt is None:
+        st.info("Speichern Sie zuerst den fallbezogenen Event Log, bevor Sie fortfahren.")
 
 
 def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
@@ -554,6 +576,7 @@ def zeige_event_log_seite(
                 mapping,
                 zustand,
             )
-        _navigation(zustand, weiter)
+        if zustand["schritt"] < len(SCHRITTE):
+            _navigation(zustand, weiter)
     except (Domaenenfehler, Importintegritaetsfehler) as fehler:
         st.error(str(fehler))

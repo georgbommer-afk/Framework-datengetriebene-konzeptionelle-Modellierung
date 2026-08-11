@@ -134,6 +134,8 @@ def test_regulaere_oberflaeche_hat_genau_eine_fallspalte_und_begrenzte_aktivitae
     next(w for w in app.radio if w.label == "Aktivitätsbeschreibung").set_value(
         "Aus mehreren Attributen zusammensetzen"
     ).run()
+    next(w for w in app.selectbox if w.label == "1. Bestandteil").select_index(0).run()
+    next(w for w in app.selectbox if w.label == "2. Bestandteil").select_index(0).run()
     labels = {wert.label for wert in (*app.text_input, *app.selectbox, *app.number_input)}
     assert "Verknüpfungselement (optional)" in labels
     assert "1. Bestandteil" in labels and "2. Bestandteil" in labels
@@ -178,7 +180,7 @@ def test_ereignisorientierter_ablauf_speichert_e_und_setzt_aktiven_kontext() -> 
     assert not app.exception
     assert any("Fallbezogener Event Log (E)" in wert.value for wert in app.markdown)
     _button(app, "Weiter").click().run()
-    _button(app, "Event Log E reproduzierbar speichern").click().run()
+    _button(app, "Fallbezogenen Event Log speichern").click().run()
     assert not app.exception
     assert app.session_state["aktuelles_event_log_id"] == str(
         app.session_state["test_event_log_id"]

@@ -91,7 +91,7 @@ def _spaltenuebersicht(ergebnis: Profilierungsergebnis, daten: pd.DataFrame | No
     if auffaellig:
         st.write("**Auffällige Spalten**")
         for zeile in auffaellig:
-            st.info(f"{zeile['Spaltenname']}: {zeile['Erkannte Auffälligkeiten']}")
+            st.info(f"**{zeile['Spaltenname']}:** {zeile['Erkannte Auffälligkeiten']}")
 
 
 def _fehlwertdiagramm(ergebnis: Profilierungsergebnis) -> None:
@@ -100,7 +100,10 @@ def _fehlwertdiagramm(ergebnis: Profilierungsergebnis) -> None:
         "Leere Zellen sind echte fehlende Werte. Einträge wie NULL, N/A oder - "
         "können textuelle Platzhalter für fehlende Angaben sein."
     )
-    daten = [asdict(wert) for wert in ergebnis.diagramme.fehlwerte]
+    daten = [asdict(wert) for wert in ergebnis.diagramme.fehlwerte if wert.anzahl > 0]
+    if not daten:
+        st.info("Keine entsprechenden Werte vorhanden.")
+        return
     st.vega_lite_chart(
         {"values": daten},
         {
@@ -110,14 +113,14 @@ def _fehlwertdiagramm(ergebnis: Profilierungsergebnis) -> None:
                     "field": "spaltenname",
                     "type": "nominal",
                     "sort": None,
-                    "title": "Spalte",
+                    "title": None,
                 },
                 "x": {
                     "field": "anteil",
                     "type": "quantitative",
                     "stack": "zero",
                     "axis": {"format": ".1%"},
-                    "title": "Anteil",
+                    "title": None,
                 },
                 "color": {"field": "art", "type": "nominal", "title": "Art"},
                 "tooltip": [
@@ -130,7 +133,6 @@ def _fehlwertdiagramm(ergebnis: Profilierungsergebnis) -> None:
         },
         width="stretch",
     )
-    st.dataframe(pd.DataFrame(daten), hide_index=True)
 
 
 def _numerische_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) -> None:
@@ -228,14 +230,13 @@ def _kategoriale_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) 
         st.info("Diese Spalte enthält keine regulären kategorialen Werte.")
         return
     daten = [asdict(wert) for wert in diagramm.kategorien]
-    st.dataframe(pd.DataFrame(daten), hide_index=True)
     st.vega_lite_chart(
         {"values": daten},
         {
             "mark": "bar",
             "encoding": {
-                "y": {"field": "bezeichnung", "type": "nominal", "sort": "-x", "title": "Wert"},
-                "x": {"field": "anzahl", "type": "quantitative", "title": "Häufigkeit"},
+                "y": {"field": "bezeichnung", "type": "nominal", "sort": "-x", "title": None},
+                "x": {"field": "anzahl", "type": "quantitative", "title": None},
                 "tooltip": ["bezeichnung", "anzahl", {"field": "anteil", "format": ".2%"}],
             },
         },

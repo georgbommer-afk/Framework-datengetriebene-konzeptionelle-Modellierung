@@ -7,6 +7,7 @@ from uuid import UUID
 
 import streamlit as st
 
+from framework_mvp.application.ergebnisaggregation import KPI_DEFINITIONEN
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.kataloge import (
@@ -37,6 +38,7 @@ from framework_mvp.domain.models import (
 )
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
 from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
+from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import schritt_abschliessen_und_weiter
 
 LOGGER = logging.getLogger(__name__)
@@ -83,9 +85,9 @@ def _neuer_entwurf() -> dict[str, Any]:
         "zielgroessen": [],
         "systemtyp": None,
         "systemklassifikation": Systemklassifikation(),
-        "gestalt": GestaltDerGueter.MISCHFORM,
-        "erzeugnisstrukturtyp": Erzeugnisstrukturtyp.GENERELL,
-        "kontinuitaet": Materialflusskontinuitaet.GEMISCHT,
+        "gestalt": None,
+        "erzeugnisstrukturtyp": None,
+        "kontinuitaet": None,
         "produktion": {},
         "intralogistik": {},
         "kpis": [],
@@ -267,8 +269,7 @@ def _schritt_ziele(daten: dict[str, Any]) -> None:
 
 
 def _auswahl(label: str, optionen: tuple[str, ...], wert: str) -> str:
-    index = optionen.index(wert) if wert in optionen else 0
-    return st.selectbox(label, optionen, index=index)
+    return fachliche_auswahl(label, optionen, wert=wert) or ""
 
 
 def _mehrfach(
@@ -288,7 +289,7 @@ def _produktionsauswahl(daten: dict[str, Any]) -> None:
         produktion[merkmal.feldname] = (
             _mehrfach(merkmal.bezeichnung, merkmal.auspraegungen, aktueller_wert)
             if merkmal.mehrfachauswahl
-            else _auswahl(merkmal.bezeichnung, ("", *merkmal.auspraegungen), aktueller_wert)
+            else _auswahl(merkmal.bezeichnung, merkmal.auspraegungen, aktueller_wert)
         )
 
 
@@ -299,7 +300,7 @@ def _intralogistikauswahl(daten: dict[str, Any]) -> None:
         intralogistik[merkmal.feldname] = (
             _mehrfach(merkmal.bezeichnung, merkmal.auspraegungen, aktueller_wert)
             if merkmal.mehrfachauswahl
-            else _auswahl(merkmal.bezeichnung, ("", *merkmal.auspraegungen), aktueller_wert)
+            else _auswahl(merkmal.bezeichnung, merkmal.auspraegungen, aktueller_wert)
         )
 
 
@@ -311,35 +312,33 @@ def _schritt_system(daten: dict[str, Any]) -> None:
             "Speichern Produktion oder Intralogistik; eine automatische Umklassifikation "
             "findet nicht statt."
         )
-    optionen: tuple[Systemtyp | None, ...] = (
-        None,
+    optionen: tuple[Systemtyp, ...] = (
         Systemtyp.PRODUKTION,
         Systemtyp.INTRALOGISTIK,
     )
     aktueller_typ = daten["systemtyp"]
-    index = optionen.index(aktueller_typ) if aktueller_typ in optionen else 0
-    daten["systemtyp"] = st.selectbox(
+    daten["systemtyp"] = fachliche_auswahl(
         "Systemtyp",
         optionen,
-        index=index,
-        format_func=lambda wert: "Bitte auswählen" if wert is None else _enum_text(wert),
+        wert=aktueller_typ,
+        format_func=_enum_text,
     )
-    daten["gestalt"] = st.selectbox(
+    daten["gestalt"] = fachliche_auswahl(
         "Gestalt der Güter",
         list(GestaltDerGueter),
-        index=list(GestaltDerGueter).index(daten["gestalt"]),
+        wert=daten["gestalt"],
         format_func=GESTALT_DER_GUETER_BEZEICHNUNGEN.__getitem__,
     )
-    daten["erzeugnisstrukturtyp"] = st.selectbox(
+    daten["erzeugnisstrukturtyp"] = fachliche_auswahl(
         "Erzeugnisstrukturtyp",
         list(Erzeugnisstrukturtyp),
-        index=list(Erzeugnisstrukturtyp).index(daten["erzeugnisstrukturtyp"]),
+        wert=daten["erzeugnisstrukturtyp"],
         format_func=ERZEUGNISSTRUKTURTYP_BEZEICHNUNGEN.__getitem__,
     )
-    daten["kontinuitaet"] = st.selectbox(
+    daten["kontinuitaet"] = fachliche_auswahl(
         "Kontinuität des Materialflusses",
         list(Materialflusskontinuitaet),
-        index=list(Materialflusskontinuitaet).index(daten["kontinuitaet"]),
+        wert=daten["kontinuitaet"],
         format_func=MATERIALFLUSSKONTINUITAET_BEZEICHNUNGEN.__getitem__,
     )
     if daten["systemtyp"] is Systemtyp.PRODUKTION:
@@ -354,17 +353,42 @@ def _schritt_auswertungen(daten: dict[str, Any]) -> None:
         "kann, wird später anhand der verfügbaren Ereignisdaten geprüft."
     )
     kandidaten = leite_kpi_kandidaten_ab(tuple(daten["zielgroessen"]))
-    gewaehlt = set(daten["kpis"])
+    gueltige_ids = {kandidat.kpi_id for kandidat in kandidaten}
+    gewaehlt = set(daten["kpis"]) & gueltige_ids
+    kopf = st.columns((3, 3, 3, 1))
+    for spalte, titel in zip(
+        kopf,
+        (
+            "Logistische Zielgröße",
+            "Vorgeschlagene Kennzahl",
+            "Gleichung",
+            "Berücksichtigen",
+        ),
+        strict=True,
+    ):
+        spalte.markdown(f"**{titel}**")
     for kandidat in kandidaten:
-        if st.checkbox(
-            kandidat.bezeichnung,
+        definition = KPI_DEFINITIONEN[kandidat.kpi_id]
+        st.caption(
+            "Sie haben als logistische Zielgröße "
+            f"„{ZIELGROESSEN_BEZEICHNUNGEN[kandidat.zielgroesse]}“ ausgewählt. "
+            f"Auf dieser Grundlage wird Ihnen die Kennzahl „{kandidat.bezeichnung}“ "
+            "zur späteren manuellen Berechnung vorgeschlagen. Möchten Sie diese "
+            "berücksichtigen?"
+        )
+        ziel, kpi, formel, auswahl = st.columns((3, 3, 3, 1))
+        ziel.write(ZIELGROESSEN_BEZEICHNUNGEN[kandidat.zielgroesse])
+        kpi.write(kandidat.bezeichnung)
+        formel.write(definition.formel)
+        if auswahl.checkbox(
+            "Auswählen",
             kandidat.kpi_id in gewaehlt,
             key=f"kpi_{kandidat.kpi_id}",
+            label_visibility="collapsed",
         ):
             gewaehlt.add(kandidat.kpi_id)
         else:
             gewaehlt.discard(kandidat.kpi_id)
-        st.caption("Logistische Zielgröße: " + ZIELGROESSEN_BEZEICHNUNGEN[kandidat.zielgroesse])
     daten["kpis"] = [kandidat.kpi_id for kandidat in kandidaten if kandidat.kpi_id in gewaehlt]
     if daten["legacy_kpis"]:
         st.caption("Relevante Kennzahlen aus dem Altprojekt: " + ", ".join(daten["legacy_kpis"]))
@@ -389,6 +413,32 @@ def _auftrag(daten: dict[str, Any]) -> Untersuchungsauftrag:
     if typ not in (Systemtyp.PRODUKTION, Systemtyp.INTRALOGISTIK):
         raise Domaenenfehler(
             "Wählen Sie für die Systemklassifikation Produktion oder Intralogistik."
+        )
+    fehlende_allgemeine = [
+        label
+        for label, wert in (
+            ("Gestalt der Güter", daten["gestalt"]),
+            ("Erzeugnisstrukturtyp", daten["erzeugnisstrukturtyp"]),
+            ("Kontinuität des Materialflusses", daten["kontinuitaet"]),
+        )
+        if wert is None
+    ]
+    spezifische_merkmale = (
+        PRODUKTIONSSPEZIFISCHE_MERKMALE
+        if typ is Systemtyp.PRODUKTION
+        else INTRALOGISTIKSPEZIFISCHE_MERKMALE
+    )
+    spezifische_daten = daten["produktion" if typ is Systemtyp.PRODUKTION else "intralogistik"]
+    fehlende_spezifische = [
+        merkmal.bezeichnung
+        for merkmal in spezifische_merkmale
+        if not merkmal.mehrfachauswahl and not spezifische_daten.get(merkmal.feldname)
+    ]
+    if fehlende_allgemeine or fehlende_spezifische:
+        raise Domaenenfehler(
+            "Treffen Sie eine Auswahl für: "
+            + ", ".join((*fehlende_allgemeine, *fehlende_spezifische))
+            + "."
         )
     alt = daten["systemklassifikation"]
     system = replace(
@@ -436,22 +486,22 @@ def _zusammenfassungswert(wert: str | tuple[str, ...] | list[str]) -> str:
 def _schritt_auftrag(daten: dict[str, Any]) -> None:
     st.markdown("### Ausgaben dieses Schritts")
     st.markdown("**Untersuchungsauftrag (U)**")
-    st.write(f"Projektbezeichnung: {daten['bezeichnung'] or '–'}")
-    st.write(f"Problemstellung: {daten['problemstellung'] or '–'}")
-    st.write(f"Systemgrenzen: {daten['systemgrenze'] or '–'}")
+    st.markdown(f"**Projektbezeichnung:** {daten['bezeichnung'] or '–'}")
+    st.markdown(f"**Problemstellung:** {daten['problemstellung'] or '–'}")
+    st.markdown(f"**Systemgrenzen:** {daten['systemgrenze'] or '–'}")
     vordefinierte_zwecke = [
         zweck for zweck in daten["zwecke"] if zweck in VORDEFINIERTE_UNTERSUCHUNGSZWECKE
     ]
-    st.write("Untersuchungszwecke: " + _zusammenfassungswert(vordefinierte_zwecke))
+    st.markdown("**Untersuchungszwecke:** " + _zusammenfassungswert(vordefinierte_zwecke))
     individuelle_zwecke = [
         zweck for zweck in daten["zwecke"] if zweck not in VORDEFINIERTE_UNTERSUCHUNGSZWECKE
     ]
     if individuelle_zwecke:
-        st.write("Individueller Untersuchungszweck: " + ", ".join(individuelle_zwecke))
+        st.markdown("**Individueller Untersuchungszweck:** " + ", ".join(individuelle_zwecke))
     kandidaten = {k.zielgroesse: k for k in leite_kpi_kandidaten_ab(tuple(daten["zielgroessen"]))}
     ausgewaehlte_kpis = set(daten["kpis"])
     if daten["zielgroessen"]:
-        st.write("Ausgewählte logistische Zielgrößen und KPI-Kandidaten:")
+        st.markdown("**Ausgewählte logistische Zielgrößen und KPI-Kandidaten:**")
         st.dataframe(
             [
                 {
@@ -468,44 +518,72 @@ def _schritt_auftrag(daten: dict[str, Any]) -> None:
             width="stretch",
         )
     else:
-        st.write("Ausgewählte logistische Zielgrößen und KPI-Kandidaten: –")
+        st.markdown("**Ausgewählte logistische Zielgrößen und KPI-Kandidaten:** –")
 
     st.markdown("**Systemprofil (S)**")
     systemtyp = daten["systemtyp"]
-    st.write(
-        "Systemtyp: "
+    st.markdown(
+        "**Systemtyp:** "
         + (SYSTEMTYP_BEZEICHNUNGEN[systemtyp] if systemtyp in SYSTEMTYP_BEZEICHNUNGEN else "–")
     )
-    st.write("Gestalt der Güter: " + GESTALT_DER_GUETER_BEZEICHNUNGEN[daten["gestalt"]])
-    st.write(
-        "Erzeugnisstrukturtyp: " + ERZEUGNISSTRUKTURTYP_BEZEICHNUNGEN[daten["erzeugnisstrukturtyp"]]
+    st.markdown(
+        "**Gestalt der Güter:** "
+        + (GESTALT_DER_GUETER_BEZEICHNUNGEN[daten["gestalt"]] if daten["gestalt"] else "–")
     )
-    st.write(
-        "Kontinuität des Materialflusses: "
-        + MATERIALFLUSSKONTINUITAET_BEZEICHNUNGEN[daten["kontinuitaet"]]
+    st.markdown(
+        "**Erzeugnisstrukturtyp:** "
+        + (
+            ERZEUGNISSTRUKTURTYP_BEZEICHNUNGEN[daten["erzeugnisstrukturtyp"]]
+            if daten["erzeugnisstrukturtyp"]
+            else "–"
+        )
+    )
+    st.markdown(
+        "**Kontinuität des Materialflusses:** "
+        + (
+            MATERIALFLUSSKONTINUITAET_BEZEICHNUNGEN[daten["kontinuitaet"]]
+            if daten["kontinuitaet"]
+            else "–"
+        )
     )
     if systemtyp is Systemtyp.PRODUKTION:
-        st.write("Produktionsspezifische Merkmale:")
+        st.markdown("**Produktionsspezifische Merkmale:**")
         for merkmal in PRODUKTIONSSPEZIFISCHE_MERKMALE:
-            st.write(
-                f"{merkmal.bezeichnung}: "
+            st.markdown(
+                f"**{merkmal.bezeichnung}:** "
                 + _zusammenfassungswert(daten["produktion"].get(merkmal.feldname, ""))
             )
     elif systemtyp is Systemtyp.INTRALOGISTIK:
-        st.write("Intralogistikspezifische Merkmale:")
+        st.markdown("**Intralogistikspezifische Merkmale:**")
         for merkmal in INTRALOGISTIKSPEZIFISCHE_MERKMALE:
-            st.write(
-                f"{merkmal.bezeichnung}: "
+            st.markdown(
+                f"**{merkmal.bezeichnung}:** "
                 + _zusammenfassungswert(daten["intralogistik"].get(merkmal.feldname, ""))
             )
 
 
-def _speichern_und_weiter(
+def _speichern(
     service: ProjektService,
     projekt: Projekt | None,
     daten: dict[str, Any],
 ) -> None:
     try:
+        fehlende_pflichtangaben = [
+            label
+            for label, wert in (
+                ("Projektbezeichnung", daten["bezeichnung"]),
+                ("Problemstellung", daten["problemstellung"]),
+                ("Systemgrenze", daten["systemgrenze"]),
+                ("Untersuchungszweck", daten["zwecke"]),
+            )
+            if not wert
+        ]
+        if fehlende_pflichtangaben:
+            raise Domaenenfehler(
+                "Folgende Pflichtangaben müssen ausgefüllt sein: "
+                + ", ".join(fehlende_pflichtangaben)
+                + "."
+            )
         auftrag = _auftrag(daten)
         if not auftrag.ist_vollstaendig():
             raise Domaenenfehler(
@@ -536,11 +614,11 @@ def _speichern_und_weiter(
         )
         return
     st.session_state.ausgewaehlte_projekt_id = gespeichert.projekt_id
+    st.session_state.auswahl_generation += 1
     st.session_state.wizard_entwurf = _entwurf_aus_projekt(gespeichert)
-    schritt_abschliessen_und_weiter(
-        aktueller_schritt=1,
-        projekt_id=gespeichert.projekt_id,
-    )
+    st.session_state.aktuelles_projekt_id = str(gespeichert.projekt_id)
+    st.session_state.erfolgsmeldung = "Projektrahmen wurde gespeichert."
+    st.rerun()
 
 
 def _navigation(
@@ -557,12 +635,16 @@ def _navigation(
         if rechts.button("Weiter", width="content"):
             st.session_state.wizard_schritt = schritt + 1
             st.rerun()
-    elif rechts.button(
-        "Projektrahmen speichern und mit ETL fortfahren",
-        type="primary",
-        width="content",
-    ):
-        _speichern_und_weiter(service, projekt, daten)
+    else:
+        aktuell_gespeichert = projekt is not None and daten == _entwurf_aus_projekt(projekt)
+        speichern, weiter = st.columns(2)
+        if speichern.button("Projektrahmen speichern", type="primary", width="content"):
+            _speichern(service, projekt, daten)
+        if weiter.button("Weiter", disabled=not aktuell_gespeichert, width="content"):
+            assert projekt is not None
+            schritt_abschliessen_und_weiter(aktueller_schritt=1, projekt_id=projekt.projekt_id)
+        if not aktuell_gespeichert:
+            st.info("Speichern Sie zuerst den Projektrahmen, bevor Sie fortfahren.")
 
 
 def zeige_projektverwaltung(

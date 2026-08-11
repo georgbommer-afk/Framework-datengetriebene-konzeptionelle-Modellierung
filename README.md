@@ -39,8 +39,7 @@ Das erzeugte konzeptionelle Modell kann jedoch als Grundlage für eine spätere 
 
 ## Aktueller Funktionsumfang
 
-Die Streamlit-Anwendung besitzt sechs Hauptbereiche: Projektverwaltung, ETL, semantisches
-Mapping, Event Log Aufbau, Datenqualitätsprüfung und Process Mining. Schritt 2 übernimmt als
+Die Streamlit-Anwendung setzt alle zehn Frameworkschritte um. Schritt 2 übernimmt als
 fachliche Eingabe bereitgestellte CSV- oder XLSX-Datensätze (D) und erzeugt drei persistente
 Ausgaben: den Datenquellenkatalog (Q), das Datenprofil (R) und den aufbereiteten
 Zwischendatensatz (T). Der Projektkontext dient dabei nur der technischen Zuordnung.
@@ -63,7 +62,16 @@ workspace/projects/<projekt-id>/
 ├── process_mining/<analyse-id>.discovery.json
 ├── process_mining/<analyse-id>.dfg.json
 ├── process_mining/<analyse-id>.process-tree.ptml
-└── process_mining/<analyse-id>.model.{ptml|pnml|bpmn}
+├── process_mining/<analyse-id>.model.{ptml|pnml|bpmn}
+├── aggregation/<aggregations-id>.aggregation.json
+├── aggregation/<sollmodell-id>.target.{original|replay}.pnml
+├── aggregation/<conformance-id>.conformance.{json|csv}
+├── aggregation/<auswertungs-id>.deviations.{json|csv}
+├── model_derivations/<modellableitungs-id>/
+│   ├── preliminary-conceptual-model-k.json
+│   └── open-components-o.json
+└── model_validations/<validierungslauf-id>/
+    └── validated-conceptual-model-k-star.json
 ```
 
 ## Geplante Funktionen
@@ -177,19 +185,99 @@ Ablauf angeboten. Nach erneuter Integritätsprüfung werden P und A_D an Schritt
 Conformance Checking, Token Replay, Fitness, Performance-, Ressourcen-, Engpass- und
 Kennzahlenanalysen gehören nicht zu Schritt 6.
 
-### Konzeptionelles Modell
-Die gewonnenen Ergebnisse sollen strukturiert auf Bestandteile eines konzeptionellen Modells abgebildet werden. Dazu zählen:
-- Problemstellung,
-- Zielsetzung,
-- Modellgrenzen,
-- Entitäten,
-- Aktivitäten,
-- Warteschlangen,
-- Ressourcen,
-- Ein- und Ausgangsgrößen,
-- Annahmen und Vereinfachungen,
-- Prozessdarstellung.
-Nicht unmittelbar aus den Daten ableitbare Bestandteile werden durch manuelle Eingaben und Domänenwissen ergänzt.
+### Ergebnisaggregation
+
+Schritt 7 verwendet ausschließlich das aktive Projekt und die erneut validierte Lineage aus U,
+R, T, E*, P und A_D. Die in U gespeicherten KPI-IDs werden über 16 feste, versionierte
+Definitionen aus A.7 bis A.10 angeboten. Jede Rechengröße wird ausdrücklich einer Profilkennzahl
+aus R oder einer Spalte beziehungsweise Zeit-/Aktivitätsreferenz aus T oder E* zugeordnet. Es
+gibt weder semantisches Raten noch zusätzliche KPIs oder einen Formeleditor. Fehlende oder
+mehrdeutige Operanden führen für genau diese Kennzahl zum Status `nicht_berechenbar`; A_D und
+andere berechenbare Bestandteile bleiben speicherbar.
+
+Conformance Checking ist unabhängig und optional. Die anwendende Person kann es überspringen,
+eine bestätigte lineare Sollsequenz aus vorhandenen E*-Aktivitäten als Workflow-Petrinetz
+erzeugen oder ein unabhängig erstelltes PNML hochladen. Das in Schritt 6 entdeckte P wird nie zu
+P_Soll erklärt. Der lineare Assistent bildet weder Verzweigungen noch Parallelität,
+Synchronisation oder Schleifen ab. Für komplexe Netze steht WoPeD Next eingebettet mit festem
+HTTPS-Link und Fallback in einen neuen Tab bereit; die Übernahme erfolgt ausschließlich über
+bewussten PNML-Export und Upload.
+
+PNML-Originalbytes bleiben unverändert. Eine getrennte Replay-Fassung darf eindeutig fehlende
+Anfangs- und Endmarkierungen erst nach menschlicher Bestätigung aus genau einem Quell- und
+Senkenplatz ergänzen. Import, Stellen, Transitionen, Kanten, sichtbare eindeutige Bezeichnungen,
+Workflow-Netz und Soundness werden lokal geprüft. Aktivitäten werden nur exakt oder über ein
+bestätigtes manuelles Mapping verbunden. Token Replay verwendet das vollständige E* und
+dokumentiert produzierte, konsumierte, fehlende und verbleibende Tokens je Fall und aggregiert;
+die Fitness folgt Gleichung 3.13. Diese Ergebnisse bilden A_C.
+
+Die ebenfalls unabhängige Soll-Ist-Zeitauswertung verwendet ausdrücklich zugeordnete
+Soll-Zeitstempel aus T, E* oder einer getrennt gespeicherten CSV-/XLSX-Datei. Fall- und
+ereignisbezogene Schlüssel, Zeitstempel, Aktivitäten und Auftretensnummern werden menschlich
+festgelegt; mehrdeutige Verknüpfungen blockieren die Auswertung. A_V enthält nur direkte
+Zeitabweichungen und deren Klassifikation, keine kausale Erklärung oder Maßnahmenempfehlung.
+
+A_G speichert keine Kopie von A_D, sondern dessen ID, Pfad und Prüfsumme. Es enthält die
+KPI-Konfigurationen und -Ergebnisse sowie optional Referenzen auf P_Soll, Aktivitätsmapping, A_C,
+Soll-Zeitdaten und A_V. Schemaversion 8 ergänzt dafür ausschließlich eine additive
+Metadatentabelle. Ungespeicherte Vorschauen sind an sämtliche Eingaben und Entscheidungen
+gebunden. Beim Laden und vor der Übergabe werden Lineage, Artefaktversion, Existenz und alle
+Prüfsummen erneut geprüft. Schritt 8 erhält ausschließlich das unveränderte P aus Schritt 6 und
+das gültige A_G.
+
+### Modellbestandteile ableiten
+
+Schritt 8 lädt ausschließlich die aktive und erneut validierte Lineage U, S, Q, R, T, E*, P
+und A_G. Q wird dabei nur über die in T referenzierten Importe aufgelöst; P muss exakt der
+Prozessmodellreferenz in A_G entsprechen. P_Soll und externe Soll-Zeitdaten sind keine
+eigenständigen Quellen von Schritt 8. A_D, A_C, KPI-Ergebnisse und A_V werden ausschließlich
+über das unveränderte A_G berücksichtigt.
+
+Die elf Bestandteile aus Abschnitt 2.3.1 werden in stabiler Reihenfolge nach der festen
+Quellenmatrix aus Tabelle 3.15 verarbeitet. Direkte Übernahmen, kontrollierte
+Metadatenzusammenfassungen und Artefaktreferenzen tragen jeweils Quell-ID, Quellprüfsumme und
+Strukturpfad. Es gibt keine semantische Automatik: Eine `case_id` wird nicht zum Entitätstyp,
+Zeitlücken werden nicht zu Warteschlangen und beliebige Attribute werden nicht zu Ressourcen
+erklärt. Aktivitäten werden unverändert aus Prozessbaum, Petrinetz oder BPMN gelesen; stille
+Petrinetztransitionen bleiben ausgeschlossen.
+
+Das vorläufige konzeptionelle Modell K enthält nur belegte Informationen. Fehlende, nicht
+ableitbare oder fachlich unsichere Inhalte stehen getrennt und unverändert `offen` in O. Die
+Bestandteile Ausgaben und Eingaben, Warteschlangen sowie Annahmen und Vereinfachungen behalten
+den in Tabelle 3.15 vorgesehenen Ergänzungsbedarf. Die anwendende Person kann vorhandene
+Zuordnungen als fachlich unsicher markieren, aber in Schritt 8 weder Ersatzwerte eingeben noch
+Inhalte korrigieren oder ergänzen.
+
+K und O werden gemeinsam, projekt-, versions- und lineagegebunden gespeichert. Schemaversion 9
+ergänzt dafür ausschließlich eine additive Metadatentabelle. Identische Eingaben,
+Mappingversion und Unsicherheitsmarkierungen sind idempotent. Jede Änderung an U, S, Q, R, T,
+E*, P, A_G oder den Markierungen invalidiert eine Vorschau. Vor Download, Wiederaufnahme und
+Übergabe werden beide Dateien, ihre gegenseitige Referenz, Prüfsummen, elf Bestandteile und die
+vollständige Eingangslineage erneut geprüft. Schritt 9 erhält ausschließlich K und O. K ist noch
+kein fachlich validiertes K*; Ergänzung, Konfliktauflösung und Validierung gehören zu Schritt 9.
+
+### Modell ergänzen, validieren und ausgeben
+
+Schritt 9 lädt ausschließlich das aktive, erneut validierte Paar K und O. Jeder Eintrag aus O
+wird mit der ursprünglichen Kategorie und Begründung einer menschlichen Entscheidung
+`bestätigt`, `ergänzt_oder_angepasst` oder `nicht_anwendbar` zugeordnet. Fachliche Inhalte und
+Begründungen werden als zusätzliche menschliche Einträge dokumentiert; die ursprünglichen
+Informationen aus K und ihre Herkunft bleiben unverändert. Bei Anpassungsbedarf können auch
+zuvor nicht offene Bestandteile separat ergänzt werden. K* entsteht erst, wenn alle O-Einträge
+behandelt sind, kein weiterer Anpassungsbedarf besteht und die Gesamtvalidierung bewusst
+bestätigt wurde.
+
+K* enthält alle elf Bestandteile in stabiler Reihenfolge, Referenzen und Prüfsummen von K und O,
+sämtliche menschlichen Entscheidungen sowie Validierungsstatus und -vermerk. Der Lauf wird
+atomar, projektgebunden und für identische Eingaben und Entscheidungen idempotent gespeichert.
+Die gemeinsame additive Schemaversion 10 ergänzt hierfür nur die Metadaten von K*; K und O
+bleiben unverändert.
+
+Schritt 10 akzeptiert ausschließlich ein erneut geprüftes, fachlich validiertes K*. Aus diesem
+Artefakt werden wahlweise ein kompakter PDF-Report, eine strukturierte Excel-Arbeitsmappe oder
+beide Dateien reproduzierbar erzeugt. Beide Formate enthalten alle elf Bestandteile und trennen
+ursprünglich übernommene Informationen von menschlichen Ergänzungen und Anpassungen. Schritt 10
+ergänzt oder validiert das Modell nicht und persistiert keine Exportdateien.
 
 ### Speicherung und Export
 Die Anwendung soll Zwischenergebnisse und finale Ausgaben speichern beziehungsweise exportieren können. Dazu können gehören:

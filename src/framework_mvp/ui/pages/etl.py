@@ -52,6 +52,7 @@ from framework_mvp.infrastructure.exceptions import (
 from framework_mvp.ui.components.datenprofil_visualisierung import zeige_datenprofil
 from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
 from framework_mvp.ui.components.transformation import zeige_transformationseditor
+from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import (
     framework_bereich_oeffnen,
     schritt_abschliessen_und_weiter,
@@ -69,6 +70,7 @@ ETL_SCHRITTE = (
     "Zwischendatensatz",
 )
 ETL_KURZNAMEN = ("Quelle", "Vorschau", "Profil", "Transformation", "Ergebnis")
+NEUE_DATENQUELLE = "__neue_datenquelle__"
 
 
 def _enum_text(wert: Quellsystemtyp) -> str:
@@ -201,6 +203,7 @@ def _gespeicherten_import_wiederherstellen(
     zustand.update(
         {
             "datenquellen_id": str(importvorgang.datenquellen_id),
+            "quellenauswahl_token": str(importvorgang.datenquellen_id),
             "dateiinhalt": dateiinhalt,
             "datei_metadaten": metadaten,
             "vorschau": vorschau,
@@ -227,27 +230,33 @@ def _gespeicherten_import_wiederherstellen(
 
 def _quelle_auswaehlen(
     service: DatenquelleService, projekt_id: UUID, zustand: dict[str, Any]
-) -> Datenquelle | None:
+) -> tuple[Datenquelle | None, bool]:
     """Wählt eine Katalogquelle oder den Eintrag für eine neue Quelle."""
     datenquellen = service.datenquellen_fuer_projekt(projekt_id)
-    optionen = ["", *(str(quelle.datenquellen_id) for quelle in datenquellen)]
+    optionen = [NEUE_DATENQUELLE, *(str(quelle.datenquellen_id) for quelle in datenquellen)]
     texte = {str(q.datenquellen_id): q.bezeichnung for q in datenquellen}
-    gespeichert = str(zustand.get("datenquellen_id", ""))
-    index = optionen.index(gespeichert) if gespeichert in optionen else 0
-    auswahl = st.selectbox(
+    gespeichert = str(zustand.get("datenquellen_id", "")) or None
+    auswahl = fachliche_auswahl(
         "Datenquelle",
         optionen,
-        index=index,
-        format_func=lambda wert: "Neue Datenquelle anlegen" if not wert else texte[wert],
-        key=f"etl_quellenauswahl_{projekt_id}",
+        wert=gespeichert if gespeichert in optionen else None,
+        format_func=lambda wert: (
+            "Neue Datenquelle anlegen" if wert == NEUE_DATENQUELLE else texte[wert]
+        ),
+        key=(f"etl_quellenauswahl_{projekt_id}_{zustand.get('quellenauswahl_generation', 0)}"),
     )
-    if auswahl != gespeichert:
-        zustand["datenquellen_id"] = auswahl
+    vorherige_auswahl = zustand.get("quellenauswahl_token", gespeichert)
+    if auswahl != vorherige_auswahl and auswahl is not None:
+        if auswahl == NEUE_DATENQUELLE:
+            zustand.pop("datenquellen_id", None)
+        else:
+            zustand["datenquellen_id"] = auswahl
+        zustand["quellenauswahl_token"] = auswahl
         _abhaengige_zustaende_verwerfen(zustand)
-    return next(
-        (quelle for quelle in datenquellen if str(quelle.datenquellen_id) == auswahl),
-        None,
+    quelle = next(
+        (quelle for quelle in datenquellen if str(quelle.datenquellen_id) == auswahl), None
     )
+    return quelle, auswahl == NEUE_DATENQUELLE
 
 
 def _kopfzeile(
@@ -471,7 +480,10 @@ def _quelle_und_datei(
 ) -> None:
     """Verbindet Datenquellenkatalog, Upload, Erkennung und Grundeinstellungen."""
     st.subheader("Datenquelle und Datei")
-    quelle = _quelle_auswaehlen(datenquelle_service, projekt_id, zustand)
+    quelle, neue_quelle = _quelle_auswaehlen(datenquelle_service, projekt_id, zustand)
+    if quelle is None and not neue_quelle:
+        st.info("Wählen Sie eine bestehende Datenquelle oder legen Sie bewusst eine neue an.")
+        return
     if quelle is not None:
         _gespeicherte_importe_fuer_quelle(
             importvorgang_service=importvorgang_service,
@@ -502,14 +514,12 @@ def _quelle_und_datei(
         )
         systemtypen = list(AUSWAEHLBARE_QUELLSYSTEMTYPEN)
         vorhandener_systemtyp = (
-            quelle.quellsystemtyp
-            if quelle and quelle.quellsystemtyp in systemtypen
-            else Quellsystemtyp.SONSTIGES_SYSTEM
+            quelle.quellsystemtyp if quelle and quelle.quellsystemtyp in systemtypen else None
         )
-        systemtyp = st.selectbox(
+        systemtyp = fachliche_auswahl(
             "Quellsystemtyp",
             systemtypen,
-            index=systemtypen.index(vorhandener_systemtyp),
+            wert=vorhandener_systemtyp,
             format_func=_enum_text,
         )
         konkretes_system = st.text_input(
@@ -524,8 +534,11 @@ def _quelle_und_datei(
                 "Datensätzen verknüpft werden kann."
             ),
         )
-        speichern = st.form_submit_button("Datenquelle speichern")
+        speichern = st.form_submit_button("Datenquelle speichern", type="primary")
     if speichern:
+        if systemtyp is None:
+            st.error("Wählen Sie einen Quellsystemtyp aus.")
+            return
         quellenart = (
             schlage_quellenart_vor(metadaten.dateityp)
             if metadaten is not None
@@ -556,6 +569,9 @@ def _quelle_und_datei(
         )
         workspace.fuer_projekt_anlegen(projekt_id)
         zustand["datenquellen_id"] = str(gespeichert.datenquellen_id)
+        zustand["quellenauswahl_token"] = str(gespeichert.datenquellen_id)
+        zustand["quellenauswahl_generation"] = int(zustand.get("quellenauswahl_generation", 0)) + 1
+        st.session_state.aktuelle_datenquellen_id = str(gespeichert.datenquellen_id)
         st.session_state.etl_erfolgsmeldung = "Die Datenquelle wurde erfolgreich gespeichert."
         st.rerun()
     if metadaten is None:
@@ -653,11 +669,17 @@ def _datenprofil_und_bestaetigung(
     st.subheader("Datenprofil")
     vorschau: Datenvorschau = zustand["vorschau"]
     vorhandene_platzhalter = tuple(zustand.get("zusaetzliche_platzhalter", ()))
-    platzhaltertext = st.text_input(
-        "Bestätigte domänenspezifische Fehlwertplatzhalter (durch Komma getrennt, optional)",
-        ", ".join(vorhandene_platzhalter),
-        help="Die Kennzeichnung verändert den Quelldatensatz nicht.",
-    )
+    with st.container(border=True):
+        st.markdown("**Fehlwertplatzhalter bestätigen**")
+        platzhaltertext = st.text_input(
+            "Bestätigte domänenspezifische Fehlwertplatzhalter (durch Komma getrennt, optional)",
+            ", ".join(vorhandene_platzhalter),
+            help=(
+                "Beispiele: -, n/a oder unbekannt. Die Kennzeichnung verändert den "
+                "Quelldatensatz nicht. Bestätigen Sie die Eingabe mit Enter."
+            ),
+            key=(f"etl_platzhalter_{projekt_id}_{zustand['datei_metadaten'].sha256}"),
+        )
     zusaetzliche_platzhalter = tuple(
         dict.fromkeys(wert.strip() for wert in platzhaltertext.split(",") if wert.strip())
     )
@@ -938,18 +960,17 @@ def _zeige_datenprofile_r(
         profil = service.ausgangsprofil_laden(importvorgang.import_id).gesamtprofil
         with st.container(border=True):
             st.write(f"**{importvorgang.originaldateiname} · {importvorgang.tabellenbezeichnung}**")
-            st.write(
-                f"Zeilenanzahl (n): **{profil['zeilen']:,}** · "
-                f"Spaltenanzahl (m): **{profil['spalten']:,}** · "
-                f"Exakte Tupel-Duplikate (n_dup): **{profil['exakte_duplikate']:,}** · "
-                "Vollständig leere Spalten (m_∅): "
-                f"**{profil['vollstaendig_leere_spalten']:,}**"
+            st.markdown(
+                f"**Zeilenanzahl (n):** {profil['zeilen']:,} · "
+                f"**Spaltenanzahl (m):** {profil['spalten']:,} · "
+                f"**Exakte Tupel-Duplikate (n_dup):** {profil['exakte_duplikate']:,} · "
+                "**Vollständig leere Spalten (m_∅):** "
+                f"{profil['vollstaendig_leere_spalten']:,}"
             )
             zusaetzliche = profil.get("bestaetigte_zusaetzliche_platzhalter", [])
-            st.write(
-                "Bestätigte domänenspezifische Fehlwertplatzhalter: **"
+            st.markdown(
+                "**Bestätigte domänenspezifische Fehlwertplatzhalter:** "
                 + (", ".join(zusaetzliche) if zusaetzliche else "keine")
-                + "**"
             )
             st.dataframe(pd.DataFrame(_profilzeilen(profil)), hide_index=True, width="stretch")
 
@@ -963,13 +984,11 @@ def _zeige_zwischendatensatz_t(
 ) -> None:
     """Zeigt Umfang, Schritte, Joins, Warnungen und Artefakte von T."""
     st.write("### Aufbereiteter Zwischendatensatz (T)")
-    st.write(
-        "Zugrunde liegende Datensätze: **"
-        + ", ".join(wert.originaldateiname for wert in importe)
-        + "**"
+    st.markdown(
+        "**Zugrunde liegende Datensätze:** " + ", ".join(wert.originaldateiname for wert in importe)
     )
-    st.write(
-        f"Umfang: **{len(ergebnis.daten):,} Zeilen · {len(ergebnis.daten.columns):,} Spalten**"
+    st.markdown(
+        f"**Umfang:** {len(ergebnis.daten):,} Zeilen · {len(ergebnis.daten.columns):,} Spalten"
     )
     aktive_schritte = [wert for wert in plan.schritte if wert.aktiviert]
     if aktive_schritte:
@@ -989,7 +1008,7 @@ def _zeige_zwischendatensatz_t(
         for warnung in ergebnis.warnungen:
             st.warning(warnung)
     else:
-        st.write("Warnungen: **keine**")
+        st.markdown("**Warnungen:** keine")
     if datensatz is None:
         st.caption(
             "Nach Bestätigung werden CSV.GZ, Schema-JSON und Herkunfts-/Transformations-JSON "
@@ -1025,22 +1044,26 @@ def _zwischendatensatz(
         ergebnis=ergebnis,
         datensatz=datensatz,
     )
-    if datensatz is None:
-        datensatz_id = zustand.setdefault("zwischendatensatz_id", uuid4())
-        if st.button("Q, R und T verbindlich speichern", type="primary"):
-            datensatz = service.zwischendatensatz_erzeugen(plan, ergebnis, datensatz_id)
-            zustand["zwischendatensatz"] = datensatz
-            st.session_state.aktueller_zwischendatensatz_id = str(datensatz.zwischendatensatz_id)
-            st.rerun()
-        return
-    weiterer_datensatz, weiter = st.columns(2)
-    if weiterer_datensatz.button("Weiteren Datensatz separat aufbereiten"):
+    if datensatz is not None and st.button("Weiteren Datensatz separat aufbereiten"):
         version = int(zustand.get("durchlauf_version", 0)) + 1
         zustand.clear()
         zustand.update({"schritt": 1, "durchlauf_version": version})
         st.rerun()
-    if weiter.button("Mit dem semantischen Mapping fortfahren", type="primary"):
+    datensatz_id = zustand.setdefault("zwischendatensatz_id", uuid4())
+    speichern, weiter = st.columns(2)
+    if speichern.button(
+        "Q, R und T verbindlich speichern",
+        type="primary",
+        disabled=datensatz is not None,
+    ):
+        datensatz = service.zwischendatensatz_erzeugen(plan, ergebnis, datensatz_id)
+        zustand["zwischendatensatz"] = datensatz
+        st.session_state.aktueller_zwischendatensatz_id = str(datensatz.zwischendatensatz_id)
+        st.rerun()
+    if weiter.button("Weiter", disabled=datensatz is None):
         schritt_abschliessen_und_weiter(aktueller_schritt=2, projekt_id=projekt_id)
+    if datensatz is None:
+        st.info("Speichern Sie zuerst Q, R und T, bevor Sie fortfahren.")
 
 
 def _kann_weiter(zustand: dict[str, Any]) -> bool:
@@ -1132,7 +1155,8 @@ def zeige_etl_seite(
                 projekt_id,
                 zustand,
             )
-        _navigation(zustand)
+        if zustand["schritt"] < len(ETL_SCHRITTE):
+            _navigation(zustand)
     except (Domaenenfehler, Datenimportfehler) as fehler:
         st.error(str(fehler))
     except NichtUnterstuetzteSchemaversion as fehler:

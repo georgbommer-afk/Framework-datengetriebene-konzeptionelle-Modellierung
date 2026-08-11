@@ -87,6 +87,6 @@ def test_schema_zwei_wird_ohne_projektverlust_migriert(tmp_path: Path) -> None:
 
     assert projekt_repository.laden(projekt.projekt_id) == projekt
     with sqlite3.connect(pfad) as verbindung:
-        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 10
         tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master")}
     assert "datenquellen" in tabellen

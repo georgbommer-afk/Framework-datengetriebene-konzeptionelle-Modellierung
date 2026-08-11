@@ -111,6 +111,6 @@ def test_version_groesser_fuenf_wird_abgelehnt(tmp_path: Path) -> None:
     """Eine unbekannte neuere Schemaversion bleibt unangetastet."""
     pfad = tmp_path / "neu.sqlite"
     with sqlite3.connect(pfad) as verbindung:
-        verbindung.execute("PRAGMA user_version = 8")
+        verbindung.execute("PRAGMA user_version = 11")
     with pytest.raises(NichtUnterstuetzteSchemaversion):
         SQLiteProjektRepository(pfad).auflisten()

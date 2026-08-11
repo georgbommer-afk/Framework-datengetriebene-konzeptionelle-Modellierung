@@ -25,6 +25,7 @@ from framework_mvp.domain.models import (
     MappingModus,
     Mappingstatus,
     Mappingtabelle,
+    Mappingtabellenstatus,
     SemantischesMapping,
     Spaltenzuordnung,
     Warnungsstufe,
@@ -34,6 +35,7 @@ from framework_mvp.domain.models import (
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
+from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import (
     framework_bereich_oeffnen,
     schritt_abschliessen_und_weiter,
@@ -756,9 +758,10 @@ def _spaltenzuordnung_erfassen(daten: pd.DataFrame, mapping: Mappingtabelle) -> 
     """Erfasst eine Abbildung eines tatsächlichen Spaltennamens b_tech auf b_fach."""
     st.write("#### Spaltenbezeichnung interpretieren")
     spalten = [str(wert) for wert in daten.columns]
-    spalte = st.selectbox("Technische Spaltenbezeichnung", spalten)
+    spalte = fachliche_auswahl("Technische Spaltenbezeichnung", spalten)
     fachlich = st.text_input("Fachliche Spaltenbezeichnung")
-    if st.button("Spaltenzuordnung hinzufügen"):
+    if st.button("Spaltenzuordnung hinzufügen", disabled=spalte is None):
+        assert spalte is not None
         mapping = mapping.eintrag_hinzufuegen(Mappingeintrag.fuer_spalte(spalte, fachlich))
         st.success("Die Spaltenzuordnung wurde zu M hinzugefügt.")
     return mapping
@@ -786,7 +789,10 @@ def _wertzuordnung_erfassen(daten: pd.DataFrame, mapping: Mappingtabelle) -> Map
     """Erfasst paginiert einen tatsächlich vorhandenen, typisierten technischen Wert."""
     st.write("#### Enthaltenen Wert interpretieren")
     spalten = [str(wert) for wert in daten.columns]
-    quellspalte = st.selectbox("Technische Quellspalte für Wert", spalten)
+    quellspalte = fachliche_auswahl("Technische Quellspalte für Wert", spalten)
+    if quellspalte is None:
+        st.info("Wählen Sie zuerst eine technische Quellspalte aus.")
+        return mapping
     position = spalten.index(quellspalte)
     alle_werte = _eindeutige_werte(daten.iloc[:, position])
     suchtext = st.text_input("Technische Werte durchsuchen").casefold().strip()
@@ -808,13 +814,14 @@ def _wertzuordnung_erfassen(daten: pd.DataFrame, mapping: Mappingtabelle) -> Map
     if not werte:
         st.info("Für den Suchtext ist kein technischer Wert vorhanden.")
         return mapping
-    auswahl = st.selectbox(
+    auswahl = fachliche_auswahl(
         "Technischer Wert",
         range(len(werte)),
         format_func=lambda index: f"{werte[index]!s}  [{type(werte[index]).__name__}]",
     )
     fachlich = st.text_input("Fachliche Wertbezeichnung")
-    if st.button("Wertzuordnung hinzufügen"):
+    if st.button("Wertzuordnung hinzufügen", disabled=auswahl is None):
+        assert auswahl is not None
         mapping = mapping.eintrag_hinzufuegen(
             Mappingeintrag.fuer_wert(quellspalte, werte[auswahl], fachlich)
         )
@@ -828,13 +835,16 @@ def _mappingeintrag_bearbeiten(mapping: Mappingtabelle) -> Mappingtabelle:
         return mapping
     st.write("#### Vorhandene Zuordnung bearbeiten")
     nach_id = {eintrag.mappingeintrag_id: eintrag for eintrag in mapping.eintraege}
-    eintrag_id = st.selectbox(
+    eintrag_id = fachliche_auswahl(
         "Mappingeintrag",
         list(nach_id),
         format_func=lambda wert: (
             f"{nach_id[wert].technische_bezeichnung} → {nach_id[wert].fachliche_bezeichnung}"
         ),
     )
+    if eintrag_id is None:
+        st.info("Wählen Sie den zu bearbeitenden Mappingeintrag aus.")
+        return mapping
     eintrag = nach_id[eintrag_id]
     fachlich = st.text_input(
         "Bearbeitete fachliche Bezeichnung",
@@ -903,7 +913,8 @@ def zeige_semantisches_mapping(
             mapping = _mappingeintrag_bearbeiten(mapping)
         _mappingtabelle_anzeigen(mapping)
         zustand["mappingtabelle"] = mapping
-        if st.button("Mappingtabelle M bestätigen und speichern", type="primary"):
+        speichern, weiter = st.columns(2)
+        if speichern.button("Mappingtabelle M speichern", type="primary"):
             mapping = mapping.bestaetigen(
                 kein_mapping_erforderlich=(modus == "Kein semantisches Mapping erforderlich")
             )
@@ -911,9 +922,12 @@ def zeige_semantisches_mapping(
             zustand["mapping_pfad"] = mappingtabelle_service.speichern(mapping)
             st.session_state.aktuelle_mappingtabelle_id = str(mapping.mapping_id)
             st.success("Mappingtabelle (M) wurde gespeichert und T unverändert weitergegeben.")
+        gespeichert = mapping.status is Mappingtabellenstatus.BESTAETIGT
         if pfad := zustand.get("mapping_pfad"):
             st.caption(f"Gespeichertes Artefakt: `{pfad}`")
-            if st.button("Weiter zu Schritt 4: Event Log aufbauen"):
-                schritt_abschliessen_und_weiter(aktueller_schritt=3, projekt_id=projekt_id)
+        if weiter.button("Weiter", disabled=not gespeichert):
+            schritt_abschliessen_und_weiter(aktueller_schritt=3, projekt_id=projekt_id)
+        if not gespeichert:
+            st.info("Speichern Sie zuerst die Mappingtabelle M, bevor Sie fortfahren.")
     except (Domaenenfehler, Importintegritaetsfehler) as fehler:
         st.error(str(fehler))

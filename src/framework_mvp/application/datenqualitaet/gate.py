@@ -199,9 +199,6 @@ def _q_pruefen(
         fehlende_angaben = [
             name
             for name, wert in (
-                ("konkrete Quelle", quelle.konkretes_quellsystem),
-                ("fachliche Beschreibung/Datengrundlage", quelle.fachliche_beschreibung),
-                ("Herkunft/Verantwortungsbereich", quelle.herkunft_oder_verantwortungsbereich),
                 ("verwendete Tabelle/Datei/Arbeitsblatt", importvorgang.tabellenbezeichnung),
             )
             if not wert.strip()

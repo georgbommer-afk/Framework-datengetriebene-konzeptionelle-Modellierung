@@ -13,7 +13,10 @@ from framework_mvp.bootstrap import (
 from framework_mvp.domain.models import (
     Betrachtungszeitraum,
     BetrachtungszeitraumModus,
+    Erzeugnisstrukturtyp,
+    GestaltDerGueter,
     LogistischeZielgroesse,
+    Materialflusskontinuitaet,
     Projektstatus,
     Quellenart,
     Quellsystemtyp,
@@ -24,6 +27,28 @@ from framework_mvp.domain.models import (
 )
 
 ANWENDUNGSPFAD = Path(__file__).parents[2] / "streamlit_app.py"
+
+VOLLSTAENDIGE_PRODUKTION = {
+    "auftragsabwicklungsstrategie": "Make-to-Order (MTO)",
+    "auflagegroesse": "Serienproduktion",
+    "produktionsstueckzahl": "mittel (101-10 000 Stück)",
+    "produktvielfalt": "mittel (11-100 Var.)",
+    "organisationstyp": "Reihenproduktion",
+    "anzahl_arbeitsgaenge": "mehrstufig",
+    "ressourcen": ("Maschinen", "Personal"),
+}
+
+
+def _vollstaendiges_produktionsprofil(entwurf: dict) -> None:  # type: ignore[type-arg]
+    entwurf.update(
+        {
+            "systemtyp": Systemtyp.PRODUKTION,
+            "gestalt": GestaltDerGueter.STUECKGUT,
+            "erzeugnisstrukturtyp": Erzeugnisstrukturtyp.LINEAR,
+            "kontinuitaet": Materialflusskontinuitaet.KONTINUIERLICH,
+            "produktion": dict(VOLLSTAENDIGE_PRODUKTION),
+        }
+    )
 
 
 def _anwendung_starten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
@@ -132,6 +157,8 @@ def test_systemklassifikation_enthaelt_keine_freien_beschreibungsfelder(
     anwendung.session_state["wizard_schritt"] = 3
     anwendung.run()
     systemtyp = next(element for element in anwendung.selectbox if element.label == "Systemtyp")
+    assert systemtyp.value is None
+    assert systemtyp.proto.placeholder == "Choose an option"
     assert "Produktion" in systemtyp.options
     assert "Intralogistik" in systemtyp.options
     assert "Kombiniert" not in systemtyp.options
@@ -161,7 +188,7 @@ def test_systemspezifische_merkmale_werden_bedingt_angezeigt(
     anwendung.session_state["wizard_schritt"] = 3
     anwendung.run()
     systemtyp = next(element for element in anwendung.selectbox if element.label == "Systemtyp")
-    systemtyp.select_index(1).run()
+    systemtyp.set_value("Produktion").run()
     labels = {element.label for element in (*anwendung.selectbox, *anwendung.multiselect)}
     assert {
         "Auftragsabwicklungsstrategie",
@@ -199,9 +226,12 @@ def test_kpi_hinweis_und_entfernte_allgemeine_freitexte(
     anwendung.session_state["wizard_entwurf"]["zielgroessen"] = [
         LogistischeZielgroesse.DURCHLAUFZEIT
     ]
+    anwendung.session_state["wizard_entwurf"]["kpis"] = ["nicht_mehr_gueltiger_kpi"]
     anwendung.session_state["wizard_schritt"] = 4
     anwendung.run()
-    assert any(element.label == "Mittlere DLZ Wareneingang" for element in anwendung.checkbox)
+    assert any("Mittlere DLZ Wareneingang" in element.value for element in anwendung.markdown)
+    assert any("Sie haben" in element.value for element in anwendung.caption)
+    assert anwendung.session_state["wizard_entwurf"]["kpis"] == []
     assert any("Analysebedarf" in element.value for element in anwendung.info)
     assert not {
         "Bekannte Annahmen",
@@ -225,20 +255,18 @@ def test_ausgaben_u_und_s_sind_vollstaendig_und_q_ist_abwesend(
             "individuelle_zwecke": ["Materialfluss erklären"],
             "zielgroessen": [LogistischeZielgroesse.LIEFERZEIT],
             "kpis": ["mittlere_dlz_warenausgang"],
-            "systemtyp": Systemtyp.PRODUKTION,
-            "produktion": {
-                "auflagegroesse": "Serienproduktion",
-                "ressourcen": ("Maschinen", "Personal"),
-            },
         }
     )
+    _vollstaendiges_produktionsprofil(anwendung.session_state["wizard_entwurf"])
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
     texte = [element.value for element in anwendung.markdown]
     assert any("Untersuchungsauftrag (U)" in text for text in texte)
     assert any("Systemprofil (S)" in text for text in texte)
-    assert any("Projektbezeichnung: Rahmen A" in text for text in texte)
-    assert any("Individueller Untersuchungszweck: Materialfluss erklären" in text for text in texte)
+    assert any("**Projektbezeichnung:** Rahmen A" in text for text in texte)
+    assert any(
+        "**Individueller Untersuchungszweck:** Materialfluss erklären" in text for text in texte
+    )
     assert any("Produktionsspezifische Merkmale" in text for text in texte)
     assert any(
         "Lieferzeit reduzieren" in str(zelle) or "Mittlere DLZ Warenausgang" in str(zelle)
@@ -277,10 +305,7 @@ def test_vorhandene_datenquelle_ist_von_schritt_1_entkoppelt(
     anwendung.run()
     assert not any("ERP-Export" in element.value for element in anwendung.markdown)
     assert not anwendung.date_input
-    assert any(
-        element.label == "Projektrahmen speichern und mit ETL fortfahren"
-        for element in anwendung.button
-    )
+    assert any(element.label == "Projektrahmen speichern" for element in anwendung.button)
 
 
 def test_altprojekt_wird_ohne_verlust_verdeckt_geladen(
@@ -331,10 +356,11 @@ def test_altprojekt_wird_ohne_verlust_verdeckt_geladen(
     assert any("Altprojekt ist als Gemischt klassifiziert" in e.value for e in anwendung.warning)
     assert service.projekt_laden(projekt.projekt_id).status is Projektstatus.AKTIV  # type: ignore[union-attr]
     systemtyp = next(element for element in anwendung.selectbox if element.label == "Systemtyp")
-    systemtyp.select_index(1).run()
+    systemtyp.set_value("Produktion").run()
+    _vollstaendiges_produktionsprofil(anwendung.session_state["wizard_entwurf"])
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    _schaltflaeche(anwendung, "Projektrahmen speichern und mit ETL fortfahren").click().run()
+    _schaltflaeche(anwendung, "Projektrahmen speichern").click().run()
     erneut = service.projekt_laden(projekt.projekt_id)
     assert erneut is not None
     assert erneut.status is Projektstatus.AKTIV
@@ -354,18 +380,20 @@ def test_vollstaendiges_neues_projekt_navigiert_zu_etl(
             "problemstellung": "Problem",
             "systemgrenze": "Grenze",
             "zwecke": ["System analysieren"],
-            "systemtyp": Systemtyp.PRODUKTION,
+            "zielgroessen": [LogistischeZielgroesse.DURCHLAUFZEIT],
         }
     )
+    _vollstaendiges_produktionsprofil(entwurf)
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    _schaltflaeche(anwendung, "Projektrahmen speichern und mit ETL fortfahren").click().run()
+    _schaltflaeche(anwendung, "Projektrahmen speichern").click().run()
     assert not anwendung.exception
-    assert anwendung.radio[0].value == "2 ETL durchführen"
     gespeicherte = erstelle_projekt_service().projekte_auflisten()
     assert len(gespeicherte) == 1
     assert str(gespeicherte[0].projekt_id) == anwendung.session_state["aktuelles_projekt_id"]
     assert gespeicherte[0].status is Projektstatus.ENTWURF
+    _schaltflaeche(anwendung, "Weiter").click().run()
+    assert anwendung.radio[0].value == "2 ETL durchführen"
 
 
 def test_validierungsfehler_verhindert_navigation(
@@ -378,16 +406,38 @@ def test_validierungsfehler_verhindert_navigation(
     )
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    _schaltflaeche(anwendung, "Projektrahmen speichern und mit ETL fortfahren").click().run()
+    _schaltflaeche(anwendung, "Projektrahmen speichern").click().run()
     assert anwendung.radio[0].value == "Schritt 1: Projektrahmen definieren"
     assert any("müssen ausgefüllt sein" in element.value for element in anwendung.error)
     assert not erstelle_projekt_service().projekte_auflisten()
 
 
-def test_schritte_zwei_bis_sieben_bleiben_in_der_navigation(
+def test_nicht_ausgewaehlte_pflicht_dropdowns_blockieren_das_speichern(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Die Navigation enthält den minimalen Übergabepunkt von Schritt 6 zu Schritt 7."""
+    anwendung = _anwendung_starten(tmp_path, monkeypatch)
+    anwendung.session_state["wizard_entwurf"].update(
+        {
+            "bezeichnung": "Unvollständiges Systemprofil",
+            "problemstellung": "Problem",
+            "systemgrenze": "Grenze",
+            "zwecke": ["System analysieren"],
+            "zielgroessen": [LogistischeZielgroesse.DURCHLAUFZEIT],
+        }
+    )
+    anwendung.session_state["wizard_schritt"] = 5
+    anwendung.run()
+
+    _schaltflaeche(anwendung, "Projektrahmen speichern").click().run()
+
+    assert any("Wählen Sie für die Systemklassifikation" in wert.value for wert in anwendung.error)
+    assert not erstelle_projekt_service().projekte_auflisten()
+
+
+def test_schritte_zwei_bis_zehn_bleiben_in_der_navigation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Die Navigation enthält die validierten Übergabepunkte bis Schritt 10."""
     anwendung = _anwendung_starten(tmp_path, monkeypatch)
     assert anwendung.radio[0].options == [
         "Schritt 1: Projektrahmen definieren",
@@ -397,4 +447,7 @@ def test_schritte_zwei_bis_sieben_bleiben_in_der_navigation(
         "5 Datenqualität prüfen",
         "6 Process Mining durchführen",
         "7 Ergebnisse aggregieren",
+        "8 Modellbestandteile ableiten",
+        "9 Modell ergänzen und validieren",
+        "10 Konzeptionelles Modell ausgeben",
     ]

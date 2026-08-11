@@ -12,6 +12,9 @@ FRAMEWORK_BEREICHE = (
     "5 Datenqualität prüfen",
     "6 Process Mining durchführen",
     "7 Ergebnisse aggregieren",
+    "8 Modellbestandteile ableiten",
+    "9 Modell ergänzen und validieren",
+    "10 Konzeptionelles Modell ausgeben",
 )
 
 

@@ -1,7 +1,5 @@
 """Schlanker Einstiegspunkt der Streamlit-Anwendung."""
 
-from uuid import UUID
-
 import streamlit as st
 
 from framework_mvp import __version__
@@ -9,20 +7,26 @@ from framework_mvp.bootstrap import (
     erstelle_datenimport_service,
     erstelle_datenqualitaet_service,
     erstelle_datenquelle_service,
+    erstelle_ergebnisaggregation_service,
     erstelle_event_log_konfigurations_service,
     erstelle_event_log_service,
     erstelle_importvorgang_service,
     erstelle_mappingtabelle_service,
+    erstelle_modellableitung_service,
+    erstelle_modellausgabe_service,
+    erstelle_modellvalidierung_service,
     erstelle_process_mining_service,
     erstelle_projekt_service,
     erstelle_transformations_service,
 )
-from framework_mvp.domain.exceptions import Domaenenfehler
-from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.ui.navigation import FRAMEWORK_BEREICHE
 from framework_mvp.ui.pages.datenqualitaet import zeige_datenqualitaet_seite
+from framework_mvp.ui.pages.ergebnisaggregation import zeige_ergebnisaggregation_seite
 from framework_mvp.ui.pages.etl import zeige_etl_seite
 from framework_mvp.ui.pages.event_log import zeige_event_log_seite
+from framework_mvp.ui.pages.modellableitung import zeige_modellableitung_seite
+from framework_mvp.ui.pages.modellausgabe import zeige_modellausgabe_seite
+from framework_mvp.ui.pages.modellvalidierung import zeige_modellvalidierung_seite
 from framework_mvp.ui.pages.process_mining import zeige_process_mining_seite
 from framework_mvp.ui.pages.projektverwaltung import zeige_projektverwaltung
 from framework_mvp.ui.pages.semantisches_mapping import zeige_semantisches_mapping
@@ -88,32 +92,25 @@ elif seite == "6 Process Mining durchführen":
         erstelle_datenqualitaet_service(workspace=workspace),
         erstelle_process_mining_service(workspace=workspace),
     )
+elif seite == "7 Ergebnisse aggregieren":
+    zeige_ergebnisaggregation_seite(
+        projekt_service,
+        erstelle_ergebnisaggregation_service(workspace=workspace),
+    )
+elif seite == "8 Modellbestandteile ableiten":
+    zeige_modellableitung_seite(
+        projekt_service,
+        erstelle_modellableitung_service(workspace=workspace),
+    )
+elif seite == "9 Modell ergänzen und validieren":
+    zeige_modellvalidierung_seite(
+        projekt_service,
+        erstelle_modellvalidierung_service(workspace=workspace),
+    )
 else:
-    st.header("7 Ergebnisse aggregieren")
-    try:
-        projekt_id = UUID(str(st.session_state.get("aktuelles_projekt_id")))
-        freigabe_id = UUID(str(st.session_state.get("aktuelle_freigabe_id")))
-        analyse_id = UUID(str(st.session_state.get("aktuelle_analyse_id")))
-        analyse, a_d, _ = erstelle_process_mining_service(workspace=workspace).uebergabe_laden(
-            analyse_id, projekt_id, freigabe_id
-        )
-        st.success(
-            "Die Eingaben aus Schritt 6 wurden erneut validiert: "
-            f"Prozessmodell P und Discovery-Ergebnisse A_D der Analyse {analyse.analyse_id}."
-        )
-        st.caption(
-            f"Freigabe {analyse.qualitaetspruefung_id} · Event Log {analyse.event_log_id} · "
-            f"Notation {a_d['prozessnotation']}"
-        )
-        st.info("Der fachliche Ablauf von Schritt 7 ist nicht Bestandteil dieses Auftrags.")
-    except (
-        TypeError,
-        ValueError,
-        KeyError,
-        Domaenenfehler,
-        Importintegritaetsfehler,
-    ) as fehler:
-        st.error(
-            "Schritt 7 benötigt eine erfolgreich gespeicherte und erneut validierte Kombination "
-            f"aus P und A_D aus Schritt 6: {fehler}"
-        )
+    validierungs_service = erstelle_modellvalidierung_service(workspace=workspace)
+    zeige_modellausgabe_seite(
+        projekt_service,
+        validierungs_service,
+        erstelle_modellausgabe_service(workspace=workspace),
+    )

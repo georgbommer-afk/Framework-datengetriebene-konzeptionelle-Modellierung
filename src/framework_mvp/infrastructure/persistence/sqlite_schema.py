@@ -6,7 +6,7 @@ from typing import Any
 
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
 
-SCHEMAVERSION = 7
+SCHEMAVERSION = 10
 
 PROJEKT_SCHEMA_VERSION_2 = """
 CREATE TABLE IF NOT EXISTS projekte (
@@ -244,6 +244,95 @@ CREATE INDEX IF NOT EXISTS idx_mappingtabellen_datensatz_id
     ON mappingtabellen(zwischendatensatz_id);
 """
 
+ERGEBNISAGGREGATION_SCHEMA_VERSION_8 = """
+CREATE TABLE IF NOT EXISTS ergebnisaggregationen (
+    aggregations_id TEXT PRIMARY KEY NOT NULL,
+    projekt_id TEXT NOT NULL,
+    spezifikations_id TEXT NOT NULL,
+    freigabe_id TEXT NOT NULL,
+    event_log_id TEXT NOT NULL,
+    analyse_id TEXT NOT NULL,
+    eingabefingerabdruck TEXT NOT NULL CHECK (length(eingabefingerabdruck) = 64),
+    konfigurationsfingerabdruck TEXT NOT NULL CHECK (length(konfigurationsfingerabdruck) = 64),
+    relativer_aggregations_pfad TEXT NOT NULL,
+    aggregations_sha256 TEXT NOT NULL CHECK (length(aggregations_sha256) = 64),
+    status TEXT NOT NULL CHECK (status IN ('gespeichert')),
+    erstellt_am_utc TEXT NOT NULL,
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id),
+    FOREIGN KEY (freigabe_id) REFERENCES qualitaetspruefungen(quality_run_id),
+    FOREIGN KEY (event_log_id) REFERENCES event_logs(event_log_id),
+    FOREIGN KEY (analyse_id) REFERENCES process_mining_analysen(analyse_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ergebnisaggregationen_projekt_id
+    ON ergebnisaggregationen(projekt_id);
+CREATE INDEX IF NOT EXISTS idx_ergebnisaggregationen_freigabe_id
+    ON ergebnisaggregationen(freigabe_id);
+CREATE INDEX IF NOT EXISTS idx_ergebnisaggregationen_analyse_id
+    ON ergebnisaggregationen(analyse_id);
+"""
+
+MODELLABLEITUNG_SCHEMA_VERSION_9 = """
+CREATE TABLE IF NOT EXISTS modellableitungen (
+    modellableitungs_id TEXT PRIMARY KEY NOT NULL,
+    k_id TEXT UNIQUE NOT NULL,
+    o_id TEXT UNIQUE NOT NULL,
+    projekt_id TEXT NOT NULL,
+    aggregations_id TEXT NOT NULL,
+    analyse_id TEXT NOT NULL,
+    event_log_id TEXT NOT NULL,
+    eingabefingerabdruck TEXT NOT NULL CHECK (length(eingabefingerabdruck) = 64),
+    mappingversion INTEGER NOT NULL CHECK (mappingversion > 0),
+    unsicherheitsfingerabdruck TEXT NOT NULL CHECK (length(unsicherheitsfingerabdruck) = 64),
+    relativer_k_pfad TEXT NOT NULL,
+    k_sha256 TEXT NOT NULL CHECK (length(k_sha256) = 64),
+    relativer_o_pfad TEXT NOT NULL,
+    o_sha256 TEXT NOT NULL CHECK (length(o_sha256) = 64),
+    status TEXT NOT NULL CHECK (status IN ('gespeichert')),
+    erstellt_am_utc TEXT NOT NULL,
+    UNIQUE (
+        projekt_id, aggregations_id, eingabefingerabdruck,
+        mappingversion, unsicherheitsfingerabdruck
+    ),
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id),
+    FOREIGN KEY (aggregations_id) REFERENCES ergebnisaggregationen(aggregations_id),
+    FOREIGN KEY (analyse_id) REFERENCES process_mining_analysen(analyse_id),
+    FOREIGN KEY (event_log_id) REFERENCES event_logs(event_log_id)
+);
+CREATE INDEX IF NOT EXISTS idx_modellableitungen_projekt_id
+    ON modellableitungen(projekt_id);
+CREATE INDEX IF NOT EXISTS idx_modellableitungen_aggregations_id
+    ON modellableitungen(aggregations_id);
+"""
+
+MODELLVALIDIERUNG_SCHEMA_VERSION_10 = """
+CREATE TABLE IF NOT EXISTS modellvalidierungen (
+    validierungslauf_id TEXT PRIMARY KEY NOT NULL,
+    k_stern_id TEXT UNIQUE NOT NULL,
+    projekt_id TEXT NOT NULL,
+    modellableitungs_id TEXT NOT NULL,
+    k_id TEXT NOT NULL,
+    o_id TEXT NOT NULL,
+    eingabefingerabdruck TEXT NOT NULL CHECK (length(eingabefingerabdruck) = 64),
+    entscheidungsfingerabdruck TEXT NOT NULL CHECK (length(entscheidungsfingerabdruck) = 64),
+    relativer_k_stern_pfad TEXT NOT NULL,
+    k_stern_sha256 TEXT NOT NULL CHECK (length(k_stern_sha256) = 64),
+    status TEXT NOT NULL CHECK (status IN ('fachlich_validiert')),
+    erstellt_am_utc TEXT NOT NULL,
+    UNIQUE (
+        projekt_id, modellableitungs_id,
+        eingabefingerabdruck, entscheidungsfingerabdruck
+    ),
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id),
+    FOREIGN KEY (modellableitungs_id) REFERENCES modellableitungen(modellableitungs_id),
+    FOREIGN KEY (k_id) REFERENCES modellableitungen(k_id),
+    FOREIGN KEY (o_id) REFERENCES modellableitungen(o_id)
+);
+CREATE INDEX IF NOT EXISTS idx_modellvalidierungen_projekt_id
+    ON modellvalidierungen(projekt_id);
+CREATE INDEX IF NOT EXISTS idx_modellvalidierungen_modellableitungs_id
+    ON modellvalidierungen(modellableitungs_id);
+"""
+
 _PROJEKTSPALTEN_VERSION_2 = """
     projekt_id, bezeichnung, beteiligte_personen_json, status,
     erstellt_am_utc, geaendert_am_utc, untersuchungsauftrag_json
@@ -320,7 +409,7 @@ def _migriere_version_1_auf_2(verbindung: sqlite3.Connection) -> None:
 
 
 def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
-    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 7."""
+    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 10."""
     version = int(verbindung.execute("PRAGMA user_version").fetchone()[0])
     if version > SCHEMAVERSION:
         raise NichtUnterstuetzteSchemaversion(
@@ -347,6 +436,15 @@ def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
             if anweisung.strip():
                 verbindung.execute(anweisung)
         for anweisung in MAPPINGTABELLEN_SCHEMA_VERSION_7.split(";"):
+            if anweisung.strip():
+                verbindung.execute(anweisung)
+        for anweisung in ERGEBNISAGGREGATION_SCHEMA_VERSION_8.split(";"):
+            if anweisung.strip():
+                verbindung.execute(anweisung)
+        for anweisung in MODELLABLEITUNG_SCHEMA_VERSION_9.split(";"):
+            if anweisung.strip():
+                verbindung.execute(anweisung)
+        for anweisung in MODELLVALIDIERUNG_SCHEMA_VERSION_10.split(";"):
             if anweisung.strip():
                 verbindung.execute(anweisung)
         if version < SCHEMAVERSION:

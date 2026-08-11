@@ -20,6 +20,7 @@ from framework_mvp.domain.models import (
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
+from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import framework_bereich_oeffnen, schritt_abschliessen_und_weiter
 from framework_mvp.ui.pages.semantisches_mapping import _projektkontext
 
@@ -157,7 +158,7 @@ def _artefaktkette(ergebnis: QualityGateErgebnis, kontext: EventLogKontext) -> N
 
 
 def _automatische_pruefung(ergebnis: QualityGateErgebnis) -> None:
-    st.write("### Verbindliche Kriterien aus Tabelle 3.14")
+    st.write("### Datenqualitätsprüfung der erzeugten Artefakte")
     st.dataframe(_befundtabelle(ergebnis.befunde), hide_index=True, width="stretch")
     st.write("### Erforderliche und ausgewählte Quellspalten in T")
     st.dataframe(
@@ -244,10 +245,10 @@ def _menschliche_bewertung(
             continue
         ruecksprung = vorhandene.ruecksprung_schritt if vorhandene is not None else None
         if auswahl == "Als Mangel bewertet" and befund.kriterium_id == "e_interpretierbar":
-            ruecksprung = st.selectbox(
+            ruecksprung = fachliche_auswahl(
                 "Ursächlicher vorheriger Schritt",
                 (2, 3, 4),
-                index=(2 if ruecksprung not in {2, 3, 4} else (2, 3, 4).index(ruecksprung)),
+                wert=ruecksprung if ruecksprung in {2, 3, 4} else None,
                 format_func=lambda wert: {
                     2: "Schritt 2 – Ursache in T",
                     3: "Schritt 3 – Ursache in M",
@@ -255,6 +256,9 @@ def _menschliche_bewertung(
                 }[wert],
                 key=f"gate_ursache_{zustand['event_log_id']}_{befund.kriterium_id}",
             )
+            if ruecksprung is None:
+                vollstaendig = False
+                continue
         entscheidungen.append(
             FachlicheEntscheidung(
                 befund.kriterium_id,
@@ -296,20 +300,39 @@ def _abschluss(
         return
     st.success("Gesamtstatus: Freigabe möglich.")
     freigabe = zustand.get("freigabe")
-    if freigabe is None and st.button("Event Log E unverändert als E* freigeben", type="primary"):
+    if freigabe is not None:
+        freigabe, e_stern = service.freigabe_laden(freigabe.freigabe_id)
+        if freigabe.projekt_id != projekt_id or freigabe.event_log_id != event_log_id:
+            raise Importintegritaetsfehler(
+                "Die gespeicherte Freigabe gehört nicht zum aktiven Projekt und Event Log."
+            )
+        zustand["freigabe"] = freigabe
+        st.session_state.aktuelle_freigabe_id = str(freigabe.freigabe_id)
+        st.session_state.freigegebenes_event_log_id = str(event_log_id)
+    speichern, weiter = st.columns(2)
+    if speichern.button(
+        "Event Log E unverändert als E* freigeben",
+        type="primary",
+        disabled=freigabe is not None,
+    ):
         freigabe = service.freigeben(
             zustand["freigabe_id"],
             projekt_id,
             event_log_id,
             tuple(zustand["entscheidungen"]),
         )
-        zustand["freigabe"] = freigabe
-        st.session_state.aktuelle_freigabe_id = str(freigabe.freigabe_id)
+        geladen, _ = service.freigabe_laden(freigabe.freigabe_id)
+        if geladen.projekt_id != projekt_id or geladen.event_log_id != event_log_id:
+            raise Importintegritaetsfehler(
+                "Die gespeicherte Freigabe konnte nicht im aktiven Kontext validiert werden."
+            )
+        zustand["freigabe"] = geladen
+        st.session_state.aktuelle_freigabe_id = str(geladen.freigabe_id)
         st.session_state.freigegebenes_event_log_id = str(event_log_id)
         st.rerun()
     if freigabe is None:
+        st.info("Geben Sie zuerst E unverändert als E* frei, bevor Sie fortfahren.")
         return
-    freigabe, e_stern = service.freigabe_laden(freigabe.freigabe_id)
     st.success(
         "E wurde ohne Änderung von Reihenfolge, Werten, Spalten oder Datentypen als E* "
         "freigegeben. Es wurde keine zusätzliche Qualitäts-CSV erzeugt."
@@ -331,7 +354,7 @@ def _abschluss(
         or wert in kontext.lineage.get("herkunft_zusaetzliche_attribute", {})
     ]
     st.dataframe(e_stern.loc[:, fachspalten].head(200), width="stretch")
-    if st.button("Weiter zu Schritt 6: Process Mining durchführen", type="primary"):
+    if weiter.button("Weiter"):
         schritt_abschliessen_und_weiter(aktueller_schritt=5, projekt_id=projekt_id)
 
 
@@ -377,6 +400,8 @@ def zeige_datenqualitaet_seite(
                         zustand["entscheidungen"] = qualitaet_service.entscheidungen_der_freigabe(
                             auswahl
                         )
+                        st.session_state.aktuelle_freigabe_id = str(auswahl)
+                        st.session_state.freigegebenes_event_log_id = str(event_log_id)
                         zustand["schritt"] = 4
                         st.rerun()
             _navigation(zustand, True)

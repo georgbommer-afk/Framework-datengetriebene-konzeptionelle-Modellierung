@@ -101,6 +101,9 @@ def test_schritt_drei_zeigt_nur_m_und_keine_event_log_rollen() -> None:
 
 def test_spaltenzuordnung_kann_erfasst_bearbeitet_und_gespeichert_werden() -> None:
     app = _aktive_anwendung()
+    next(wert for wert in app.selectbox if wert.label == "Technische Spaltenbezeichnung").set_value(
+        "t_pdno"
+    )
     next(wert for wert in app.text_input if wert.label == "Fachliche Spaltenbezeichnung").set_value(
         "Produktionsauftrag"
     )
@@ -113,7 +116,7 @@ def test_spaltenzuordnung_kann_erfasst_bearbeitet_und_gespeichert_werden() -> No
         {"Art", "Technische Bezeichnung", "Fachliche Bezeichnung"} <= set(wert.value.columns)
         for wert in app.dataframe
     )
-    _button(app, "Mappingtabelle M bestätigen und speichern").click().run()
+    _button(app, "Mappingtabelle M speichern").click().run()
     assert not app.exception
     assert any("wurde gespeichert" in wert.value for wert in app.success)
     gespeichert = app.session_state["test_gespeichertes_m"]
@@ -149,7 +152,7 @@ def test_leeres_m_muss_ausdruecklich_gewaehlt_werden_und_wird_gespeichert() -> N
         for wert in app.radio
         if wert.label == "Ist eine Interpretation technischer Bezeichnungen erforderlich?"
     ).set_value("Kein semantisches Mapping erforderlich").run()
-    _button(app, "Mappingtabelle M bestätigen und speichern").click().run()
+    _button(app, "Mappingtabelle M speichern").click().run()
     assert not app.exception
     gespeichert = app.session_state["test_gespeichertes_m"]
     assert gespeichert.kein_mapping_erforderlich

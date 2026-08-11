@@ -332,6 +332,22 @@ def test_q_prueft_nur_verwendete_quellen_und_fehlender_eintrag_fuehrt_zu_schritt
     assert any(wert.kriterium_id.startswith("q_quelle_fehlt:") for wert in mangel.befunde)
 
 
+def test_optionale_legacy_quellenfelder_blockieren_die_freigabe_nicht() -> None:
+    """Leere, im aktuellen Vertrag optionale Q-Felder sind kein technischer Mangel."""
+    kontext = _kontext()
+    quelle = replace(
+        kontext.datenquellen[0],
+        konkretes_quellsystem="",
+        fachliche_beschreibung="",
+        herkunft_oder_verantwortungsbereich="",
+    )
+
+    ergebnis, _ = pruefe_quality_gate(replace(kontext, datenquellen=(quelle,)), _bestaetigungen())
+
+    assert ergebnis.freigabe_moeglich
+    assert not any(wert.kriterium_id.startswith("q_angaben_fehlen:") for wert in ergebnis.befunde)
+
+
 def test_t_fehlende_erforderliche_spalte_und_ungueltige_zeit_fuehren_zu_schritt_zwei() -> None:
     t_daten = pd.DataFrame(
         {

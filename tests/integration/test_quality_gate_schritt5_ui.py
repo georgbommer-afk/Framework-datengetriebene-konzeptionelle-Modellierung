@@ -212,5 +212,13 @@ def test_erfolgreiche_freigabe_setzt_e_stern_kontext_und_erlaubt_schritt_sechs()
         "22222222-2222-2222-2222-222222222222"
     )
     assert any("keine zusätzliche Qualitäts-CSV" in wert.value for wert in app.success)
-    _button(app, "Weiter zu Schritt 6: Process Mining durchführen").click().run()
+    _button(app, "Weiter").click().run()
     assert app.session_state["naechster_framework_bereich"] == "6 Process Mining durchführen"
+
+
+def test_automatische_pruefung_verwendet_die_fachliche_ueberschrift() -> None:
+    app = _app(schritt=2)
+    assert any(
+        "Datenqualitätsprüfung der erzeugten Artefakte" in wert.value for wert in app.markdown
+    )
+    assert not any("Verbindliche Kriterien aus Tabelle 3.14" in wert.value for wert in app.markdown)

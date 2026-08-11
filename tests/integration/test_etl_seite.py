@@ -15,6 +15,26 @@ from framework_mvp.workspace import WORKSPACE_UMGEBUNGSVARIABLE
 
 ANWENDUNGSPFAD = Path(__file__).parents[2] / "streamlit_app.py"
 
+TRANSFORMATIONS_APP = r"""
+from uuid import UUID
+
+import pandas as pd
+
+from framework_mvp.domain.models import Transformationsplan
+from framework_mvp.ui.components.transformation import zeige_transformationseditor
+
+plan = Transformationsplan.neu(
+    UUID("11111111-1111-1111-1111-111111111111"),
+    (UUID("22222222-2222-2222-2222-222222222222"),),
+)
+zeige_transformationseditor(
+    object(),
+    plan,
+    pd.DataFrame({"Wert": [1, 2]}),
+    {"spaltenprofile": []},
+)
+"""
+
 
 def _projekt_anlegen() -> Projekt:
     return erstelle_projekt_service().projekt_anlegen(
@@ -31,6 +51,14 @@ def _etl_starten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
     anwendung.session_state["aktuelles_projekt_id"] = str(projekt.projekt_id)
     anwendung.radio[0].set_value("2 ETL durchführen").run()
     return anwendung
+
+
+def _neue_datenquelle_waehlen(anwendung: AppTest) -> None:
+    auswahl = next(e for e in anwendung.selectbox if e.label == "Datenquelle")
+    assert auswahl.value is None
+    assert auswahl.proto.placeholder == "Choose an option"
+    auswahl.set_value("Neue Datenquelle anlegen").run()
+    next(e for e in anwendung.selectbox if e.label == "Quellsystemtyp").set_value("ERP-System")
 
 
 def test_etl_seite_startet_und_markiert_schritt_zwei(
@@ -59,6 +87,7 @@ def test_datenquelle_kann_angelegt_und_erneut_geladen_werden(
 ) -> None:
     """Der aktive Teilschritt speichert und öffnet einen Katalogeintrag."""
     anwendung = _etl_starten(tmp_path, monkeypatch)
+    _neue_datenquelle_waehlen(anwendung)
     bezeichnung = next(e for e in anwendung.text_input if e.label == "Bezeichnung der Datenquelle")
     bezeichnung.set_value("ERP Tagesexport")
     speichern = next(e for e in anwendung.button if e.label == "Datenquelle speichern")
@@ -71,7 +100,7 @@ def test_datenquelle_kann_angelegt_und_erneut_geladen_werden(
     assert (tmp_path / "workspace" / "projects" / str(projekt.projekt_id) / "raw").is_dir()
 
     auswahl = next(e for e in anwendung.selectbox if e.label == "Datenquelle")
-    auswahl.select_index(1).run()
+    assert auswahl.value == anwendung.session_state["aktuelle_datenquellen_id"]
     assert (
         next(e for e in anwendung.text_input if e.label == "Bezeichnung der Datenquelle").value
         == "ERP Tagesexport"
@@ -83,6 +112,7 @@ def test_upload_ist_im_ersten_abschnitt_integriert(
 ) -> None:
     """Datenquelle und Upload werden ohne technischen Zwischenschritt zusammen angezeigt."""
     anwendung = _etl_starten(tmp_path, monkeypatch)
+    _neue_datenquelle_waehlen(anwendung)
     next(e for e in anwendung.text_input if e.label == "Bezeichnung der Datenquelle").set_value(
         "CSV-Quelle"
     )
@@ -101,3 +131,15 @@ def test_projektwechsel_fuehrt_zu_schritt_eins_und_bewahrt_projekt(
     assert not anwendung.exception
     assert anwendung.radio[0].value == "Schritt 1: Projektrahmen definieren"
     assert anwendung.session_state["aktuelles_projekt_id"] == projekt_id
+
+
+def test_transformation_startet_ohne_vorbelegten_typ() -> None:
+    anwendung = AppTest.from_string(TRANSFORMATIONS_APP).run()
+    auswahl = next(e for e in anwendung.selectbox if e.label == "Transformationsart")
+
+    assert not anwendung.exception
+    assert auswahl.value is None
+    assert auswahl.proto.placeholder == "Choose an option"
+    assert next(
+        e for e in anwendung.button if e.label == "Transformation zum Plan hinzufügen"
+    ).disabled
