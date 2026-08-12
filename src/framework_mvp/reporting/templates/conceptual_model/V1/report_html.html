@@ -1,0 +1,1445 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ dokument.titel }}</title>
+    <link rel="stylesheet" href="report_html.css">
+</head>
+<body>
+
+{# ================================================================ #}
+{# Hilfsmakros                                                       #}
+{# ================================================================ #}
+
+{% macro wert_oder_strich(wert) -%}
+    {% if wert is not none and wert != "" %}
+        {{ wert }}
+    {% else %}
+        –
+    {% endif %}
+{%- endmacro %}
+
+
+{% macro liste_oder_strich(werte) -%}
+    {% if werte %}
+        <ul class="compact-list">
+            {% for wert in werte %}
+                <li>{{ wert }}</li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <span class="empty-value">–</span>
+    {% endif %}
+{%- endmacro %}
+
+
+{% macro code_liste(werte) -%}
+    {% if werte %}
+        <div class="tag-list">
+            {% for wert in werte %}
+                <span class="tag">{{ wert.bezeichnung }}</span>
+            {% endfor %}
+        </div>
+    {% else %}
+        <span class="empty-value">–</span>
+    {% endif %}
+{%- endmacro %}
+
+
+{% macro status(status_text, status_anzeige) -%}
+    {% if status_text %}
+        <span class="status-badge status-{{ status_text }}">
+            {{ status_anzeige }}
+        </span>
+    {% else %}
+        <span class="empty-value">–</span>
+    {% endif %}
+{%- endmacro %}
+
+
+{% macro fachliche_anpassungen(abschnitt) -%}
+    {% if abschnitt.fachliche_anpassungen %}
+        <div class="human-input">
+            <div class="human-input-title">
+                Fachliche Ergänzungen aus der Validierung
+            </div>
+
+            {% for anpassung in abschnitt.fachliche_anpassungen %}
+                <div class="human-input-entry">
+                    <div class="human-input-content">
+                        {{ anpassung.fachlicher_inhalt }}
+                    </div>
+
+                    {% if anpassung.begruendung %}
+                        <div class="human-input-reason">
+                            <strong>Begründung:</strong>
+                            {{ anpassung.begruendung }}
+                        </div>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+{%- endmacro %}
+
+
+{% macro modellbestandteil_kopf(nummer, titel, abschnitt) -%}
+<header class="component-header">
+
+    <div class="component-number">
+        {{ "%02d" | format(nummer | int) }}
+    </div>
+
+    <div class="component-heading">
+
+        <div class="component-kicker">
+            Modellbestandteil
+        </div>
+
+        <h1>{{ titel }}</h1>
+
+    </div>
+
+    <div class="component-status">
+        {{ status(
+            abschnitt.validierungsstatus,
+            abschnitt.validierungsstatus_anzeige
+        ) }}
+    </div>
+
+</header>
+{%- endmacro %}
+
+
+{% macro kv(label, wert) -%}
+    <div class="kv-row">
+        <div class="kv-label">{{ label }}</div>
+        <div class="kv-value">{{ wert_oder_strich(wert) }}</div>
+    </div>
+{%- endmacro %}
+
+
+{% macro schema_tabelle(schema) -%}
+    {% if schema %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Attribut</th>
+                    <th>Datentyp</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for spalte in schema %}
+                    <tr>
+                        <td>
+                            {{ spalte.name
+                               if spalte.name is defined
+                               else spalte.get("name", "–") }}
+                        </td>
+                        <td>
+                            {{ spalte.datentyp
+                               if spalte.datentyp is defined
+                               else spalte.get("datentyp", "–") }}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <div class="empty-block">Keine Schemainformation vorhanden.</div>
+    {% endif %}
+{%- endmacro %}
+
+{% macro strukturwert(wert) -%}
+
+    {% if wert is mapping %}
+
+        <div class="nested-properties">
+
+            {% for name, inhalt in wert.items() %}
+
+                <div class="nested-property">
+
+                    <div class="nested-property-label">
+                        {{ name | replace("_", " ") }}
+                    </div>
+
+                    <div class="nested-property-value">
+
+                        {% if inhalt is iterable
+                              and inhalt is not string
+                              and inhalt is not mapping %}
+
+                            {{ liste_oder_strich(inhalt) }}
+
+                        {% else %}
+
+                            {{ wert_oder_strich(inhalt) }}
+
+                        {% endif %}
+
+                    </div>
+
+                </div>
+
+            {% endfor %}
+
+        </div>
+
+    {% elif wert is iterable
+          and wert is not string
+          and wert is not mapping %}
+
+        {{ liste_oder_strich(wert) }}
+
+    {% else %}
+
+        {{ wert_oder_strich(wert) }}
+
+    {% endif %}
+
+{%- endmacro %}
+
+{% macro feld(label, wert) -%}
+<div class="component-field">
+    <div class="component-field-label">
+        {{ label }}
+    </div>
+
+    <div class="component-field-value">
+        {{ wert_oder_strich(wert) }}
+    </div>
+</div>
+{%- endmacro %}
+
+
+{% macro listenfeld(label, werte) -%}
+<div class="component-field">
+    <div class="component-field-label">
+        {{ label }}
+    </div>
+
+    <div class="component-field-value">
+        {{ liste_oder_strich(werte) }}
+    </div>
+</div>
+{%- endmacro %}
+
+
+{% macro untertitel(titel) -%}
+<div class="component-subheading">
+    {{ titel }}
+</div>
+{%- endmacro %}
+
+{# ================================================================ #}
+{# Titelseite                                                        #}
+{# ================================================================ #}
+
+<section class="cover-page">
+
+    <div class="cover-eyebrow">
+        Konzeptionelles Modell
+    </div>
+
+    <div class="cover-title-block">
+        <h1>{{ dokument.titel }}</h1>
+
+        {% if dokument.untertitel %}
+            <p class="cover-subtitle">
+                {{ dokument.untertitel }}
+            </p>
+        {% endif %}
+    </div>
+
+    <div class="cover-divider"></div>
+
+    <div class="cover-project">
+        {% if projekt.bezeichnung %}
+            <div class="cover-project-name">
+                {{ projekt.bezeichnung }}
+            </div>
+        {% else %}
+            <div class="cover-project-name">
+                Projekt
+            </div>
+        {% endif %}
+    </div>
+
+    <div class="cover-summary">
+
+        <div class="cover-summary-item">
+            <span class="cover-summary-label">Status</span>
+            <span class="cover-summary-value">
+                {{ validierung.status_anzeige }}
+            </span>
+        </div>
+
+        <div class="cover-summary-item">
+            <span class="cover-summary-label">Erstellt am</span>
+            <span class="cover-summary-value">
+                {{ wert_oder_strich(modell.erstellt_am) }}
+            </span>
+        </div>
+
+        <div class="cover-summary-item">
+            <span class="cover-summary-label">Artefaktversion</span>
+            <span class="cover-summary-value">
+                {{ wert_oder_strich(modell.artefaktversion) }}
+            </span>
+        </div>
+
+    </div>
+
+    <div class="cover-footer">
+        Datengetrieben abgeleitetes und fachlich validiertes
+        konzeptionelles Modell
+    </div>
+
+</section>
+
+
+{# ================================================================ #}
+{# Modellübersicht                                                   #}
+{# ================================================================ #}
+
+<section class="report-section overview-section">
+
+    <header class="overview-header-clean">
+        <div class="overview-kicker">
+            Konzeptionelles Modell K*
+        </div>
+        <h1>Modellübersicht</h1>
+    </header>
+
+    <div class="metric-grid">
+
+        <div class="metric-card">
+            <div class="metric-value">
+                {{ wert_oder_strich(modellumfang.systemtyp_anzeige) }}
+            </div>
+            <div class="metric-label">Systemtyp</div>
+        </div>
+
+        <div class="metric-card">
+            <div class="metric-value">
+                {{ wert_oder_strich(daten.event_log.get("fallanzahl")) }}
+            </div>
+            <div class="metric-label">Fälle</div>
+        </div>
+
+        <div class="metric-card">
+            <div class="metric-value">
+                {{ wert_oder_strich(daten.event_log.get("ereignisanzahl")) }}
+            </div>
+            <div class="metric-label">Ereignisse</div>
+        </div>
+
+        <div class="metric-card">
+            <div class="metric-value">
+                {{ wert_oder_strich(daten.event_log.get("aktivitaetsanzahl")) }}
+            </div>
+            <div class="metric-label">Aktivitäten</div>
+        </div>
+
+        <div class="metric-card">
+            <div class="metric-value">
+                {{ wert_oder_strich(prozessdarstellung.notation_anzeige) }}
+            </div>
+            <div class="metric-label">Prozessmodell</div>
+        </div>
+
+    </div>
+
+    <div class="overview-columns">
+
+        <div class="overview-block">
+            <h2>Zielsetzung</h2>
+
+            {% if zielsetzung.untersuchungszwecke %}
+                {{ liste_oder_strich(zielsetzung.untersuchungszwecke) }}
+            {% endif %}
+
+            {% if zielsetzung.individuelles_ziel %}
+                <p>{{ zielsetzung.individuelles_ziel }}</p>
+            {% endif %}
+        </div>
+
+        <div class="overview-block">
+            <h2>Logistische Zielgrößen</h2>
+            {{ code_liste(zielsetzung.logistische_zielgroessen) }}
+        </div>
+
+    </div>
+
+</section>
+
+
+{# ================================================================ #}
+{# 1 Problemstellung                                                 #}
+{# ================================================================ #}
+
+<section class="report-section model-component">
+
+    {{ modellbestandteil_kopf(
+        1,
+        "Problemstellung",
+        problemstellung
+    ) }}
+
+    <div class="component-block">
+
+        {% if problemstellung.text %}
+            <p class="lead-text">
+                {{ problemstellung.text }}
+            </p>
+        {% else %}
+            <p class="empty-value">
+                Keine explizite Problemstellung dokumentiert.
+            </p>
+        {% endif %}
+
+    </div>
+
+    {{ fachliche_anpassungen(problemstellung) }}
+
+</section>
+
+
+{# ================================================================ #}
+{# 2 Zielsetzung                                                     #}
+{# ================================================================ #}
+
+<section class="report-section model-component">
+
+    {{ modellbestandteil_kopf(
+        2,
+        "Zielsetzung",
+        zielsetzung
+    ) }}
+
+    <div class="component-grid component-grid-two">
+
+        <div class="component-field">
+            <div class="component-field-label">
+                Untersuchungszwecke
+            </div>
+            <div class="component-field-value">
+                {{ liste_oder_strich(
+                    zielsetzung.untersuchungszwecke
+                ) }}
+            </div>
+        </div>
+
+        {{ feld(
+            "Individuelles Ziel",
+            zielsetzung.individuelles_ziel
+        ) }}
+
+        <div class="component-field">
+            <div class="component-field-label">
+                Logistische Zielgrößen
+            </div>
+            <div class="component-field-value">
+                {{ code_liste(
+                    zielsetzung.logistische_zielgroessen
+                ) }}
+            </div>
+        </div>
+
+        <div class="component-field">
+            <div class="component-field-label">
+                Ausgewählte KPI
+            </div>
+            <div class="component-field-value">
+                {{ code_liste(
+                    zielsetzung.ausgewaehlte_kpis
+                ) }}
+            </div>
+        </div>
+
+    </div>
+
+    {{ fachliche_anpassungen(zielsetzung) }}
+
+</section>
+
+{# ================================================================ #}
+{# 3 Ausgaben und Eingaben                                           #}
+{# ================================================================ #}
+
+<section class="report-section model-component">
+
+    {{ modellbestandteil_kopf(
+        "3",
+        "Ausgaben und Eingaben",
+        ausgaben_und_eingaben
+    ) }}
+
+    <div class="section-intro">
+        Zusammenfassung der für das konzeptionelle Modell relevanten
+        Ergebnisgrößen und dokumentierten Eingaben.
+    </div>
+
+    <h2 class="subsection-title">KPI-Ergebnisse</h2>
+
+    {% if ausgaben_und_eingaben.kpi_ergebnisse %}
+
+        {% for kpi in ausgaben_und_eingaben.kpi_ergebnisse %}
+
+            <article class="kpi-card">
+
+                <div class="kpi-header">
+                    <div>
+                        <h3>{{ kpi.bezeichnung or kpi.kpi_id }}</h3>
+                        {% if kpi.kpi_id %}
+                            <div class="technical-value">
+                                {{ kpi.kpi_id }}
+                            </div>
+                        {% endif %}
+                    </div>
+
+                    {{ status(kpi.status, kpi.status_anzeige) }}
+                </div>
+
+                <div class="kpi-result">
+                    {{ wert_oder_strich(kpi.ergebnis_anzeige) }}
+                </div>
+
+                <div class="kpi-details">
+
+                    {% if kpi.formel %}
+                        <div class="kpi-detail">
+                            <strong>Formel</strong>
+                            <span>{{ kpi.formel }}</span>
+                        </div>
+                    {% endif %}
+
+                    {% if kpi.bezugsmenge %}
+                        <div class="kpi-detail">
+                            <strong>Bezugsmenge</strong>
+                            <span>{{ kpi.bezugsmenge }}</span>
+                        </div>
+                    {% endif %}
+
+                    {% if kpi.rechenweg %}
+                        <div class="kpi-detail">
+                            <strong>Rechenweg</strong>
+                            <span>{{ kpi.rechenweg }}</span>
+                        </div>
+                    {% endif %}
+
+                </div>
+
+                {% if kpi.fehlende_voraussetzungen %}
+                    <div class="notice-block">
+                        <strong>Fehlende Voraussetzungen</strong>
+                        {{ liste_oder_strich(kpi.fehlende_voraussetzungen) }}
+                    </div>
+                {% endif %}
+
+            </article>
+
+        {% endfor %}
+
+    {% else %}
+        <div class="empty-block">
+            Keine KPI-Ergebnisse vorhanden.
+        </div>
+    {% endif %}
+
+    {{ fachliche_anpassungen(ausgaben_und_eingaben) }}
+
+</section>
+
+
+{# ================================================================ #}
+{# 4 Modellumfang                                                    #}
+{# ================================================================ #}
+
+<section class="report-section model-component">
+
+    {{ modellbestandteil_kopf(
+        4,
+        "Modellumfang, Modellgrenzen und Detaillierungsgrad",
+        modellumfang
+    ) }}
+
+    <div class="kv-table">
+        {{ kv("Systemtyp", modellumfang.systemtyp_anzeige) }}
+        {{ kv("Systemgrenze", modellumfang.systemgrenze) }}
+        {{ kv("Detaillierungsgrad", modellumfang.detaillierungsgrad) }}
+        {{ kv("Bereich aus Systemprofil", modellumfang.bereich_aus_systemprofil) }}
+    </div>
+
+    {% set klassifikation = modellumfang.systemklassifikation %}
+
+    {% if hat_inhalt(klassifikation) %}
+    
+        {{ untertitel("Systemklassifikation") }}
+    
+        <div class="classification-grid">
+    
+            {% set allgemeine_merkmale = [
+                ("Gestalt der Güter", "gestalt_der_gueter"),
+                ("Erzeugnisstrukturtyp", "erzeugnisstrukturtyp"),
+                ("Materialflusskontinuität", "materialflusskontinuitaet"),
+                ("Bereich", "bereich"),
+                ("Input", "input_beschreibung"),
+                ("Transformation", "transformation_beschreibung"),
+                ("Output", "output_beschreibung"),
+                ("Objekte und Güter", "objekte_gueter"),
+                ("Kapazitätsgrenzen", "kapazitaetsgrenzen")
+            ] %}
+    
+            {% for label, schluessel in allgemeine_merkmale %}
+                {% set wert = klassifikation.get(schluessel) %}
+    
+                {% if hat_inhalt(wert) %}
+                    <div class="classification-item">
+                        <div class="classification-label">
+                            {{ label }}
+                        </div>
+    
+                        <div class="classification-value">
+                            {{ strukturwert(wert) }}
+                        </div>
+                    </div>
+                {% endif %}
+            {% endfor %}
+    
+        </div>
+    
+    
+        {% if modellumfang.systemtyp == "produktion"
+              and hat_inhalt(klassifikation.get("produktion")) %}
+    
+            {{ untertitel("Produktionsspezifische Merkmale") }}
+    
+            <div class="classification-grid">
+                {% for schluessel, wert in klassifikation.get("produktion", {}).items() %}
+    
+                    {% if hat_inhalt(wert) %}
+                        <div class="classification-item">
+    
+                            <div class="classification-label">
+                                {{ schluessel | replace("_", " ") }}
+                            </div>
+    
+                            <div class="classification-value">
+                                {{ strukturwert(wert) }}
+                            </div>
+    
+                        </div>
+                    {% endif %}
+    
+                {% endfor %}
+            </div>
+    
+        {% elif modellumfang.systemtyp == "intralogistik"
+                  and hat_inhalt(klassifikation.get("intralogistik")) %}
+    
+            {{ untertitel("Intralogistikspezifische Merkmale") }}
+    
+            <div class="classification-grid">
+                {% for schluessel, wert in klassifikation.get("intralogistik", {}).items() %}
+    
+                    {% if hat_inhalt(wert) %}
+                        <div class="classification-item">
+    
+                            <div class="classification-label">
+                                {{ schluessel | replace("_", " ") }}
+                            </div>
+    
+                            <div class="classification-value">
+                                {{ strukturwert(wert) }}
+                            </div>
+    
+                        </div>
+                    {% endif %}
+    
+                {% endfor %}
+            </div>
+    
+        {% endif %}
+    
+    {% endif %}
+
+    <div class="content-card">
+        <h2>Im Prozessmodell sichtbare Aktivitäten</h2>
+        {{ liste_oder_strich(modellumfang.sichtbare_aktivitaeten) }}
+    </div>
+
+    <div class="content-grid two-columns">
+
+        <div class="content-card">
+            <h2>Startaktivitäten</h2>
+
+            {% if modellumfang.startaktivitaeten %}
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Aktivität</th>
+                            <th>Häufigkeit</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {% for eintrag in modellumfang.startaktivitaeten %}
+                            <tr>
+                                <td>{{ eintrag.aktivitaet }}</td>
+                                <td>{{ wert_oder_strich(eintrag.haeufigkeit) }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <div class="empty-block">Keine Startaktivitäten vorhanden.</div>
+            {% endif %}
+        </div>
+
+        <div class="content-card">
+            <h2>Endaktivitäten</h2>
+
+            {% if modellumfang.endaktivitaeten %}
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Aktivität</th>
+                            <th>Häufigkeit</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {% for eintrag in modellumfang.endaktivitaeten %}
+                            <tr>
+                                <td>{{ eintrag.aktivitaet }}</td>
+                                <td>{{ wert_oder_strich(eintrag.haeufigkeit) }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <div class="empty-block">Keine Endaktivitäten vorhanden.</div>
+            {% endif %}
+        </div>
+
+    </div>
+
+    {{ fachliche_anpassungen(modellumfang) }}
+
+</section>
+
+
+{# ================================================================ #}
+{# 5 Entitäten                                                       #}
+{# ================================================================ #}
+
+<section class="report-section model-component">
+
+    {{ modellbestandteil_kopf(
+        "5",
+        "Entitäten",
+        entitaeten
+    ) }}
+
+    <div class="content-grid two-columns">
+
+        <div class="content-card">
+            <h2>Objekte und Güter</h2>
+            {{ liste_oder_strich(entitaeten.objekte_gueter) }}
+        </div>
+
+        <div class="content-card">
+            <h2>Fallbezug</h2>
+
+            <div class="kv-table">
+                {{ kv(
+                    "Kanonisches Fallattribut",
+                    entitaeten.kanonisches_fallattribut
+                ) }}
+
+                {{ kv(
+                    "Anzahl beobachteter Fälle",
+                    entitaeten.fallanzahl
+                ) }}
+            </div>
+        </div>
+
+    </div>
+
+    {{ fachliche_anpassungen(entitaeten) }}
+
+</section>
+
+
+{# ================================================================ #}
+{# 6 Aktivitäten                                                     #}
+{# ================================================================ #}
+
+<section class="report-section model-component">
+
+    {{ modellbestandteil_kopf(
+        "6",
+        "Aktivitäten",
+        aktivitaeten
+    ) }}
+
+    {% if aktivitaeten.sichtbare_aktivitaeten %}
+
+        <div class="activity-grid">
+            {% for aktivitaet in aktivitaeten.sichtbare_aktivitaeten %}
+                <div class="activity-card">
+                    <div class="activity-index">{{ loop.index }}</div>
+                    <div class="activity-name">{{ aktivitaet }}</div>
+                </div>
+            {% endfor %}
+        </div>
+
+    {% else %}
+        <div class="empty-block">
+            Keine Aktivitäten ableitbar.
+        </div>
+    {% endif %}
+
+    {% if aktivitaeten.optionale_artefakte %}
+        <div class="content-card">
+            <h2>Ergänzende Analyseartefakte</h2>
+
+            <div class="kv-table">
+                {% for schluessel, wert in aktivitaeten.optionale_artefakte.items() %}
+                    {{ kv(schluessel | replace("_", " "), wert) }}
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}
+
+    {{ fachliche_anpassungen(aktivitaeten) }}
+
+</section>
+
+
+{# ================================================================ #}
+{# 7 Warteschlangen                                                  #}
+{# ================================================================ #}
+
+<section class="report-section model-component">
+
+    {{ modellbestandteil_kopf(
+        "7",
+        "Warteschlangen",
+        warteschlangen
+    ) }}
+
+    {% if warteschlangen.wartezeit_kpis %}
+
+        {% for kpi in warteschlangen.wartezeit_kpis %}
+            <article class="kpi-card">
+
+                <div class="kpi-header">
+                    <h3>{{ kpi.bezeichnung or kpi.kpi_id }}</h3>
+                    {{ status(kpi.status, kpi.status_anzeige) }}
+                </div>
+
+                <div class="kpi-result">
+                    {{ wert_oder_strich(kpi.ergebnis_anzeige) }}
+                </div>
+
+            </article>
+        {% endfor %}
+
+    {% else %}
+        <div class="notice-block">
+            Aus den vorliegenden Artefakten wurde keine explizite
+            Warteschlangenstruktur als eigener Modellbestandteil abgeleitet.
+        </div>
+    {% endif %}
+
+    {{ fachliche_anpassungen(warteschlangen) }}
+
+</section>
+
+
+{# ================================================================ #}
+{# 8 Ressourcen                                                      #}
+{# ================================================================ #}
+
+<section class="report-section model-component">
+
+    {{ modellbestandteil_kopf(
+        "8",
+        "Ressourcen",
+        ressourcen
+    ) }}
+
+    {% if ressourcen.systemressourcen %}
+
+        <div class="content-grid two-columns">
+
+            <div class="content-card">
+                <h2>Produktion</h2>
+                {{ liste_oder_strich(
+                    ressourcen.systemressourcen.get("produktion", [])
+                ) }}
+            </div>
+
+            <div class="content-card">
+                <h2>Intralogistik</h2>
+                {{ liste_oder_strich(
+                    ressourcen.systemressourcen.get("intralogistik", [])
+                ) }}
+            </div>
+
+        </div>
+
+    {% endif %}
+
+    <div class="content-card">
+        <h2>Im Event Log beobachtete Ressourcen</h2>
+
+        {% if ressourcen.ressourcenattribut %}
+            <p class="supporting-text">
+                Attribut:
+                <span class="technical-value">
+                    {{ ressourcen.ressourcenattribut }}
+                </span>
+            </p>
+        {% endif %}
+
+        {{ liste_oder_strich(ressourcen.event_log_ressourcen) }}
+    </div>
+
+    {% if ressourcen.ressourcenbezogene_kpis %}
+
+        <h2 class="subsection-title">Ressourcenbezogene KPI</h2>
+
+        {% for kpi in ressourcen.ressourcenbezogene_kpis %}
+            <article class="kpi-card">
+                <div class="kpi-header">
+                    <h3>{{ kpi.bezeichnung or kpi.kpi_id }}</h3>
+                    {{ status(kpi.status, kpi.status_anzeige) }}
+                </div>
+
+                <div class="kpi-result">
+                    {{ wert_oder_strich(kpi.ergebnis_anzeige) }}
+                </div>
+            </article>
+        {% endfor %}
+
+    {% endif %}
+
+    {{ fachliche_anpassungen(ressourcen) }}
+
+</section>
+
+
+{# ================================================================ #}
+{# 9 Annahmen und Vereinfachungen                                    #}
+{# ================================================================ #}
+
+<section class="report-section model-component">
+
+    {{ modellbestandteil_kopf(
+        "9",
+        "Annahmen und Vereinfachungen",
+        annahmen
+    ) }}
+
+    <div class="kv-table">
+        {{ kv(
+            "Prozessnotation",
+            annahmen.prozessnotation_anzeige
+        ) }}
+    </div>
+
+    {% if annahmen.modellierungsentscheidungen %}
+
+        <div class="content-card">
+            <h2>Modellierungsentscheidungen</h2>
+
+            <div class="kv-table">
+                {% for schluessel, wert in annahmen.modellierungsentscheidungen.items() %}
+
+                    <div class="kv-row">
+                        <div class="kv-label">
+                            {{ schluessel | replace("_", " ") }}
+                        </div>
+
+                        <div class="kv-value">
+                            {% if wert is iterable
+                                  and wert is not string
+                                  and wert is not mapping %}
+                                {{ liste_oder_strich(wert) }}
+                            {% else %}
+                                {{ wert_oder_strich(wert) }}
+                            {% endif %}
+                        </div>
+                    </div>
+
+                {% endfor %}
+            </div>
+        </div>
+
+    {% endif %}
+
+    {% if annahmen.schwellwert_auswirkung %}
+        <div class="notice-block">
+            <strong>Auswirkung des Discovery-Schwellwerts</strong>
+
+            <div class="kv-table">
+                {% for schluessel, wert in annahmen.schwellwert_auswirkung.items() %}
+                    {{ kv(schluessel | replace("_", " "), wert) }}
+                {% endfor %}
+            </div>
+        </div>
+    {% endif %}
+
+    {{ fachliche_anpassungen(annahmen) }}
+
+</section>
+
+
+{# ================================================================ #}
+{# 10 Datenauswahl und Daten                                         #}
+{# ================================================================ #}
+
+<section class="report-section model-component">
+
+    {{ modellbestandteil_kopf(
+        "10",
+        "Datenauswahl und Daten",
+        daten
+    ) }}
+
+    <h2 class="subsection-title">Datenquellen</h2>
+
+    {% if daten.datenquellen %}
+
+        {% for quelle in daten.datenquellen %}
+            <article class="source-card">
+
+                <div class="source-card-header">
+                    <h3>
+                        {{ quelle.get("bezeichnung", "Datenquelle") }}
+                    </h3>
+                </div>
+
+                <div class="kv-table">
+
+                    {{ kv(
+                        "Quellsystemtyp",
+                        quelle.get("quellsystemtyp")
+                    ) }}
+
+                    {{ kv(
+                        "Quellenart",
+                        quelle.get("quellenart")
+                    ) }}
+
+                    {{ kv(
+                        "Konkretes Quellsystem",
+                        quelle.get("konkretes_quellsystem")
+                    ) }}
+
+                    {{ kv(
+                        "Verantwortungsbereich",
+                        quelle.get("herkunft_oder_verantwortungsbereich")
+                    ) }}
+
+                </div>
+
+                {% if quelle.get("fachliche_beschreibung") %}
+                    <div class="source-description">
+                        {{ quelle.get("fachliche_beschreibung") }}
+                    </div>
+                {% endif %}
+
+                {% if quelle.get("bekannte_schluesselattribute") %}
+                    <div class="source-keys">
+                        <strong>Bekannte Schlüsselattribute</strong>
+                        {{ liste_oder_strich(
+                            quelle.get("bekannte_schluesselattribute")
+                        ) }}
+                    </div>
+                {% endif %}
+
+            </article>
+        {% endfor %}
+
+    {% else %}
+        <div class="empty-block">
+            Keine Datenquellen dokumentiert.
+        </div>
+    {% endif %}
+
+
+    <h2 class="subsection-title">Datenprofile</h2>
+
+    {% if daten.profile %}
+
+        {% for profil in daten.profile %}
+            <article class="profile-card">
+
+                <div class="metric-grid profile-metrics">
+
+                    <div class="metric-card">
+                        <div class="metric-value">
+                            {{ wert_oder_strich(profil.zeilenanzahl) }}
+                        </div>
+                        <div class="metric-label">Zeilen</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-value">
+                            {{ wert_oder_strich(profil.spaltenanzahl) }}
+                        </div>
+                        <div class="metric-label">Spalten</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-value">
+                            {{ wert_oder_strich(profil.echte_fehlwerte) }}
+                        </div>
+                        <div class="metric-label">Fehlwerte</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-value">
+                            {{ wert_oder_strich(profil.exakte_duplikate) }}
+                        </div>
+                        <div class="metric-label">Duplikate</div>
+                    </div>
+
+                </div>
+
+            </article>
+        {% endfor %}
+
+    {% else %}
+        <div class="empty-block">
+            Keine Profilinformationen vorhanden.
+        </div>
+    {% endif %}
+
+
+    <h2 class="subsection-title">Aufbereiteter Zwischendatensatz</h2>
+
+    {% if daten.zwischendatensatz %}
+
+        <div class="content-card">
+
+            <div class="metric-grid">
+
+                <div class="metric-card">
+                    <div class="metric-value">
+                        {{ wert_oder_strich(
+                            daten.zwischendatensatz.get("zeilenanzahl")
+                        ) }}
+                    </div>
+                    <div class="metric-label">Zeilen</div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-value">
+                        {{ wert_oder_strich(
+                            daten.zwischendatensatz.get("spaltenanzahl")
+                        ) }}
+                    </div>
+                    <div class="metric-label">Spalten</div>
+                </div>
+
+            </div>
+
+            <h3>Schema</h3>
+            {{ schema_tabelle(
+                daten.zwischendatensatz.get("schema", [])
+            ) }}
+
+        </div>
+
+    {% else %}
+        <div class="empty-block">
+            Kein Zwischendatensatz dokumentiert.
+        </div>
+    {% endif %}
+
+
+    <h2 class="subsection-title">Event Log</h2>
+
+    {% if daten.event_log %}
+
+        <div class="content-card">
+
+            <div class="metric-grid">
+
+                <div class="metric-card">
+                    <div class="metric-value">
+                        {{ wert_oder_strich(
+                            daten.event_log.get("ereignisanzahl")
+                        ) }}
+                    </div>
+                    <div class="metric-label">Ereignisse</div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-value">
+                        {{ wert_oder_strich(
+                            daten.event_log.get("fallanzahl")
+                        ) }}
+                    </div>
+                    <div class="metric-label">Fälle</div>
+                </div>
+
+                <div class="metric-card">
+                    <div class="metric-value">
+                        {{ wert_oder_strich(
+                            daten.event_log.get("aktivitaetsanzahl")
+                        ) }}
+                    </div>
+                    <div class="metric-label">Aktivitäten</div>
+                </div>
+
+            </div>
+
+            <div class="kv-table">
+
+                {{ kv(
+                    "Zeitraum von",
+                    daten.event_log.get("zeitraum_von")
+                ) }}
+
+                {{ kv(
+                    "Zeitraum bis",
+                    daten.event_log.get("zeitraum_bis")
+                ) }}
+
+            </div>
+
+            <h3>Event-Log-Schema</h3>
+
+            {{ schema_tabelle(
+                daten.event_log.get("schema", [])
+            ) }}
+
+        </div>
+
+    {% else %}
+        <div class="empty-block">
+            Kein Event Log dokumentiert.
+        </div>
+    {% endif %}
+
+    {{ fachliche_anpassungen(daten) }}
+
+</section>
+
+
+{# ================================================================ #}
+{# 11 Darstellung der Vorgänge                                      #}
+{# ================================================================ #}
+
+<section class="report-section model-component process-section">
+
+    {{ modellbestandteil_kopf(
+        11,
+        "Darstellung der Vorgänge des Systems",
+        prozessdarstellung
+    ) }}
+
+    <div class="process-model-meta">
+
+        <div class="kv-table">
+            {{ kv(
+                "Notation",
+                prozessdarstellung.notation_anzeige
+            ) }}
+        </div>
+
+    </div>
+
+
+    {% if prozessdarstellung.get("dfg_svg_inline") %}
+
+    {{ untertitel("Directly-Follows Graph") }}
+
+    <div class="process-model-figure">
+        {{ prozessdarstellung.get("dfg_svg_inline") | safe }}
+    </div>
+
+{% endif %}
+
+
+{{ untertitel(
+    "Prozessmodell – " ~ prozessdarstellung.notation_anzeige
+) }}
+
+
+{% if prozessdarstellung.get("svg_inline") %}
+
+    <div class="process-model-figure">
+        {{ prozessdarstellung.get("svg_inline") | safe }}
+    </div>
+
+{% elif prozessdarstellung.relativer_pfad %}
+
+    <div class="process-model-placeholder">
+
+        <strong>
+            Prozessmodell in gewählter Notation vorhanden
+        </strong>
+
+        <span>
+            Die grafische Darstellung wird beim Rendern aus
+            dem zugehörigen Prozessmodell-Artefakt eingebettet.
+        </span>
+
+    </div>
+
+{% else %}
+
+    <div class="empty-block">
+        Keine grafische Prozessdarstellung verfügbar.
+    </div>
+
+{% endif %}
+
+    {{ fachliche_anpassungen(prozessdarstellung) }}
+
+</section>
+
+
+{# ================================================================ #}
+{# Validierungsvermerk                                               #}
+{# ================================================================ #}
+
+<section class="report-section validation-section">
+
+    <header class="section-header">
+        <div class="section-number">V</div>
+        <div class="section-heading">
+            <h1>Validierung</h1>
+        </div>
+    </header>
+
+    <div class="validation-summary">
+
+        <div class="validation-status">
+            {{ status(
+                validierung.status,
+                validierung.status_anzeige
+            ) }}
+        </div>
+
+        {% if validierung.validierungsvermerk %}
+            <div class="validation-note">
+                {{ validierung.validierungsvermerk }}
+            </div>
+        {% endif %}
+
+    </div>
+
+</section>
+
+
+{# ================================================================ #}
+{# Technischer Anhang / Lineage                                      #}
+{# ================================================================ #}
+
+<section class="report-section appendix-section">
+
+    <header class="section-header">
+        <div class="section-number">A</div>
+        <div class="section-heading">
+            <h1>Technische Nachvollziehbarkeit</h1>
+        </div>
+    </header>
+
+    <p class="section-intro">
+        Die folgenden Angaben dienen ausschließlich der technischen
+        Rückverfolgbarkeit des erzeugten Modells.
+    </p>
+
+    <div class="technical-metadata">
+
+        {{ kv(
+            "Projekt-ID",
+            projekt.projekt_id
+        ) }}
+
+        {{ kv(
+            "K*-ID",
+            modell.k_stern_id
+        ) }}
+
+        {{ kv(
+            "Validierungslauf-ID",
+            modell.validierungslauf_id
+        ) }}
+
+        {{ kv(
+            "Gesamtprüfsumme",
+            lineage.gesamtpruefsumme
+        ) }}
+
+    </div>
+
+
+    {% if lineage.informationen %}
+
+        <h2 class="subsection-title">
+            Herkunft der Modellinformationen
+        </h2>
+
+        <table class="data-table lineage-table">
+
+            <thead>
+                <tr>
+                    <th>Modellbestandteil</th>
+                    <th>Quelle</th>
+                    <th>Strukturreferenz</th>
+                    <th>Übernahmeart</th>
+                </tr>
+            </thead>
+
+            <tbody>
+
+                {% for eintrag in lineage.informationen %}
+
+                    <tr>
+                        <td>
+                            {{ eintrag.bestandteil_id }}
+                        </td>
+
+                        <td>
+                            {{ wert_oder_strich(
+                                eintrag.herkunftsartefakt
+                            ) }}
+                        </td>
+
+                        <td class="technical-value">
+                            {{ wert_oder_strich(
+                                eintrag.strukturreferenz
+                            ) }}
+                        </td>
+
+                        <td>
+                            {{ wert_oder_strich(
+                                eintrag.uebernahmeart
+                            ) }}
+                        </td>
+                    </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    {% endif %}
+
+</section>
+
+</body>
+</html>

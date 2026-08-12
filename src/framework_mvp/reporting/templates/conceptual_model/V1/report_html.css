@@ -1,0 +1,1731 @@
+/* ================================================================
+   Konzeptionelles Modell – Report Layout V1
+   Screen-first, print-compatible
+   ================================================================ */
+
+
+/* ----------------------------------------------------------------
+   Design Tokens
+   ---------------------------------------------------------------- */
+
+   :root {
+    /* Offizielle MCI-Farben (aus https://www.mci.edu/de/medien/logos-bilder) */
+    --mci-blue: #004983;
+    --mci-orange: #ff9900;
+    --mci-red: #821131;
+
+    /* Abgeleitete UI-Farben */
+    --mci-blue-dark: #00355f;
+    --mci-blue-soft: #edf4f9;
+    --mci-orange-soft: #fff4e2;
+
+    --bg-page: #f3f5f7;
+    --bg-surface: #ffffff;
+    --bg-subtle: #f7f8fa;
+    --bg-soft: #eef2f5;
+
+    --text-primary: #20272e;
+    --text-secondary: #5d6975;
+    --text-muted: #7d8790;
+
+    --border: #dfe4e8;
+    --border-strong: #cbd3d9;
+
+    --accent: var(--mci-blue);
+    --accent-dark: var(--mci-blue-dark);
+    --accent-soft: var(--mci-blue-soft);
+    --highlight: var(--mci-orange);
+    --highlight-soft: var(--mci-orange-soft);
+
+    /* Semantische Statusfarben */
+    --success: #287a58;
+    --success-soft: #e7f4ed;
+    --warning: #987020;
+    --warning-soft: #fbf3df;
+    --danger: #a34a4a;
+    --danger-soft: #faeaea;
+    --info: #466b83;
+    --info-soft: #edf3f6;
+
+    --radius-small: 6px;
+    --radius: 10px;
+    --radius-large: 14px;
+
+    --shadow:
+        0 1px 2px rgba(20, 30, 40, 0.04),
+        0 6px 24px rgba(20, 30, 40, 0.06);
+
+    --content-width: 1320px;
+
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --space-7: 48px;
+    --space-8: 64px;
+}
+
+
+/* ----------------------------------------------------------------
+   Base
+   ---------------------------------------------------------------- */
+
+* {
+    box-sizing: border-box;
+}
+
+html {
+    font-size: 16px;
+    scroll-behavior: smooth;
+}
+
+body {
+    margin: 0;
+    padding: 0 28px 72px;
+
+    background: var(--bg-page);
+    color: var(--text-primary);
+
+    font-family:
+        "Noto Sans",
+        "Segoe UI",
+        Roboto,
+        Helvetica,
+        Arial,
+        sans-serif;
+
+    font-size: 15px;
+    line-height: 1.55;
+
+    -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p {
+    margin-top: 0;
+}
+
+h1,
+h2,
+h3 {
+    color: var(--text-primary);
+    font-weight: 650;
+    letter-spacing: -0.015em;
+}
+
+h1 {
+    font-size: 28px;
+    line-height: 1.15;
+}
+
+h2 {
+    margin-bottom: 14px;
+    font-size: 18px;
+    line-height: 1.25;
+}
+
+h3 {
+    margin-bottom: 10px;
+    font-size: 15px;
+    line-height: 1.3;
+}
+
+p {
+    margin-bottom: 12px;
+}
+
+strong {
+    font-weight: 650;
+}
+
+
+/* ----------------------------------------------------------------
+   Hauptcontainer / kompakter Reportkopf
+   ---------------------------------------------------------------- */
+
+   .cover-page,
+   .report-section {
+       width: min(100%, var(--content-width));
+   
+       margin-left: auto;
+       margin-right: auto;
+   }
+   
+   .cover-page {
+       position: relative;
+   
+       min-height: 0;
+   
+       margin-top: 22px;
+       padding: 30px 38px 26px;
+   
+       display: block;
+   
+       background:
+           linear-gradient(
+               135deg,
+               #ffffff 0%,
+               #ffffff 82%,
+               var(--mci-blue-soft) 100%
+           );
+   
+       border: 1px solid var(--border);
+       border-radius: var(--radius-large);
+   
+       box-shadow: var(--shadow);
+   
+       overflow: hidden;
+   }
+   
+   .cover-page::before {
+       content: "";
+   
+       position: absolute;
+       top: 0;
+       left: 0;
+   
+       width: 5px;
+       height: 100%;
+   
+       background: var(--mci-blue);
+   }
+   
+   .cover-eyebrow {
+       margin-bottom: 10px;
+   
+       color: var(--mci-blue);
+   
+       font-size: 11px;
+       font-weight: 700;
+   
+       letter-spacing: 0.12em;
+       text-transform: uppercase;
+   }
+   
+   .cover-title-block {
+       max-width: 900px;
+   }
+   
+   .cover-title-block h1 {
+       margin-bottom: 8px;
+   
+       font-size: 34px;
+       line-height: 1.08;
+   
+       letter-spacing: -0.03em;
+   }
+   
+   .cover-subtitle {
+       margin: 0;
+   
+       color: var(--text-secondary);
+   
+       font-size: 16px;
+       line-height: 1.4;
+   }
+   
+   .cover-divider {
+       width: 52px;
+       height: 3px;
+   
+       margin: 16px 0;
+   
+       background: var(--mci-orange);
+   
+       border-radius: 100px;
+   }
+   
+   .cover-project-name {
+       color: var(--text-secondary);
+   
+       font-size: 14px;
+       font-weight: 600;
+   }
+   
+   .cover-summary {
+       display: flex;
+       flex-wrap: wrap;
+   
+       gap: 12px 36px;
+   
+       margin-top: 22px;
+       padding-top: 0;
+   }
+   
+   .cover-summary-item {
+       min-width: 140px;
+   }
+   
+   .cover-summary-label {
+       display: block;
+   
+       margin-bottom: 3px;
+   
+       color: var(--text-muted);
+   
+       font-size: 10px;
+       font-weight: 650;
+   
+       letter-spacing: 0.06em;
+       text-transform: uppercase;
+   }
+   
+   .cover-summary-value {
+       display: block;
+   
+       color: var(--text-primary);
+   
+       font-size: 14px;
+       font-weight: 600;
+   }
+   
+   .cover-footer {
+       margin-top: 18px;
+       padding-top: 14px;
+   
+       border-top: 1px solid var(--border);
+   
+       color: var(--text-muted);
+   
+       font-size: 11px;
+   }
+   
+   .report-section {
+       margin-top: 22px;
+       padding: 34px 38px 40px;
+   
+       background: var(--bg-surface);
+   
+       border: 1px solid var(--border);
+       border-radius: var(--radius-large);
+   
+       box-shadow: var(--shadow);
+   }
+   
+   
+   /* ----------------------------------------------------------------
+      Modellübersicht
+      ---------------------------------------------------------------- */
+   
+   .overview-header-clean {
+       margin-bottom: 26px;
+       padding-bottom: 18px;
+   
+       border-bottom: 1px solid var(--border);
+   }
+   
+   .overview-kicker {
+       margin-bottom: 4px;
+   
+       color: var(--mci-orange);
+   
+       font-size: 10px;
+       font-weight: 750;
+   
+       letter-spacing: 0.09em;
+       text-transform: uppercase;
+   }
+   
+   .overview-header-clean h1 {
+       margin: 0;
+   
+       color: var(--mci-blue);
+   
+       font-size: 28px;
+   }
+
+/* ----------------------------------------------------------------
+   Abschnittsköpfe
+   ---------------------------------------------------------------- */
+
+.section-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 18px;
+
+    margin-bottom: 28px;
+    padding-bottom: 20px;
+
+    border-bottom: 1px solid var(--border);
+}
+
+.section-number {
+    flex: 0 0 42px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    width: 42px;
+    height: 42px;
+
+    background: var(--accent);
+    color: #ffffff;
+
+    border-radius: 9px;
+
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.section-heading {
+    flex: 1;
+    min-width: 0;
+}
+
+.section-heading h1 {
+    margin: 2px 0 6px;
+}
+
+.section-meta {
+    margin-top: 7px;
+}
+
+.section-intro,
+.supporting-text {
+    color: var(--text-secondary);
+}
+
+.section-intro {
+    max-width: 850px;
+    margin-bottom: 28px;
+
+    font-size: 14px;
+}
+
+.subsection-title {
+    margin-top: 34px;
+    margin-bottom: 16px;
+
+    font-size: 17px;
+}
+
+
+/* ----------------------------------------------------------------
+   Status
+   ---------------------------------------------------------------- */
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+
+    padding: 5px 10px;
+
+    border-radius: 100px;
+
+    background: var(--bg-soft);
+    color: var(--text-secondary);
+
+    font-size: 11px;
+    font-weight: 700;
+
+    letter-spacing: 0.025em;
+}
+
+.status-fachlich_validiert,
+.status-berechnet {
+    background: var(--success-soft);
+    color: var(--success);
+}
+
+.status-teilweise_offen,
+.status-fachlich_unsicher {
+    background: var(--warning-soft);
+    color: var(--warning);
+}
+
+.status-offen,
+.status-nicht_berechenbar {
+    background: var(--danger-soft);
+    color: var(--danger);
+}
+
+
+/* ----------------------------------------------------------------
+   Modellübersicht / Kennzahlen
+   ---------------------------------------------------------------- */
+
+.overview-section .metric-grid {
+    grid-template-columns: repeat(5, minmax(120px, 180px));
+    justify-content: start;
+
+    gap: 12px;
+}
+
+.metric-card {
+    min-width: 0;
+    padding: 18px 18px 16px;
+
+    background: var(--bg-subtle);
+
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.metric-value {
+    color: var(--accent-dark);
+
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.15;
+
+    letter-spacing: -0.025em;
+}
+
+.metric-label {
+    margin-top: 7px;
+
+    color: var(--text-muted);
+
+    font-size: 11px;
+    font-weight: 650;
+
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.overview-columns {
+    display: grid;
+    grid-template-columns: 1.6fr 1fr;
+
+    gap: 16px;
+}
+
+.overview-block {
+    padding: 22px;
+
+    background: var(--bg-subtle);
+
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+
+/* ----------------------------------------------------------------
+   Cards / Layout
+   ---------------------------------------------------------------- */
+
+.content-grid {
+    display: grid;
+    gap: 16px;
+
+    margin-bottom: 16px;
+}
+
+.content-grid.two-columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.content-card,
+.source-card,
+.profile-card,
+.kpi-card {
+    padding: 22px;
+
+    background: var(--bg-subtle);
+
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.content-card + .content-card {
+    margin-top: 16px;
+}
+
+.text-block {
+    max-width: 950px;
+
+    font-size: 16px;
+    line-height: 1.65;
+}
+
+.empty-block {
+    padding: 18px 20px;
+
+    background: var(--bg-subtle);
+
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius);
+
+    color: var(--text-muted);
+
+    font-size: 13px;
+}
+
+.empty-value {
+    color: var(--text-muted);
+}
+
+
+/* ----------------------------------------------------------------
+   Key/Value
+   ---------------------------------------------------------------- */
+
+.kv-table {
+    width: 100%;
+}
+
+.kv-row {
+    display: grid;
+    grid-template-columns: minmax(160px, 30%) 1fr;
+
+    gap: 22px;
+
+    padding: 10px 0;
+
+    border-bottom: 1px solid var(--border);
+}
+
+.kv-row:last-child {
+    border-bottom: 0;
+}
+
+.kv-label {
+    color: var(--text-secondary);
+
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.kv-value {
+    min-width: 0;
+
+    color: var(--text-primary);
+
+    overflow-wrap: anywhere;
+}
+
+
+/* ----------------------------------------------------------------
+   Listen / Tags
+   ---------------------------------------------------------------- */
+
+.compact-list {
+    margin: 0;
+    padding-left: 18px;
+}
+
+.compact-list li {
+    margin: 4px 0;
+}
+
+.tag-list {
+    display: flex;
+    flex-wrap: wrap;
+
+    gap: 7px;
+}
+
+.tag {
+    display: inline-flex;
+    align-items: center;
+
+    padding: 6px 10px;
+
+    background: var(--accent-soft);
+    color: var(--accent-dark);
+
+    border-radius: 100px;
+
+    font-size: 12px;
+    font-weight: 600;
+}
+
+
+/* ----------------------------------------------------------------
+   Tabellen
+   ---------------------------------------------------------------- */
+
+.data-table {
+    width: 100%;
+
+    border-collapse: separate;
+    border-spacing: 0;
+
+    background: var(--bg-surface);
+
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+
+    overflow: hidden;
+
+    font-size: 13px;
+}
+
+.data-table thead th {
+    padding: 10px 12px;
+
+    background: var(--bg-soft);
+
+    color: var(--text-secondary);
+
+    border-bottom: 1px solid var(--border);
+
+    font-size: 11px;
+    font-weight: 700;
+
+    letter-spacing: 0.035em;
+    text-align: left;
+    text-transform: uppercase;
+}
+
+.data-table tbody td {
+    padding: 10px 12px;
+
+    border-bottom: 1px solid var(--border);
+
+    vertical-align: top;
+}
+
+.data-table tbody tr:last-child td {
+    border-bottom: 0;
+}
+
+.data-table tbody tr:nth-child(even) td {
+    background: #fbfcfd;
+}
+
+.technical-value {
+    color: var(--text-muted);
+
+    font-family:
+        "SFMono-Regular",
+        Consolas,
+        "Liberation Mono",
+        monospace;
+
+    font-size: 11px;
+
+    overflow-wrap: anywhere;
+}
+
+
+/* ----------------------------------------------------------------
+   KPI
+   ---------------------------------------------------------------- */
+
+.kpi-card {
+    position: relative;
+
+    margin-bottom: 14px;
+
+    background: #ffffff;
+}
+
+.kpi-card::before {
+    content: "";
+
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+
+    width: 4px;
+
+    background: var(--accent);
+
+    border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.kpi-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+
+    gap: 20px;
+}
+
+.kpi-header h3 {
+    margin-bottom: 3px;
+
+    font-size: 17px;
+}
+
+.kpi-result {
+    margin: 20px 0;
+
+    color: var(--accent-dark);
+
+    font-size: 28px;
+    font-weight: 700;
+
+    letter-spacing: -0.025em;
+}
+
+.kpi-details {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+
+    gap: 12px;
+}
+
+.kpi-detail {
+    padding: 12px 14px;
+
+    background: var(--bg-subtle);
+
+    border-radius: var(--radius-small);
+}
+
+.kpi-detail strong {
+    display: block;
+
+    margin-bottom: 4px;
+
+    color: var(--text-muted);
+
+    font-size: 10px;
+
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.notice-block {
+    margin-top: 16px;
+    padding: 15px 17px;
+
+    background: var(--info-soft);
+
+    border-left: 3px solid var(--info);
+    border-radius: 0 var(--radius-small) var(--radius-small) 0;
+
+    color: var(--text-secondary);
+
+    font-size: 13px;
+}
+
+
+/* ----------------------------------------------------------------
+   Klassifikation
+   ---------------------------------------------------------------- */
+
+.classification-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+
+    gap: 10px;
+}
+
+.classification-item {
+    padding: 12px 14px;
+
+    background: #ffffff;
+
+    border: 1px solid var(--border);
+    border-radius: var(--radius-small);
+}
+
+.classification-label {
+    margin-bottom: 4px;
+
+    color: var(--text-muted);
+
+    font-size: 10px;
+    font-weight: 700;
+
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.classification-value {
+    overflow-wrap: anywhere;
+
+    font-weight: 600;
+}
+
+
+/* ----------------------------------------------------------------
+   Aktivitäten
+   ---------------------------------------------------------------- */
+
+.activity-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+
+    gap: 10px;
+}
+
+.activity-card {
+    display: flex;
+    align-items: center;
+
+    gap: 11px;
+
+    min-height: 54px;
+    padding: 10px 13px;
+
+    background: var(--bg-subtle);
+
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.activity-index {
+    flex: 0 0 27px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    width: 27px;
+    height: 27px;
+
+    background: var(--accent-soft);
+    color: var(--accent);
+
+    border-radius: 6px;
+
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.activity-name {
+    min-width: 0;
+
+    font-size: 13px;
+    font-weight: 600;
+
+    overflow-wrap: anywhere;
+}
+
+
+/* ----------------------------------------------------------------
+   Datenquellen / Profile
+   ---------------------------------------------------------------- */
+
+.source-card,
+.profile-card {
+    margin-bottom: 14px;
+}
+
+.source-card-header {
+    margin-bottom: 14px;
+}
+
+.source-description,
+.source-keys {
+    margin-top: 14px;
+
+    color: var(--text-secondary);
+}
+
+.profile-metrics {
+    margin-bottom: 0;
+}
+
+
+/* ----------------------------------------------------------------
+   Menschliche Validierung
+   ---------------------------------------------------------------- */
+
+.human-input {
+    margin-top: 24px;
+    padding: 18px 20px;
+
+    background: var(--warning-soft);
+
+    border: 1px solid #ead8aa;
+    border-radius: var(--radius);
+}
+
+.human-input-title {
+    margin-bottom: 12px;
+
+    color: #75530e;
+
+    font-size: 12px;
+    font-weight: 700;
+
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.human-input-entry + .human-input-entry {
+    margin-top: 14px;
+    padding-top: 14px;
+
+    border-top: 1px solid #e7d49e;
+}
+
+.human-input-reason {
+    margin-top: 6px;
+
+    color: var(--text-secondary);
+
+    font-size: 13px;
+}
+
+
+/* ----------------------------------------------------------------
+   Prozessmodell
+   ---------------------------------------------------------------- */
+
+.process-section {
+    overflow: hidden;
+}
+
+.process-model-meta {
+    margin-bottom: 20px;
+}
+
+.process-model-figure {
+    width: 100%;
+
+    margin-top: 18px;
+    padding: 20px;
+
+    background: #ffffff;
+
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+
+    overflow: auto;
+
+    text-align: center;
+}
+
+.process-model-figure svg {
+    display: block;
+
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+
+    margin: 0 auto;
+}
+
+.process-model-placeholder {
+    min-height: 220px;
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+
+    gap: 8px;
+
+    padding: 30px;
+
+    background: var(--bg-subtle);
+
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius);
+
+    color: var(--text-secondary);
+
+    text-align: center;
+}
+
+.process-model-placeholder strong {
+    color: var(--text-primary);
+}
+
+
+/* ----------------------------------------------------------------
+   Validierung
+   ---------------------------------------------------------------- */
+
+.validation-summary {
+    display: flex;
+    align-items: flex-start;
+
+    gap: 24px;
+}
+
+.validation-note {
+    flex: 1;
+
+    padding: 14px 16px;
+
+    background: var(--success-soft);
+
+    border-radius: var(--radius-small);
+
+    color: var(--text-secondary);
+}
+
+
+/* ----------------------------------------------------------------
+   Technischer Anhang
+   ---------------------------------------------------------------- */
+
+   .lineage-table th:nth-child(1) {
+    width: 28%;
+}
+
+.lineage-table th:nth-child(2) {
+    width: 10%;
+}
+
+.lineage-table th:nth-child(3) {
+    width: 44%;
+}
+
+.lineage-table th:nth-child(4) {
+    width: 18%;
+}
+
+.lineage-table td:first-child {
+    overflow-wrap: break-word;
+    word-break: normal;
+}
+
+/* ----------------------------------------------------------------
+   Inhalte innerhalb eines Frameworkschritts
+   ---------------------------------------------------------------- */
+
+.step-grid {
+    display: grid;
+    gap: 16px;
+}
+
+.step-grid-two {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.step-card {
+    position: relative;
+
+    padding: 22px 24px;
+
+    background: #ffffff;
+
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+
+    box-shadow:
+        0 1px 2px rgba(0, 73, 131, 0.025);
+}
+
+.step-card-wide {
+    grid-column: 1 / -1;
+}
+
+.step-card-eyebrow {
+    margin-bottom: 8px;
+
+    color: var(--mci-orange);
+
+    font-size: 10px;
+    font-weight: 750;
+
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+}
+
+.step-card h2 {
+    color: var(--mci-blue);
+}
+
+.card-secondary-block {
+    margin-top: 20px;
+    padding-top: 16px;
+
+    border-top: 1px solid var(--border);
+}
+
+.lead-text {
+    max-width: 950px;
+
+    font-size: 16px;
+    line-height: 1.65;
+}
+
+
+/* ----------------------------------------------------------------
+   Zusätzliche MCI-Akzente
+   ---------------------------------------------------------------- */
+
+.metric-card {
+    border-top: 3px solid var(--mci-orange);
+}
+
+.metric-value {
+    color: var(--mci-blue);
+    overflow-wrap: normal;
+    word-break: normal;
+}
+
+.content-card h2,
+.source-card h3,
+.profile-card h3,
+.kpi-card h3 {
+    color: var(--mci-blue);
+}
+
+.kpi-card::before {
+    background: var(--mci-orange);
+}
+
+.data-table thead th {
+    background: var(--mci-blue-soft);
+    color: var(--mci-blue);
+
+    border-top: 2px solid var(--mci-orange);
+}
+
+.tag {
+    background: var(--mci-blue-soft);
+    color: var(--mci-blue);
+}
+
+.activity-index {
+    background: var(--mci-blue);
+    color: #ffffff;
+
+    box-shadow:
+        inset 0 -2px 0 var(--mci-orange);
+}
+
+.process-model-figure {
+    border-top: 3px solid var(--mci-orange);
+}
+
+/* ================================================================
+   Modellbestandteile
+   ================================================================ */
+
+   .model-component {
+    position: relative;
+
+    border-top: 4px solid var(--mci-blue);
+
+    overflow: hidden;
+}
+
+.model-component::before {
+    content: "";
+
+    position: absolute;
+    top: -4px;
+    right: 0;
+
+    width: 96px;
+    height: 4px;
+
+    background: var(--mci-orange);
+}
+
+
+/* ----------------------------------------------------------------
+   Kopf eines Modellbestandteils
+   ---------------------------------------------------------------- */
+
+.component-header {
+    display: grid;
+
+    grid-template-columns:
+        48px
+        minmax(0, 1fr)
+        auto;
+
+    gap: 17px;
+
+    align-items: start;
+
+    margin-bottom: 28px;
+    padding-bottom: 20px;
+
+    border-bottom: 1px solid
+        rgba(0, 73, 131, 0.18);
+}
+
+.component-number {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    width: 48px;
+    height: 48px;
+
+    background: var(--mci-blue);
+    color: #ffffff;
+
+    border-radius: 9px;
+
+    box-shadow:
+        inset 0 -4px 0 var(--mci-orange);
+
+    font-size: 15px;
+    font-weight: 750;
+}
+
+.component-kicker {
+    margin-bottom: 3px;
+
+    color: var(--mci-orange);
+
+    font-size: 10px;
+    font-weight: 750;
+
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+}
+
+.component-heading h1 {
+    margin: 0;
+
+    color: var(--mci-blue);
+
+    font-size: 27px;
+    font-weight: 700;
+
+    letter-spacing: -0.025em;
+}
+
+.component-status {
+    padding-top: 4px;
+}
+
+
+/* ----------------------------------------------------------------
+   Struktur innerhalb eines Bestandteils
+   ---------------------------------------------------------------- */
+
+.component-grid {
+    display: grid;
+    gap: 0;
+
+    border-top: 1px solid var(--border);
+}
+
+.component-grid-two {
+    grid-template-columns:
+        repeat(2, minmax(0, 1fr));
+}
+
+.component-grid-three {
+    grid-template-columns:
+        repeat(3, minmax(0, 1fr));
+}
+
+.component-field {
+    min-width: 0;
+
+    padding: 18px 20px;
+
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+}
+
+.component-grid-two .component-field:nth-child(2n),
+.component-grid-three .component-field:nth-child(3n) {
+    border-right: 0;
+}
+
+.component-field-label {
+    margin-bottom: 7px;
+
+    color: var(--mci-blue);
+
+    font-size: 11px;
+    font-weight: 700;
+
+    letter-spacing: 0.025em;
+}
+
+.component-field-value {
+    min-width: 0;
+
+    color: var(--text-primary);
+
+    overflow-wrap: anywhere;
+}
+
+.component-subheading {
+    margin-top: 28px;
+    margin-bottom: 12px;
+
+    color: var(--mci-blue);
+
+    font-size: 16px;
+    font-weight: 700;
+}
+
+
+/* ----------------------------------------------------------------
+   Untergliederung ohne zusätzliche Kacheln
+   ---------------------------------------------------------------- */
+
+.component-block {
+    padding: 20px 0;
+
+    border-bottom: 1px solid var(--border);
+}
+
+.component-block:first-of-type {
+    padding-top: 0;
+}
+
+.component-block:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+}
+
+.component-block-title {
+    margin-bottom: 12px;
+
+    color: var(--mci-blue);
+
+    font-size: 15px;
+    font-weight: 700;
+}
+
+
+/* ----------------------------------------------------------------
+   Dezente MCI-Akzente
+   ---------------------------------------------------------------- */
+
+.metric-card {
+    border-top: 3px solid var(--mci-orange);
+}
+
+.metric-value {
+    color: var(--mci-blue);
+
+    overflow-wrap: normal;
+    word-break: normal;
+}
+
+.data-table thead th {
+    background: var(--mci-blue-soft);
+    color: var(--mci-blue);
+
+    border-top: 2px solid var(--mci-orange);
+}
+
+.tag {
+    background: var(--mci-blue-soft);
+    color: var(--mci-blue);
+}
+
+.kpi-card::before {
+    background: var(--mci-orange);
+}
+
+.activity-index {
+    background: var(--mci-blue);
+    color: #ffffff;
+
+    box-shadow:
+        inset 0 -2px 0 var(--mci-orange);
+}
+
+.process-model-figure {
+    border-top: 3px solid var(--mci-orange);
+}
+
+/* ----------------------------------------------------------------
+   Responsive Screen
+   ---------------------------------------------------------------- */
+
+@media screen and (max-width: 1100px) {
+
+    .metric-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .activity-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .classification-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .kpi-details {
+        grid-template-columns: 1fr;
+    }
+}
+
+
+@media screen and (max-width: 760px) {
+
+    body {
+        padding-left: 12px;
+        padding-right: 12px;
+    }
+
+    .cover-page {
+        min-height: auto;
+        padding: 40px 28px;
+    }
+
+    .report-section {
+        padding: 26px 22px 30px;
+    }
+
+    .metric-grid,
+    .overview-columns,
+    .content-grid.two-columns,
+    .classification-grid,
+    .activity-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .kv-row {
+        grid-template-columns: 1fr;
+
+        gap: 4px;
+    }
+
+    .section-header {
+        gap: 12px;
+    }
+
+    .section-number {
+        flex-basis: 36px;
+
+        width: 36px;
+        height: 36px;
+    }
+
+    .section-heading h1 {
+        font-size: 23px;
+    }
+
+    .cover-summary {
+        flex-direction: column;
+    }
+}
+
+
+/* ================================================================
+   PRINT / PDF
+   ================================================================ */
+
+@page {
+    size: A4 portrait;
+
+    margin:
+        16mm
+        14mm
+        17mm
+        14mm;
+
+    @bottom-right {
+        content: counter(page) " / " counter(pages);
+
+        color: #7d8790;
+
+        font-size: 8pt;
+    }
+
+    @bottom-left {
+        content: "Konzeptionelles Modell";
+
+        color: #7d8790;
+
+        font-size: 8pt;
+    }
+}
+
+
+@media print {
+
+    :root {
+        --shadow: none;
+    }
+
+    html {
+        font-size: 10pt;
+    }
+
+    body {
+        margin: 0;
+        padding: 0;
+
+        background: #ffffff;
+
+        font-size: 9.5pt;
+        line-height: 1.45;
+    }
+
+    .cover-page,
+    .report-section {
+        width: min(100%, var(--content-width));
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .cover-page {
+        min-height: 0;
+    
+        margin-bottom: 0;
+    
+        padding-top: 6mm;
+        padding-bottom: 5mm;
+    
+        break-after: page;
+        page-break-after: always;
+    }
+    
+    .cover-page::before {
+        width: 2mm;
+    }
+    
+    .cover-title-block h1 {
+        font-size: 22pt;
+    }
+    
+    .cover-subtitle {
+        font-size: 10pt;
+    }
+    
+    .cover-summary {
+        margin-top: 5mm;
+        padding-top: 0;
+    
+        gap: 3mm 8mm;
+    }
+    
+    .cover-footer {
+        margin-top: 4mm;
+        padding-top: 3mm;
+    }
+
+    .report-section {
+        padding-top: 8mm;
+        padding-bottom: 5mm;
+    
+        break-inside: auto;
+        page-break-inside: auto;
+    }
+
+    .section-header {
+        margin-bottom: 5mm;
+        padding-bottom: 3mm;
+    }
+
+    .section-number {
+        width: 8mm;
+        height: 8mm;
+
+        flex-basis: 8mm;
+
+        border-radius: 2mm;
+
+        font-size: 9pt;
+    }
+
+    .section-heading h1 {
+        font-size: 17pt;
+    }
+
+    h2 {
+        font-size: 12pt;
+    }
+
+    h3 {
+        font-size: 10pt;
+    }
+
+    .overview-section .metric-grid {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        justify-content: stretch;
+    
+        gap: 2.5mm;
+    }
+
+    .metric-grid {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+
+        gap: 2.5mm;
+    }
+
+    .metric-card {
+        padding: 4mm;
+    }
+
+    .metric-value {
+        font-size: 16pt;
+    }
+
+    .metric-label {
+        font-size: 7pt;
+    }
+
+    .overview-columns {
+        grid-template-columns: 1.5fr 1fr;
+    }
+
+    .content-grid.two-columns {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .classification-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .activity-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .content-card,
+    .source-card,
+    .profile-card,
+    .kpi-card,
+    .metric-card,
+    .activity-card,
+    .notice-block,
+    .human-input {
+        break-inside: avoid;
+    }
+
+    .section-header,
+    .subsection-title {
+        break-after: avoid;
+    }
+
+    table {
+        break-inside: auto;
+    }
+
+    tr {
+        break-inside: avoid;
+    }
+
+    thead {
+        display: table-header-group;
+    }
+
+    .data-table {
+        font-size: 8pt;
+    }
+
+    .data-table thead th,
+    .data-table tbody td {
+        padding: 2.2mm 2.5mm;
+    }
+
+    .technical-value {
+        font-size: 6.5pt;
+    }
+
+    .kpi-result {
+        font-size: 18pt;
+    }
+
+    .process-model-figure {
+        padding: 3mm;
+
+        overflow: visible;
+
+        break-inside: avoid;
+    }
+
+    .process-model-figure svg {
+        width: 100%;
+        height: auto;
+
+        max-height: 220mm;
+    }
+
+    .appendix-section {
+        break-before: page;
+    }
+}

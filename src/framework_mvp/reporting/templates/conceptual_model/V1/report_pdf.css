@@ -1,0 +1,1447 @@
+/* ================================================================
+   Konzeptionelles Modell
+   PDF-Report V1
+   ================================================================ */
+
+
+/* ----------------------------------------------------------------
+   A4-Seite
+   ---------------------------------------------------------------- */
+
+   @page {
+    size: A4 portrait;
+
+    margin:
+        12mm
+        13mm
+        14mm
+        13mm;
+
+    @bottom-left {
+        content: "Konzeptionelles Modell";
+
+        color: #7d8790;
+
+        font-size: 7pt;
+    }
+
+    @bottom-right {
+        content: counter(page) " / " counter(pages);
+
+        color: #7d8790;
+
+        font-size: 7pt;
+    }
+}
+
+
+/* ----------------------------------------------------------------
+   Designvariablen
+   ---------------------------------------------------------------- */
+
+:root {
+    --blue: #005a8c;
+    --blue-soft: #eaf4f8;
+
+    --orange: #f5a000;
+
+    --green: #34785a;
+    --green-soft: #e8f5ee;
+
+    --text: #20262d;
+    --muted: #6f7881;
+
+    --border: #dce2e6;
+    --surface: #f6f8f9;
+
+    --white: #ffffff;
+}
+
+
+/* ----------------------------------------------------------------
+   Basis
+   ---------------------------------------------------------------- */
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    font-size: 9pt;
+}
+
+body {
+    font-family:
+        Arial,
+        Helvetica,
+        sans-serif;
+
+    color: var(--text);
+
+    font-size: 9pt;
+    line-height: 1.35;
+
+    background: var(--white);
+}
+
+
+/* ----------------------------------------------------------------
+   PDF-Seiten
+   ---------------------------------------------------------------- */
+
+.pdf-page {
+    width: 100%;
+
+    margin: 0 0 5mm;
+    padding: 0;
+
+    border: none;
+    border-radius: 0;
+
+    break-after: auto;
+    page-break-after: auto;
+
+    overflow: visible;
+}
+
+.pdf-page-content {
+    height: auto;
+}
+
+.pdf-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+}
+
+.pdf-page-overview {
+    border-left:
+        2.5mm
+        solid
+        var(--blue);
+}
+
+
+/* ----------------------------------------------------------------
+   Gemeinsame Typografie
+   ---------------------------------------------------------------- */
+
+.pdf-kicker {
+    margin-bottom: 1.5mm;
+
+    color: var(--blue);
+
+    font-size: 6.8pt;
+    font-weight: 700;
+
+    letter-spacing: 0.11em;
+
+    text-transform: uppercase;
+}
+
+.pdf-title-line {
+    width: 16mm;
+    height: 0.8mm;
+
+    margin-top: 5mm;
+
+    background: var(--orange);
+}
+
+
+/* ----------------------------------------------------------------
+   Seite 1 – Titelbereich
+   ---------------------------------------------------------------- */
+
+.pdf-title-row {
+    display: flex;
+
+    justify-content: space-between;
+    align-items: flex-start;
+
+    gap: 5mm;
+
+    margin-bottom: 7mm;
+}
+
+.pdf-title-content {
+    min-width: 0;
+}
+
+.pdf-title-row h1 {
+    margin: 0;
+
+    color: var(--text);
+
+    font-size: 21pt;
+    font-weight: 700;
+
+    line-height: 1.05;
+}
+
+
+/* ----------------------------------------------------------------
+   Validierungsstatus
+   ---------------------------------------------------------------- */
+
+.pdf-status {
+    display: inline-block;
+
+    flex: 0 0 auto;
+
+    margin-top: 1mm;
+
+    padding:
+        1.4mm
+        3mm;
+
+    color: var(--green);
+
+    background: var(--green-soft);
+
+    border-radius: 5mm;
+
+    font-size: 7pt;
+    font-weight: 700;
+
+    line-height: 1.1;
+
+    white-space: nowrap;
+}
+
+
+/* ----------------------------------------------------------------
+   Projektkennzahlen
+   ---------------------------------------------------------------- */
+
+.pdf-metrics {
+    display: flex;
+
+    width: 100%;
+
+    gap: 2mm;
+
+    margin-bottom: 4mm;
+}
+
+.pdf-metric {
+    flex:
+        1
+        1
+        0;
+
+    min-width: 0;
+
+    padding:
+        3mm
+        2.5mm;
+
+    background: var(--surface);
+
+    border:
+        0.3mm
+        solid
+        var(--border);
+
+    border-top:
+        0.8mm
+        solid
+        var(--orange);
+
+    border-radius: 2mm;
+
+    break-inside: avoid;
+}
+
+.pdf-metric-value {
+    margin-bottom: 1mm;
+
+    color: var(--blue);
+
+    font-size: 12pt;
+    font-weight: 700;
+
+    line-height: 1.05;
+
+    white-space: normal;
+
+    overflow-wrap: normal;
+    word-break: normal;
+}
+
+.pdf-metric-label {
+    color: var(--muted);
+
+    font-size: 5.8pt;
+    font-weight: 700;
+
+    letter-spacing: 0.07em;
+
+    text-transform: uppercase;
+
+    line-height: 1.1;
+}
+
+
+/* ----------------------------------------------------------------
+   Karten
+   ---------------------------------------------------------------- */
+
+.pdf-card {
+    padding: 4mm;
+
+    background: var(--surface);
+
+    border: 0.3mm solid var(--border);
+    border-radius: 2.5mm;
+
+    height: auto;
+
+    break-inside: auto;
+    page-break-inside: auto;
+
+    box-decoration-break: clone;
+}
+
+.pdf-card-compact {
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+.pdf-card-start {
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+.pdf-card-full {
+    width: 100%;
+
+    margin-bottom: 3mm;
+}
+
+.pdf-card-row {
+    display: flex;
+
+    width: 100%;
+
+    gap: 3mm;
+}
+
+.pdf-card-half {
+    flex:
+        1
+        1
+        0;
+
+    min-width: 0;
+}
+
+.pdf-card-label {
+    margin-bottom: 1.3mm;
+
+    color: var(--orange);
+
+    font-size: 6pt;
+    font-weight: 700;
+
+    letter-spacing: 0.07em;
+
+    text-transform: uppercase;
+}
+
+.pdf-card h2 {
+    margin:
+        0
+        0
+        2mm;
+
+    color: var(--blue);
+
+    font-size: 10pt;
+    font-weight: 700;
+
+    line-height: 1.15;
+}
+
+.pdf-card-text {
+    color: var(--text);
+
+    font-size: 8.2pt;
+
+    line-height: 1.4;
+}
+
+
+/* ----------------------------------------------------------------
+   Listen
+   ---------------------------------------------------------------- */
+
+.pdf-compact-list {
+    margin: 0;
+
+    padding-left: 4mm;
+
+    font-size: 8pt;
+
+    line-height: 1.35;
+}
+
+.pdf-compact-list li {
+    margin-bottom: 1mm;
+}
+
+.pdf-compact-list li:last-child {
+    margin-bottom: 0;
+}
+
+
+/* ----------------------------------------------------------------
+   Zielgrößen-Chips
+   ---------------------------------------------------------------- */
+
+.pdf-chip-list {
+    display: flex;
+
+    flex-wrap: wrap;
+
+    gap: 1.5mm;
+}
+
+.pdf-chip {
+    display: inline-block;
+
+    max-width: 100%;
+
+    padding:
+        1.4mm
+        2.5mm;
+
+    color: var(--blue);
+
+    background: var(--blue-soft);
+
+    border-radius: 5mm;
+
+    font-size: 7.2pt;
+    font-weight: 700;
+
+    line-height: 1.2;
+
+    white-space: normal;
+
+    overflow-wrap: normal;
+    word-break: normal;
+}
+
+
+/* ----------------------------------------------------------------
+   Leere Werte
+   ---------------------------------------------------------------- */
+
+.pdf-empty {
+    color: var(--muted);
+}
+
+
+/* ----------------------------------------------------------------
+   Seiten 2–5 – Abschnittskopf
+   ---------------------------------------------------------------- */
+
+.pdf-section-header {
+    display: flex;
+
+    align-items: center;
+
+    gap: 4mm;
+
+    margin-bottom: 6mm;
+
+    padding-bottom: 4mm;
+
+    border-bottom:
+        0.3mm
+        solid
+        var(--border);
+}
+
+.pdf-section-number {
+    display: flex;
+
+    flex:
+        0
+        0
+        auto;
+
+    align-items: center;
+    justify-content: center;
+
+    min-width: 12mm;
+    height: 12mm;
+
+    padding:
+        0
+        2mm;
+
+    color: var(--white);
+
+    background: var(--blue);
+
+    border-radius: 2mm;
+
+    font-size: 7.5pt;
+    font-weight: 700;
+
+    line-height: 1;
+}
+
+.pdf-section-heading {
+    min-width: 0;
+}
+
+.pdf-section-heading .pdf-kicker {
+    margin-bottom: 1mm;
+}
+
+.pdf-section-header h1 {
+    margin: 0;
+
+    color: var(--text);
+
+    font-size: 16pt;
+    font-weight: 700;
+
+    line-height: 1.1;
+}
+
+/* ----------------------------------------------------------------
+   Temporäre Platzhalter
+   ---------------------------------------------------------------- */
+
+.pdf-placeholder {
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    width: 100%;
+    height: 100%;
+
+    padding: 10mm;
+
+    color: var(--muted);
+
+    border:
+        0.3mm
+        dashed
+        var(--border);
+
+    border-radius: 3mm;
+
+    font-size: 10pt;
+
+    line-height: 1.5;
+
+    text-align: center;
+}
+
+/* ================================================================
+   Verdichtete Modellinformationen
+   ================================================================ */
+
+   .pdf-subheading {
+    margin:
+        4mm
+        0
+        2mm;
+
+    color: var(--blue);
+
+    font-size: 9pt;
+    font-weight: 700;
+
+    break-after: avoid;
+    page-break-after: avoid;
+}
+
+
+/* Key-Value-Zeilen */
+
+.pdf-kv-list {
+    width: 100%;
+}
+
+.pdf-kv-row {
+    display: flex;
+
+    width: 100%;
+
+    gap: 4mm;
+
+    padding:
+        1.5mm
+        0;
+
+    border-bottom:
+        0.2mm
+        solid
+        var(--border);
+}
+
+.pdf-kv-row:last-child {
+    border-bottom: none;
+}
+
+.pdf-kv-label {
+    flex:
+        0
+        0
+        38mm;
+
+    color: var(--muted);
+
+    font-size: 7pt;
+    font-weight: 700;
+}
+
+.pdf-kv-value {
+    flex:
+        1
+        1
+        auto;
+
+    min-width: 0;
+
+    font-size: 7.8pt;
+}
+
+
+/* Klassifikationsmerkmale */
+
+.pdf-property-grid {
+    width: 100%;
+
+    margin:
+        0
+        -1mm;
+}
+
+.pdf-property {
+    display: inline-block;
+
+    width: 32.5%;
+
+    margin:
+        0
+        0
+        2mm;
+
+    padding:
+        2.5mm;
+
+    vertical-align: top;
+
+    background: var(--white);
+
+    border:
+        0.3mm
+        solid
+        var(--border);
+
+    border-radius: 2mm;
+
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+.pdf-property-label {
+    margin-bottom: 1mm;
+
+    color: var(--muted);
+
+    font-size: 5.8pt;
+    font-weight: 700;
+
+    letter-spacing: 0.04em;
+
+    text-transform: uppercase;
+}
+
+.pdf-property-value {
+    color: var(--text);
+
+    font-size: 7.5pt;
+    font-weight: 600;
+
+    line-height: 1.25;
+}
+
+
+/* Innere Zweispaltenbereiche */
+
+.pdf-card-row-inner {
+    margin-top: 3mm;
+}
+
+.pdf-inner-block {
+    flex:
+        1
+        1
+        0;
+
+    min-width: 0;
+
+    padding:
+        3mm;
+
+    background: var(--white);
+
+    border:
+        0.3mm
+        solid
+        var(--border);
+
+    border-radius: 2mm;
+}
+
+.pdf-inner-block h2,
+.pdf-inner-block h3 {
+    margin:
+        0
+        0
+        2mm;
+
+    color: var(--blue);
+
+    font-size: 9pt;
+    font-weight: 700;
+
+    break-after: avoid;
+    page-break-after: avoid;
+}
+
+
+/* Start-/Endaktivitäten */
+
+.pdf-frequency-list {
+    display: flex;
+
+    flex-wrap: wrap;
+
+    gap: 1.5mm;
+}
+
+.pdf-frequency-item {
+    display: inline-block;
+
+    padding:
+        1.2mm
+        2mm;
+
+    background: var(--surface);
+
+    border:
+        0.2mm
+        solid
+        var(--border);
+
+    border-radius: 4mm;
+
+    font-size: 7pt;
+}
+
+.pdf-frequency-count {
+    display: inline-block;
+
+    margin-left: 1mm;
+
+    padding:
+        0.3mm
+        1.2mm;
+
+    color: var(--white);
+
+    background: var(--blue);
+
+    border-radius: 3mm;
+
+    font-size: 6pt;
+    font-weight: 700;
+}
+
+
+/* KPI-Ergebnisse */
+
+.pdf-kpi-list {
+    width: 100%;
+}
+
+.pdf-kpi-row {
+    display: flex;
+
+    align-items: center;
+
+    gap: 3mm;
+
+    padding:
+        2mm
+        0;
+
+    border-bottom:
+        0.2mm
+        solid
+        var(--border);
+
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+.pdf-kpi-row:last-child {
+    border-bottom: none;
+}
+
+.pdf-kpi-name {
+    flex:
+        1
+        1
+        auto;
+
+    min-width: 0;
+
+    font-size: 8pt;
+    font-weight: 700;
+}
+
+.pdf-kpi-value {
+    flex:
+        0
+        0
+        auto;
+
+    color: var(--blue);
+
+    font-size: 8pt;
+    font-weight: 700;
+}
+
+.pdf-kpi-note {
+    flex:
+        0
+        0
+        auto;
+
+    color: var(--muted);
+
+    font-size: 6.5pt;
+}
+
+/* ================================================================
+   06 – Aktivitäten
+   ================================================================ */
+
+   .pdf-activity-list {
+    display: flex;
+    flex-wrap: wrap;
+
+    gap: 1.5mm;
+}
+
+.pdf-activity-item {
+    display: inline-flex;
+
+    align-items: center;
+
+    gap: 1.5mm;
+
+    padding:
+        1.3mm
+        2mm;
+
+    background: var(--white);
+
+    border:
+        0.3mm
+        solid
+        var(--border);
+
+    border-radius: 2mm;
+
+    font-size: 7.2pt;
+
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+.pdf-activity-index {
+    display: inline-flex;
+
+    align-items: center;
+    justify-content: center;
+
+    min-width: 5.5mm;
+    height: 5.5mm;
+
+    padding:
+        0
+        1mm;
+
+    color: var(--white);
+
+    background: var(--blue);
+
+    border-radius: 1.3mm;
+
+    font-size: 5.8pt;
+    font-weight: 700;
+}
+
+.pdf-activity-name {
+    font-weight: 600;
+}
+
+
+/* ================================================================
+   Hinweise
+   ================================================================ */
+
+.pdf-notice {
+    padding:
+        2.5mm
+        3mm;
+
+    color: var(--muted);
+
+    background: var(--white);
+
+    border-left:
+        0.8mm
+        solid
+        var(--blue);
+
+    font-size: 7.8pt;
+
+    line-height: 1.35;
+}
+
+
+/* ================================================================
+   Ressourcen
+   ================================================================ */
+
+.pdf-inline-meta {
+    margin-bottom: 2mm;
+
+    color: var(--muted);
+
+    font-size: 6.8pt;
+}
+
+
+/* ================================================================
+   Strukturierte Werte
+   ================================================================ */
+
+.pdf-structured-value {
+    margin-bottom: 0.8mm;
+
+    line-height: 1.3;
+}
+
+.pdf-structured-value:last-child {
+    margin-bottom: 0;
+}
+
+.pdf-muted {
+    color: var(--muted);
+}
+
+
+/* ================================================================
+   Kompakte Strukturinformationen
+   ================================================================ */
+
+.pdf-compact-structure {
+    width: 100%;
+
+    background: var(--white);
+
+    border:
+        0.3mm
+        solid
+        var(--border);
+
+    border-radius: 2mm;
+}
+
+.pdf-compact-structure-row {
+    display: flex;
+
+    gap: 4mm;
+
+    padding:
+        1.5mm
+        2.5mm;
+
+    border-bottom:
+        0.2mm
+        solid
+        var(--border);
+}
+
+.pdf-compact-structure-row:last-child {
+    border-bottom: none;
+}
+
+.pdf-compact-structure-label {
+    flex:
+        0
+        0
+        42mm;
+
+    color: var(--muted);
+
+    font-size: 6.5pt;
+    font-weight: 700;
+
+    text-transform: capitalize;
+}
+
+.pdf-compact-structure-value {
+    flex:
+        1
+        1
+        auto;
+
+    min-width: 0;
+
+    font-size: 7pt;
+}
+
+
+/* ================================================================
+   Datenquellen
+   ================================================================ */
+
+.pdf-source-list {
+    width: 100%;
+
+    margin-top: 2mm;
+}
+
+.pdf-source-row {
+    display: flex;
+
+    align-items: center;
+
+    gap: 4mm;
+
+    padding:
+        2mm
+        0;
+
+    border-bottom:
+        0.2mm
+        solid
+        var(--border);
+}
+
+.pdf-source-row:last-child {
+    border-bottom: none;
+}
+
+.pdf-source-name {
+    flex:
+        1
+        1
+        auto;
+
+    min-width: 0;
+
+    color: var(--blue);
+
+    font-size: 8pt;
+    font-weight: 700;
+}
+
+.pdf-source-meta {
+    display: flex;
+
+    flex-wrap: wrap;
+
+    justify-content: flex-end;
+
+    gap: 1mm;
+}
+
+.pdf-source-meta span {
+    display: inline-block;
+
+    padding:
+        0.8mm
+        1.8mm;
+
+    color: var(--muted);
+
+    background: var(--white);
+
+    border:
+        0.2mm
+        solid
+        var(--border);
+
+    border-radius: 4mm;
+
+    font-size: 6pt;
+}
+
+
+/* ================================================================
+   Datenprofil
+   ================================================================ */
+
+.pdf-data-metrics {
+    display: flex;
+
+    width: 100%;
+
+    gap: 2mm;
+}
+
+.pdf-data-metric {
+    flex:
+        1
+        1
+        0;
+
+    min-width: 0;
+
+    padding:
+        2.5mm;
+
+    background: var(--white);
+
+    border:
+        0.3mm
+        solid
+        var(--border);
+
+    border-top:
+        0.6mm
+        solid
+        var(--orange);
+
+    border-radius: 2mm;
+
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+.pdf-data-metric strong {
+    display: block;
+
+    margin-bottom: 0.5mm;
+
+    color: var(--blue);
+
+    font-size: 10pt;
+}
+
+.pdf-data-metric span {
+    color: var(--muted);
+
+    font-size: 5.8pt;
+    font-weight: 700;
+
+    letter-spacing: 0.05em;
+
+    text-transform: uppercase;
+}
+
+/* ================================================================
+   11 · Prozessdarstellung
+   ================================================================ */
+
+   .pdf-process-card {
+    overflow: visible;
+}
+
+.pdf-process-heading {
+    margin-top: 4mm !important;
+}
+
+
+/* Einzelne Grafik möglichst geschlossen halten.
+   Passt sie nicht mehr auf die aktuelle Seite,
+   verschiebt WeasyPrint sie auf die nächste. */
+
+.pdf-process-figure {
+    width: 100%;
+
+    margin:
+        2mm
+        0
+        4mm;
+
+    padding: 2.5mm;
+
+    background: var(--white);
+
+    border:
+        0.3mm
+        solid
+        var(--border);
+
+    border-top:
+        0.7mm
+        solid
+        var(--orange);
+
+    border-radius: 2mm;
+
+    overflow: hidden;
+
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+.pdf-process-figure svg {
+    display: block;
+
+    width: 100%;
+    height: auto;
+
+    margin: 0 auto;
+}
+
+
+/* DFG darf etwas höher werden */
+
+.pdf-process-figure-dfg svg {
+    max-height: 95mm;
+}
+
+
+/* Gewähltes Prozessmodell */
+
+.pdf-process-figure-model svg {
+    max-height: 90mm;
+}
+
+
+/* Optionaler Validierungsvermerk */
+
+.pdf-validation-note {
+    margin-top: 3mm;
+
+    padding:
+        2.5mm
+        3mm;
+
+    background: var(--green-soft);
+
+    border-left:
+        0.8mm
+        solid
+        var(--green);
+
+    font-size: 7.5pt;
+
+    line-height: 1.35;
+}
+
+.pdf-validation-label {
+    margin-bottom: 1mm;
+
+    color: var(--green);
+
+    font-size: 6pt;
+    font-weight: 700;
+
+    letter-spacing: 0.06em;
+
+    text-transform: uppercase;
+}
+
+
+/* ================================================================
+   A · Technische Nachvollziehbarkeit
+   ================================================================ */
+
+.pdf-technical-card {
+    overflow: visible;
+}
+
+
+/* Technische Metadaten */
+
+.pdf-tech-meta {
+    width: 100%;
+
+    margin-bottom: 4mm;
+
+    background: var(--white);
+
+    border:
+        0.3mm
+        solid
+        var(--border);
+
+    border-radius: 2mm;
+}
+
+.pdf-tech-row {
+    display: flex;
+
+    width: 100%;
+
+    gap: 4mm;
+
+    padding:
+        1.6mm
+        2.5mm;
+
+    border-bottom:
+        0.2mm
+        solid
+        var(--border);
+
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+.pdf-tech-row:last-child {
+    border-bottom: none;
+}
+
+.pdf-tech-label {
+    flex:
+        0
+        0
+        34mm;
+
+    color: var(--muted);
+
+    font-size: 6.5pt;
+    font-weight: 700;
+}
+
+.pdf-tech-value {
+    flex:
+        1
+        1
+        auto;
+
+    min-width: 0;
+
+    font-size: 6.8pt;
+
+    overflow-wrap: anywhere;
+    word-break: normal;
+}
+
+.pdf-tech-hash {
+    font-size: 6.2pt;
+}
+
+
+/* Lineage */
+
+.pdf-lineage-heading {
+    margin:
+        4mm
+        0
+        2mm !important;
+
+    break-after: avoid;
+    page-break-after: avoid;
+}
+
+.pdf-lineage-table {
+    width: 100%;
+
+    border-collapse: collapse;
+
+    table-layout: fixed;
+
+    font-size: 5.8pt;
+}
+
+.pdf-lineage-table thead {
+    display: table-header-group;
+}
+
+.pdf-lineage-table th {
+    padding:
+        1.5mm
+        1.5mm;
+
+    color: var(--blue);
+
+    background: var(--blue-soft);
+
+    border-bottom:
+        0.5mm
+        solid
+        var(--orange);
+
+    font-size: 5.5pt;
+    font-weight: 700;
+
+    text-align: left;
+
+    text-transform: uppercase;
+}
+
+.pdf-lineage-table td {
+    padding:
+        1.3mm
+        1.5mm;
+
+    vertical-align: top;
+
+    border-bottom:
+        0.2mm
+        solid
+        var(--border);
+
+    line-height: 1.25;
+
+    overflow-wrap: anywhere;
+    word-break: normal;
+}
+
+.pdf-lineage-table tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+
+/* Spaltenbreiten */
+
+.pdf-lineage-table th:nth-child(1),
+.pdf-lineage-table td:nth-child(1) {
+    width: 27%;
+}
+
+.pdf-lineage-table th:nth-child(2),
+.pdf-lineage-table td:nth-child(2) {
+    width: 10%;
+}
+
+.pdf-lineage-table th:nth-child(3),
+.pdf-lineage-table td:nth-child(3) {
+    width: 41%;
+}
+
+.pdf-lineage-table th:nth-child(4),
+.pdf-lineage-table td:nth-child(4) {
+    width: 22%;
+}
+
+.pdf-lineage-reference {
+    font-size: 5.4pt;
+}

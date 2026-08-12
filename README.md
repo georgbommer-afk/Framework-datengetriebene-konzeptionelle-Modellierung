@@ -348,3 +348,6 @@ find . -type f \
 
 ## Initieren der streamlit App als localhost
   .venv/bin/python -m streamlit run streamlit_app.py
+
+## Ausgeben der html
+open workspace/report_preview/report.html
