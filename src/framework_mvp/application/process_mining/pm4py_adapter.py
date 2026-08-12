@@ -92,21 +92,39 @@ class Pm4pyAdapter:
             raise Domaenenfehler(
                 "Dem Event Log fehlen Pflichtspalten: " + ", ".join(sorted(fehlend))
             )
+
         kopie = daten.copy(deep=True)
+
         for spalte in ("case_id", "activity"):
             serie = cast("pd.Series", kopie[spalte])
-            if bool(serie.isna().any()) or bool(serie.astype("string").str.strip().eq("").any()):
-                raise Domaenenfehler(f"Die Pflichtspalte {spalte} enthält leere Werte.")
-        kopie["timestamp"] = pd.to_datetime(kopie["timestamp"], errors="coerce", utc=True)
+
+            if bool(serie.isna().any()) or bool(
+                serie.astype("string").str.strip().eq("").any()
+            ):
+                raise Domaenenfehler(
+                    f"Die Pflichtspalte {spalte} enthält leere Werte."
+                )
+
+            kopie[spalte] = serie.astype("string")
+
+        kopie["timestamp"] = pd.to_datetime(
+            kopie["timestamp"],
+            errors="coerce",
+            utc=True,
+        )
+
         if bool(cast("pd.Series", kopie["timestamp"]).isna().any()):
-            raise Domaenenfehler("Die Pflichtspalte timestamp enthält ungültige Zeitwerte.")
+            raise Domaenenfehler(
+                "Die Pflichtspalte timestamp enthält ungültige Zeitwerte."
+            )
+
         return kopie.rename(
             columns={
                 "case_id": "case:concept:name",
                 "activity": "concept:name",
                 "timestamp": "time:timestamp",
             }
-        )
+    )
 
     def entdecken(
         self, daten: pd.DataFrame, konfiguration: DiscoveryKonfiguration

@@ -335,7 +335,7 @@ def _woped_hilfe() -> None:
             f"[Alternative PNML-Werkzeuge]({PNML_TOOLS_URL})"
         )
         st.link_button("WoPeD Next in neuem Tab öffnen", WOPED_NEXT_URL)
-        components.iframe(WOPED_NEXT_URL, height=900, scrolling=True)
+        st.iframe(WOPED_NEXT_URL, height=900, scrolling=True) #das alte "components.iframe" hat zum Fehlerfall geführt
 
 
 def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None, bool]:

@@ -1,0 +1,1607 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="utf-8">
+    <title>Konzeptionelles Modell</title>
+    <link rel="stylesheet" href="report_pdf.css">
+</head>
+
+<body>
+
+{# ================================================================
+   SEITE 1 – PROJEKTÜBERSICHT
+   ================================================================ #}
+
+<section class="pdf-page pdf-page-overview">
+
+    <header class="pdf-title-row">
+
+        <div class="pdf-title-content">
+
+            <div class="pdf-kicker">
+                KONZEPTIONELLES MODELL K*
+            </div>
+
+            <h1>
+                Projektübersicht
+            </h1>
+
+            <div class="pdf-title-line"></div>
+
+        </div>
+
+        <div class="pdf-status">
+            {{ validierung.get("status_anzeige", "–") }}
+        </div>
+
+    </header>
+
+
+    {# ------------------------------------------------------------
+       Kerndaten
+       ------------------------------------------------------------ #}
+
+    <div class="pdf-metrics">
+
+        <div class="pdf-metric">
+
+            <div class="pdf-metric-value">
+                {{ modellumfang.get(
+                    "systemtyp_anzeige",
+                    modellumfang.get("systemtyp", "–")
+                ) }}
+            </div>
+
+            <div class="pdf-metric-label">
+                Systemtyp
+            </div>
+
+        </div>
+
+
+        <div class="pdf-metric">
+
+            <div class="pdf-metric-value">
+                {{ daten.get("event_log", {}).get("fallanzahl", "–") }}
+            </div>
+
+            <div class="pdf-metric-label">
+                Fälle
+            </div>
+
+        </div>
+
+
+        <div class="pdf-metric">
+
+            <div class="pdf-metric-value">
+                {{ daten.get("event_log", {}).get("ereignisanzahl", "–") }}
+            </div>
+
+            <div class="pdf-metric-label">
+                Ereignisse
+            </div>
+
+        </div>
+
+
+        <div class="pdf-metric">
+
+            <div class="pdf-metric-value">
+                {{ daten.get(
+                    "event_log",
+                    {}
+                ).get(
+                    "aktivitaetsanzahl",
+                    aktivitaeten.get(
+                        "sichtbare_aktivitaeten",
+                        []
+                    ) | length
+                ) }}
+            </div>
+
+            <div class="pdf-metric-label">
+                Aktivitäten
+            </div>
+
+        </div>
+
+
+        <div class="pdf-metric">
+
+            <div class="pdf-metric-value">
+                {{ prozessdarstellung.get("notation_anzeige", "–") }}
+            </div>
+
+            <div class="pdf-metric-label">
+                Prozessmodell
+            </div>
+
+        </div>
+
+    </div>
+
+
+    {# ------------------------------------------------------------
+       Problemstellung
+       ------------------------------------------------------------ #}
+
+    <article class="pdf-card pdf-card-full">
+
+        <div class="pdf-card-label">
+            01 · Problemstellung
+        </div>
+
+        <h2>
+            Ausgangssituation
+        </h2>
+
+        <div class="pdf-card-text">
+
+            {% if problemstellung.get("text") %}
+                {{ problemstellung.get("text") }}
+            {% else %}
+                <span class="pdf-empty">–</span>
+            {% endif %}
+
+        </div>
+
+    </article>
+
+
+    {# ------------------------------------------------------------
+       Zielsetzung
+       ------------------------------------------------------------ #}
+
+    <div class="pdf-card-row">
+
+        <article class="pdf-card pdf-card-half">
+
+            <div class="pdf-card-label">
+                02 · Zielsetzung
+            </div>
+
+            <h2>
+                Untersuchungszwecke
+            </h2>
+
+            {% set zwecke = zielsetzung.get(
+                "untersuchungszwecke",
+                []
+            ) %}
+
+            {% if zwecke %}
+
+                <ul class="pdf-compact-list">
+
+                    {% for zweck in zwecke %}
+                        <li>
+                            {{ zweck }}
+                        </li>
+                    {% endfor %}
+
+                </ul>
+
+            {% else %}
+
+                <span class="pdf-empty">
+                    –
+                </span>
+
+            {% endif %}
+
+        </article>
+
+
+        <article class="pdf-card pdf-card-half">
+
+            <div class="pdf-card-label">
+                Zielgrößen
+            </div>
+
+            <h2>
+                Logistische Zielgrößen
+            </h2>
+
+            {% set zielgroessen = zielsetzung.get(
+                "logistische_zielgroessen",
+                []
+            ) %}
+
+            {% if zielgroessen %}
+
+                <div class="pdf-chip-list">
+
+                    {% for zielgroesse in zielgroessen %}
+
+                        <span class="pdf-chip">
+
+                            {% if zielgroesse is mapping %}
+
+                                {{ zielgroesse.get(
+                                    "bezeichnung",
+                                    zielgroesse.get(
+                                        "id",
+                                        "–"
+                                    )
+                                ) }}
+
+                            {% else %}
+
+                                {{ zielgroesse }}
+
+                            {% endif %}
+
+                        </span>
+
+                    {% endfor %}
+
+                </div>
+
+            {% else %}
+
+                <span class="pdf-empty">
+                    –
+                </span>
+
+            {% endif %}
+
+        </article>
+
+    </div>
+
+</section>
+
+
+
+{# ================================================================
+   SEITE 2 – SYSTEM- UND MODELLRAHMEN
+   ================================================================ #}
+
+   <div class="pdf-page-content">
+
+    <!-- ========================================================
+         03 · Ausgaben und Eingaben
+         ======================================================== -->
+
+    <article class="pdf-card pdf-card-full pdf-card-compact">
+
+        <div class="pdf-card-label">
+            03 · Ausgaben und Eingaben
+        </div>
+
+        <h2>
+            Ergebnisgrößen
+        </h2>
+
+        {% set kpi_ergebnisse =
+            ausgaben_und_eingaben.get("kpi_ergebnisse", [])
+        %}
+
+        {% set ausgewaehlte_kpis =
+            ausgaben_und_eingaben.get("ausgewaehlte_kpis", [])
+        %}
+
+        {% if kpi_ergebnisse %}
+
+            <div class="pdf-kpi-list">
+
+                {% for kpi in kpi_ergebnisse %}
+
+                    <div class="pdf-kpi-row">
+
+                        <div class="pdf-kpi-name">
+                            {{ kpi.get(
+                                "bezeichnung",
+                                kpi.get("kpi_id", "KPI")
+                            ) }}
+                        </div>
+
+                        <div class="pdf-kpi-value">
+                            {{ kpi.get("ergebnis_anzeige", "–") }}
+                        </div>
+
+                        {% if kpi.get("fehlende_voraussetzungen") %}
+
+                            <div class="pdf-kpi-note">
+                                {{ kpi.get(
+                                    "fehlende_voraussetzungen",
+                                    []
+                                ) | length }}
+                                fehlende Voraussetzung{% if
+                                    kpi.get(
+                                        "fehlende_voraussetzungen",
+                                        []
+                                    ) | length != 1
+                                %}en{% endif %}
+                            </div>
+
+                        {% endif %}
+
+                    </div>
+
+                {% endfor %}
+
+            </div>
+
+        {% elif ausgewaehlte_kpis %}
+
+            <div class="pdf-chip-list">
+
+                {% for kpi in ausgewaehlte_kpis %}
+
+                    <span class="pdf-chip">
+
+                        {% if kpi is mapping %}
+                            {{ kpi.get(
+                                "bezeichnung",
+                                kpi.get("id", "–")
+                            ) }}
+                        {% else %}
+                            {{ kpi }}
+                        {% endif %}
+
+                    </span>
+
+                {% endfor %}
+
+            </div>
+
+        {% else %}
+
+            <span class="pdf-empty">
+                Keine KPI-Ergebnisse vorhanden.
+            </span>
+
+        {% endif %}
+
+    </article>
+
+
+    <!-- ========================================================
+         04 · Modellumfang
+         ======================================================== -->
+
+    <article class="pdf-card pdf-card-full">
+
+        <div class="pdf-card-label">
+            04 · Modellumfang, Modellgrenzen und Detaillierungsgrad
+        </div>
+
+        <h2>
+            Systemabgrenzung
+        </h2>
+
+        <div class="pdf-kv-list">
+
+            <div class="pdf-kv-row">
+
+                <div class="pdf-kv-label">
+                    Systemgrenze
+                </div>
+
+                <div class="pdf-kv-value">
+                    {{ modellumfang.get("systemgrenze") or "–" }}
+                </div>
+
+            </div>
+
+
+            <div class="pdf-kv-row">
+
+                <div class="pdf-kv-label">
+                    Detaillierungsgrad
+                </div>
+
+                <div class="pdf-kv-value">
+                    {{ modellumfang.get("detaillierungsgrad") or "–" }}
+                </div>
+
+            </div>
+
+
+            {% if modellumfang.get("bereich_aus_systemprofil") %}
+
+                <div class="pdf-kv-row">
+
+                    <div class="pdf-kv-label">
+                        Bereich
+                    </div>
+
+                    <div class="pdf-kv-value">
+                        {{ modellumfang.get(
+                            "bereich_aus_systemprofil"
+                        ) }}
+                    </div>
+
+                </div>
+
+            {% endif %}
+
+        </div>
+
+
+        {% set klassifikation =
+            modellumfang.get("systemklassifikation", {})
+        %}
+
+
+        <!-- Allgemeine Systemklassifikation -->
+
+        {% if klassifikation %}
+
+            <h3 class="pdf-subheading">
+                Systemklassifikation
+            </h3>
+
+            <div class="pdf-property-grid">
+
+                {% set allgemeine_merkmale = [
+                    ("Gestalt der Güter", "gestalt_der_gueter"),
+                    (
+                        "Erzeugnisstrukturtyp",
+                        "erzeugnisstrukturtyp"
+                    ),
+                    (
+                        "Materialflusskontinuität",
+                        "materialflusskontinuitaet"
+                    ),
+                    ("Input", "input_beschreibung"),
+                    (
+                        "Transformation",
+                        "transformation_beschreibung"
+                    ),
+                    ("Output", "output_beschreibung"),
+                    (
+                        "Kapazitätsgrenzen",
+                        "kapazitaetsgrenzen"
+                    )
+                ] %}
+
+
+                {% for label, schluessel in allgemeine_merkmale %}
+
+                    {% set wert =
+                        klassifikation.get(schluessel)
+                    %}
+
+                    {% if wert %}
+
+                        <div class="pdf-property">
+
+                            <div class="pdf-property-label">
+                                {{ label }}
+                            </div>
+
+                            <div class="pdf-property-value">
+
+                                {% if wert is iterable
+                                      and wert is not string
+                                      and wert is not mapping %}
+
+                                    {{ wert | join(", ") }}
+
+                                {% else %}
+
+                                    {{ wert }}
+
+                                {% endif %}
+
+                            </div>
+
+                        </div>
+
+                    {% endif %}
+
+                {% endfor %}
+
+            </div>
+
+
+            <!-- Produktions- oder Intralogistikmerkmale -->
+
+            {% if modellumfang.get("systemtyp") == "produktion" %}
+
+                {% set spezifisch =
+                    klassifikation.get("produktion", {})
+                %}
+
+                {% set spezifischer_titel =
+                    "Produktionsspezifische Merkmale"
+                %}
+
+            {% elif modellumfang.get("systemtyp") == "intralogistik" %}
+
+                {% set spezifisch =
+                    klassifikation.get("intralogistik", {})
+                %}
+
+                {% set spezifischer_titel =
+                    "Intralogistikspezifische Merkmale"
+                %}
+
+            {% else %}
+
+                {% set spezifisch = {} %}
+                {% set spezifischer_titel = "" %}
+
+            {% endif %}
+
+
+            {% if spezifisch %}
+
+                <h3 class="pdf-subheading">
+                    {{ spezifischer_titel }}
+                </h3>
+
+                <div class="pdf-property-grid">
+
+                    {% for schluessel, wert in spezifisch.items() %}
+
+                        {# Ressourcen erscheinen erst in 08 #}
+
+                        {% if wert
+                              and schluessel != "ressourcen" %}
+
+                            <div class="pdf-property">
+
+                                <div class="pdf-property-label">
+                                    {{ schluessel
+                                        | replace("_", " ")
+                                    }}
+                                </div>
+
+                                <div class="pdf-property-value">
+
+                                    {% if wert is iterable
+                                          and wert is not string
+                                          and wert is not mapping %}
+
+                                        {{ wert | join(", ") }}
+
+                                    {% else %}
+
+                                        {{ wert }}
+
+                                    {% endif %}
+
+                                </div>
+
+                            </div>
+
+                        {% endif %}
+
+                    {% endfor %}
+
+                </div>
+
+            {% endif %}
+
+        {% endif %}
+
+
+        <!-- Start- und Endaktivitäten -->
+
+        <div class="pdf-card-row pdf-card-row-inner">
+
+            <div class="pdf-inner-block">
+
+                <h3>
+                    Startaktivitäten
+                </h3>
+
+                {% set starts =
+                    modellumfang.get("startaktivitaeten", [])
+                %}
+
+                {% if starts %}
+
+                    <div class="pdf-frequency-list">
+
+                        {% for eintrag in starts %}
+
+                            <span class="pdf-frequency-item">
+
+                                {{ eintrag.get(
+                                    "aktivitaet",
+                                    "–"
+                                ) }}
+
+                                {% if
+                                    eintrag.get("haeufigkeit")
+                                    is not none
+                                %}
+
+                                    <span class="pdf-frequency-count">
+                                        {{ eintrag.get(
+                                            "haeufigkeit"
+                                        ) }}
+                                    </span>
+
+                                {% endif %}
+
+                            </span>
+
+                        {% endfor %}
+
+                    </div>
+
+                {% else %}
+
+                    <span class="pdf-empty">
+                        –
+                    </span>
+
+                {% endif %}
+
+            </div>
+
+
+            <div class="pdf-inner-block">
+
+                <h3>
+                    Endaktivitäten
+                </h3>
+
+                {% set ends =
+                    modellumfang.get("endaktivitaeten", [])
+                %}
+
+                {% if ends %}
+
+                    <div class="pdf-frequency-list">
+
+                        {% for eintrag in ends %}
+
+                            <span class="pdf-frequency-item">
+
+                                {{ eintrag.get(
+                                    "aktivitaet",
+                                    "–"
+                                ) }}
+
+                                {% if
+                                    eintrag.get("haeufigkeit")
+                                    is not none
+                                %}
+
+                                    <span class="pdf-frequency-count">
+                                        {{ eintrag.get(
+                                            "haeufigkeit"
+                                        ) }}
+                                    </span>
+
+                                {% endif %}
+
+                            </span>
+
+                        {% endfor %}
+
+                    </div>
+
+                {% else %}
+
+                    <span class="pdf-empty">
+                        –
+                    </span>
+
+                {% endif %}
+
+            </div>
+
+        </div>
+
+    </article>
+
+
+    <!-- ========================================================
+         05 · Entitäten
+         ======================================================== -->
+
+    <article class="pdf-card pdf-card-full pdf-card-compact">
+
+        <div class="pdf-card-label">
+            05 · Entitäten
+        </div>
+
+        <div class="pdf-card-row pdf-card-row-inner">
+
+            <div class="pdf-inner-block">
+
+                <h2>
+                    Objekte und Güter
+                </h2>
+
+                {% set objekte =
+                    entitaeten.get("objekte_gueter", [])
+                %}
+
+                {% if objekte %}
+
+                    <div class="pdf-chip-list">
+
+                        {% for objekt in objekte %}
+
+                            <span class="pdf-chip">
+                                {{ objekt }}
+                            </span>
+
+                        {% endfor %}
+
+                    </div>
+
+                {% else %}
+
+                    <span class="pdf-empty">
+                        –
+                    </span>
+
+                {% endif %}
+
+            </div>
+
+
+            <div class="pdf-inner-block">
+
+                <h2>
+                    Fallbezug
+                </h2>
+
+                <div class="pdf-kv-list">
+
+                    <div class="pdf-kv-row">
+
+                        <div class="pdf-kv-label">
+                            Kanonisches Fallattribut
+                        </div>
+
+                        <div class="pdf-kv-value">
+                            {{ entitaeten.get(
+                                "kanonisches_fallattribut"
+                            ) or "–" }}
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </article>
+
+</div>
+<div class="pdf-page-content">
+
+    <!-- ========================================================
+         06 · Aktivitäten
+         ======================================================== -->
+
+    <article class="pdf-card pdf-card-full">
+
+        <div class="pdf-card-label">
+            06 · Aktivitäten
+        </div>
+
+        {% set sichtbare_aktivitaeten =
+            aktivitaeten.get("sichtbare_aktivitaeten", [])
+        %}
+
+        {% if sichtbare_aktivitaeten %}
+
+            <div class="pdf-activity-list">
+
+                {% for aktivitaet in sichtbare_aktivitaeten %}
+
+                    <span class="pdf-activity-item">
+
+                        <span class="pdf-activity-index">
+                            {{ loop.index }}
+                        </span>
+
+                        <span class="pdf-activity-name">
+                            {{ aktivitaet }}
+                        </span>
+
+                    </span>
+
+                {% endfor %}
+
+            </div>
+
+        {% else %}
+
+            <span class="pdf-empty">
+                Keine Aktivitäten ableitbar.
+            </span>
+
+        {% endif %}
+
+    </article>
+
+
+    <!-- ========================================================
+         07 · Warteschlangen
+         ======================================================== -->
+
+    <article class="pdf-card pdf-card-full pdf-card-compact">
+
+        <div class="pdf-card-label">
+            07 · Warteschlangen
+        </div>
+
+        {% set wartezeit_kpis =
+            warteschlangen.get("wartezeit_kpis", [])
+        %}
+
+        {% if wartezeit_kpis %}
+
+            <div class="pdf-kpi-list">
+
+                {% for kpi in wartezeit_kpis %}
+
+                    <div class="pdf-kpi-row">
+
+                        <div class="pdf-kpi-name">
+                            {{ kpi.get(
+                                "bezeichnung",
+                                kpi.get("kpi_id", "Wartezeit")
+                            ) }}
+                        </div>
+
+                        <div class="pdf-kpi-value">
+                            {{ kpi.get("ergebnis_anzeige", "–") }}
+                        </div>
+
+                    </div>
+
+                {% endfor %}
+
+            </div>
+
+        {% else %}
+
+            <div class="pdf-notice">
+                Aus den vorliegenden Artefakten wurde keine explizite
+                Warteschlangenstruktur als eigener Modellbestandteil
+                abgeleitet.
+            </div>
+
+        {% endif %}
+
+    </article>
+
+
+    <!-- ========================================================
+         08 · Ressourcen
+         ======================================================== -->
+
+    <article class="pdf-card pdf-card-full pdf-card-compact">
+
+        <div class="pdf-card-label">
+            08 · Ressourcen
+        </div>
+
+
+        {% set systemressourcen =
+            ressourcen.get("systemressourcen", {})
+        %}
+
+
+        {% if modellumfang.get("systemtyp") == "produktion" %}
+
+            {% set relevante_ressourcen =
+                systemressourcen.get("produktion", [])
+            %}
+
+        {% elif modellumfang.get("systemtyp") == "intralogistik" %}
+
+            {% set relevante_ressourcen =
+                systemressourcen.get("intralogistik", [])
+            %}
+
+        {% else %}
+
+            {% set relevante_ressourcen = [] %}
+
+        {% endif %}
+
+
+        <div class="pdf-card-row pdf-card-row-inner">
+
+            <div class="pdf-inner-block">
+
+                <h2>
+                    Systemressourcen
+                </h2>
+
+                {% if relevante_ressourcen %}
+
+                    <div class="pdf-chip-list">
+
+                        {% for ressource in relevante_ressourcen %}
+
+                            <span class="pdf-chip">
+                                {{ ressource }}
+                            </span>
+
+                        {% endfor %}
+
+                    </div>
+
+                {% else %}
+
+                    <span class="pdf-empty">
+                        –
+                    </span>
+
+                {% endif %}
+
+            </div>
+
+
+            <div class="pdf-inner-block">
+
+                <h2>
+                    Im Event Log beobachtet
+                </h2>
+
+                {% set event_log_ressourcen =
+                    ressourcen.get("event_log_ressourcen", [])
+                %}
+
+                {% if event_log_ressourcen %}
+
+                    {% if ressourcen.get("ressourcenattribut") %}
+
+                        <div class="pdf-inline-meta">
+                            Attribut:
+                            <strong>
+                                {{ ressourcen.get("ressourcenattribut") }}
+                            </strong>
+                        </div>
+
+                    {% endif %}
+
+                    <div class="pdf-chip-list">
+
+                        {% for ressource in event_log_ressourcen %}
+
+                            <span class="pdf-chip">
+                                {{ ressource }}
+                            </span>
+
+                        {% endfor %}
+
+                    </div>
+
+                {% else %}
+
+                    <span class="pdf-empty">
+                        Keine Ressourcen im Event Log beobachtet.
+                    </span>
+
+                {% endif %}
+
+            </div>
+
+        </div>
+
+
+        {% set ressourcen_kpis =
+            ressourcen.get("ressourcenbezogene_kpis", [])
+        %}
+
+        {% if ressourcen_kpis %}
+
+            <h3 class="pdf-subheading">
+                Ressourcenbezogene KPI
+            </h3>
+
+            <div class="pdf-kpi-list">
+
+                {% for kpi in ressourcen_kpis %}
+
+                    <div class="pdf-kpi-row">
+
+                        <div class="pdf-kpi-name">
+                            {{ kpi.get(
+                                "bezeichnung",
+                                kpi.get("kpi_id", "KPI")
+                            ) }}
+                        </div>
+
+                        <div class="pdf-kpi-value">
+                            {{ kpi.get("ergebnis_anzeige", "–") }}
+                        </div>
+
+                    </div>
+
+                {% endfor %}
+
+            </div>
+
+        {% endif %}
+
+    </article>
+
+
+    <!-- ========================================================
+         09 · Annahmen und Vereinfachungen
+         ======================================================== -->
+
+    <article class="pdf-card pdf-card-full pdf-card-compact">
+
+        <div class="pdf-card-label">
+            09 · Annahmen und Vereinfachungen
+        </div>
+
+        {% set entscheidungen =
+            annahmen.get("modellierungsentscheidungen", {})
+        %}
+
+        {% if entscheidungen %}
+
+            <div class="pdf-property-grid">
+
+                {% for schluessel, wert in entscheidungen.items() %}
+
+                    {# Prozessnotation steht bereits in der Projektübersicht #}
+
+                    {% if schluessel != "prozessnotation"
+                          and wert is not none
+                          and wert != ""
+                          and wert != [] %}
+
+                        <div class="pdf-property">
+
+                            <div class="pdf-property-label">
+                                {{ schluessel
+                                    | replace("_", " ")
+                                }}
+                            </div>
+
+                            <div class="pdf-property-value">
+
+                                {% if wert is mapping %}
+
+                                    {% for name, inhalt in wert.items() %}
+
+                                        <div class="pdf-structured-value">
+
+                                            <span class="pdf-muted">
+                                                {{ name
+                                                    | replace("_", " ")
+                                                }}:
+                                            </span>
+
+                                            {% if inhalt is iterable
+                                                  and inhalt is not string
+                                                  and inhalt is not mapping %}
+
+                                                {{ inhalt | join(", ") }}
+
+                                            {% else %}
+
+                                                {{ inhalt }}
+
+                                            {% endif %}
+
+                                        </div>
+
+                                    {% endfor %}
+
+                                {% elif wert is iterable
+                                      and wert is not string
+                                      and wert is not mapping %}
+
+                                    {{ wert | join(", ") }}
+
+                                {% else %}
+
+                                    {{ wert }}
+
+                                {% endif %}
+
+                            </div>
+
+                        </div>
+
+                    {% endif %}
+
+                {% endfor %}
+
+            </div>
+
+        {% else %}
+
+            <span class="pdf-empty">
+                Keine Modellierungsentscheidungen dokumentiert.
+            </span>
+
+        {% endif %}
+
+
+        {% set schwellwert =
+            annahmen.get("schwellwert_auswirkung", {})
+        %}
+
+        {% if schwellwert %}
+
+            <h3 class="pdf-subheading">
+                Auswirkung des Discovery-Schwellwerts
+            </h3>
+
+            <div class="pdf-compact-structure">
+
+                {% for schluessel, wert in schwellwert.items() %}
+
+                    {% if wert %}
+
+                        <div class="pdf-compact-structure-row">
+
+                            <div class="pdf-compact-structure-label">
+                                {{ schluessel | replace("_", " ") }}
+                            </div>
+
+                            <div class="pdf-compact-structure-value">
+
+                                {% if wert is iterable
+                                      and wert is not string
+                                      and wert is not mapping %}
+
+                                    {{ wert | join(", ") }}
+
+                                {% else %}
+
+                                    {{ wert }}
+
+                                {% endif %}
+
+                            </div>
+
+                        </div>
+
+                    {% endif %}
+
+                {% endfor %}
+
+            </div>
+
+        {% endif %}
+
+    </article>
+
+    <!-- ========================================================
+         10 · Datenauswahl und Daten
+         ======================================================== -->
+
+         <article class="pdf-card pdf-card-full">
+
+            <!-- Überschrift und erster Inhaltsblock zusammenhalten -->
+            <div class="pdf-card-start">
+    
+                <div class="pdf-card-label">
+                    10 · Datenauswahl und Daten
+                </div>
+    
+                {% set datenquellen =
+                    daten.get("datenquellen", [])
+                %}
+    
+                {% if datenquellen %}
+    
+                    <h2>
+                        Datenquellen
+                    </h2>
+    
+                    <div class="pdf-source-list">
+    
+                        {% for quelle in datenquellen %}
+    
+                            <div class="pdf-source-row">
+    
+                                <div class="pdf-source-name">
+                                    {{ quelle.get(
+                                        "bezeichnung",
+                                        "Datenquelle"
+                                    ) }}
+                                </div>
+    
+                                <div class="pdf-source-meta">
+    
+                                    {% if quelle.get("quellsystemtyp") %}
+                                        <span>
+                                            {{ quelle.get("quellsystemtyp") }}
+                                        </span>
+                                    {% endif %}
+    
+                                    {% if quelle.get("quellenart") %}
+                                        <span>
+                                            {{ quelle.get("quellenart") }}
+                                        </span>
+                                    {% endif %}
+    
+                                    {% if quelle.get("konkretes_quellsystem") %}
+                                        <span>
+                                            {{ quelle.get("konkretes_quellsystem") }}
+                                        </span>
+                                    {% endif %}
+    
+                                </div>
+    
+                            </div>
+    
+                        {% endfor %}
+    
+                    </div>
+    
+                {% else %}
+    
+                    <span class="pdf-empty">
+                        Keine Datenquellen dokumentiert.
+                    </span>
+    
+                {% endif %}
+    
+            </div>
+    
+    
+            <!-- Datenprofil -->
+    
+            {% set profile =
+                daten.get("profile", [])
+            %}
+    
+            {% if profile %}
+    
+                <h3 class="pdf-subheading">
+                    Datenprofil
+                </h3>
+    
+                {% for profil in profile %}
+    
+                    <div class="pdf-data-metrics">
+    
+                        <div class="pdf-data-metric">
+                            <strong>
+                                {{ profil.get("zeilenanzahl", "–") }}
+                            </strong>
+                            <span>
+                                Zeilen
+                            </span>
+                        </div>
+    
+                        <div class="pdf-data-metric">
+                            <strong>
+                                {{ profil.get("spaltenanzahl", "–") }}
+                            </strong>
+                            <span>
+                                Spalten
+                            </span>
+                        </div>
+    
+                        <div class="pdf-data-metric">
+                            <strong>
+                                {{ profil.get("echte_fehlwerte", "–") }}
+                            </strong>
+                            <span>
+                                Fehlwerte
+                            </span>
+                        </div>
+    
+                        <div class="pdf-data-metric">
+                            <strong>
+                                {{ profil.get("exakte_duplikate", "–") }}
+                            </strong>
+                            <span>
+                                Duplikate
+                            </span>
+                        </div>
+    
+                    </div>
+    
+                {% endfor %}
+    
+            {% endif %}
+    
+    
+            <!-- Betrachteter Zeitraum -->
+    
+            {% set event_log =
+                daten.get("event_log", {})
+            %}
+    
+            {% if event_log.get("zeitraum_von")
+                  or event_log.get("zeitraum_bis") %}
+    
+                <h3 class="pdf-subheading">
+                    Betrachteter Zeitraum
+                </h3>
+    
+                <div class="pdf-kv-list">
+    
+                    <div class="pdf-kv-row">
+    
+                        <div class="pdf-kv-label">
+                            Von
+                        </div>
+    
+                        <div class="pdf-kv-value">
+                            {{ event_log.get("zeitraum_von") or "–" }}
+                        </div>
+    
+                    </div>
+    
+                    <div class="pdf-kv-row">
+    
+                        <div class="pdf-kv-label">
+                            Bis
+                        </div>
+    
+                        <div class="pdf-kv-value">
+                            {{ event_log.get("zeitraum_bis") or "–" }}
+                        </div>
+    
+                    </div>
+    
+                </div>
+    
+            {% endif %}
+    
+        </article>
+    
+    </div>
+    
+    
+    <!-- ================================================================
+         11 · Darstellung der Vorgänge des Systems
+         ================================================================ -->
+    
+    <section class="pdf-section">
+    
+        <article class="pdf-card pdf-card-full pdf-process-card">
+    
+            <div class="pdf-card-label">
+                11 · Darstellung der Vorgänge des Systems
+            </div>
+    
+    
+            <!-- Directly-Follows Graph -->
+    
+            {% if prozessdarstellung.get("dfg_svg_inline") %}
+    
+                <h2>
+                    Directly-Follows Graph
+                </h2>
+    
+                <div class="pdf-process-figure pdf-process-figure-dfg">
+                    {{ prozessdarstellung.get("dfg_svg_inline") | safe }}
+                </div>
+    
+            {% endif %}
+    
+    
+            <!-- Gewähltes Prozessmodell -->
+    
+            <h2 class="pdf-process-heading">
+                Prozessmodell – {{ prozessdarstellung.get("notation_anzeige", "–") }}
+            </h2>
+    
+            {% if prozessdarstellung.get("svg_inline") %}
+    
+                <div class="pdf-process-figure pdf-process-figure-model">
+                    {{ prozessdarstellung.get("svg_inline") | safe }}
+                </div>
+    
+            {% elif prozessdarstellung.get("relativer_pfad") %}
+    
+                <div class="pdf-notice">
+    
+                    <strong>
+                        Prozessmodell vorhanden
+                    </strong>
+    
+                    <div>
+                        Die grafische Darstellung ist im zugehörigen
+                        Prozessmodell-Artefakt verfügbar.
+                    </div>
+    
+                </div>
+    
+            {% else %}
+    
+                <span class="pdf-empty">
+                    Keine grafische Prozessdarstellung verfügbar.
+                </span>
+    
+            {% endif %}
+    
+    
+            <!-- Optionaler fachlicher Validierungsvermerk -->
+    
+            {% if validierung.get("validierungsvermerk") %}
+    
+                <div class="pdf-validation-note">
+    
+                    <div class="pdf-validation-label">
+                        Validierungsvermerk
+                    </div>
+    
+                    <div>
+                        {{ validierung.get("validierungsvermerk") }}
+                    </div>
+    
+                </div>
+    
+            {% endif %}
+    
+        </article>
+    
+    </section>
+    
+    
+    <!-- ================================================================
+         A · Technische Nachvollziehbarkeit
+         ================================================================ -->
+    
+    <section class="pdf-section">
+    
+        <article class="pdf-card pdf-card-full pdf-technical-card">
+    
+            <div class="pdf-card-label">
+                A · Technische Nachvollziehbarkeit
+            </div>
+    
+            <h2>
+                Artefaktreferenzen
+            </h2>
+    
+    
+            <!-- Technische Metadaten -->
+    
+            <div class="pdf-tech-meta">
+    
+                <div class="pdf-tech-row">
+    
+                    <div class="pdf-tech-label">
+                        Projekt-ID
+                    </div>
+    
+                    <div class="pdf-tech-value">
+                        {{ projekt.get("projekt_id", "–") }}
+                    </div>
+    
+                </div>
+    
+                <div class="pdf-tech-row">
+    
+                    <div class="pdf-tech-label">
+                        K*-ID
+                    </div>
+    
+                    <div class="pdf-tech-value">
+                        {{ modell.get("k_stern_id", "–") }}
+                    </div>
+    
+                </div>
+    
+                <div class="pdf-tech-row">
+    
+                    <div class="pdf-tech-label">
+                        Validierungslauf-ID
+                    </div>
+    
+                    <div class="pdf-tech-value">
+                        {{ modell.get("validierungslauf_id", "–") }}
+                    </div>
+    
+                </div>
+    
+                <div class="pdf-tech-row">
+    
+                    <div class="pdf-tech-label">
+                        Gesamtprüfsumme
+                    </div>
+    
+                    <div class="pdf-tech-value pdf-tech-hash">
+                        {{ lineage.get("gesamtpruefsumme", "–") }}
+                    </div>
+    
+                </div>
+    
+            </div>
+    
+    
+            <!-- Herkunft der Modellinformationen -->
+    
+            {% set lineage_informationen =
+                lineage.get("informationen", [])
+            %}
+    
+            {% if lineage_informationen %}
+    
+                <h2 class="pdf-lineage-heading">
+                    Herkunft der Modellinformationen
+                </h2>
+    
+                <table class="pdf-lineage-table">
+    
+                    <thead>
+    
+                        <tr>
+                            <th>
+                                Modellbestandteil
+                            </th>
+                            <th>
+                                Quelle
+                            </th>
+                            <th>
+                                Strukturreferenz
+                            </th>
+                            <th>
+                                Übernahmeart
+                            </th>
+                        </tr>
+    
+                    </thead>
+    
+                    <tbody>
+    
+                        {% for eintrag in lineage_informationen %}
+    
+                            <tr>
+    
+                                <td>
+                                    {{ eintrag.get(
+                                        "bestandteil_id",
+                                        "–"
+                                    ) }}
+                                </td>
+    
+                                <td>
+                                    {{ eintrag.get(
+                                        "herkunftsartefakt",
+                                        "–"
+                                    ) }}
+                                </td>
+    
+                                <td class="pdf-lineage-reference">
+                                    {{ eintrag.get(
+                                        "strukturreferenz",
+                                        "–"
+                                    ) }}
+                                </td>
+    
+                                <td>
+                                    {{ eintrag.get(
+                                        "uebernahmeart",
+                                        "–"
+                                    ) }}
+                                </td>
+    
+                            </tr>
+    
+                        {% endfor %}
+    
+                    </tbody>
+    
+                </table>
+    
+            {% else %}
+    
+                <div class="pdf-empty">
+                    Keine Informationen zur Herkunft der
+                    Modellinformationen dokumentiert.
+                </div>
+    
+            {% endif %}
+    
+        </article>
+    
+    </section>
+    
+    </body>
+    </html>
