@@ -1,448 +1,448 @@
-# Masterarbeit
-Dieses Repository enthält die softwaretechnische Instanziierung eines im Rahmen der Masterarbeit entwickelten methodischen Frameworks.
+# Datengetriebene konzeptionelle Modellierung
 
-Das Framework beschreibt, wie historische Ereignisdaten aus Produktions- und Intralogistiksystemen systematisch extrahiert, aufbereitet und mittels Process Mining analysiert werden können, um daraus Bestandteile eines konzeptionellen Modells für eine spätere ereignisbasierte Simulation abzuleiten. Die Software wird als ausführbares Minimum Viable Product (MVP) umgesetzt und soll die praktische Anwendung der einzelnen Frameworkschritte unterstützen.
+Dieses Repository enthält einen ausführbaren Streamlit-Prototyp zur systematischen
+Aufbereitung historischer Ereignisdaten, zur Process-Mining-Analyse und zur Ableitung eines
+fachlich validierten konzeptionellen Modells. Die Anwendung führt durch zehn aufeinander
+aufbauende Frameworkschritte und bewahrt die technische Lineage der erzeugten Artefakte.
 
-## Zielsetzung
-Ziel des Projekts ist die Entwicklung einer minimalen, ausführbaren Softwareanwendung, welche die Anwendung des methodischen Frameworks unterstützt, der Fallstudie als Werkzeug dient und hoffentlich späteren Interessierten Studenten zugute kommt.
+## Wissenschaftlicher Zweck und Prototypstatus
 
-Die geplante Verarbeitung umfasst insbesondere (siehe dazu auch die zehn Schritte des theoretischen Frameworks):
-1. Import historischer Daten,
-2. Auswahl und Zuordnung relevanter Datenspalten,
-3. Transformation und Aufbereitung der Rohdaten,
-4. Prüfung der Datenqualität,
-5. Erstellung eines für Process Mining geeigneten Event Logs,
-6. Durchführung ausgewählter Process-Mining-Analysen,
-7. Aggregation und Aufbereitung der Analyseergebnisse,
-8. Ableitung von Bestandteilen eines konzeptionellen Modells,
-9. Ergänzung und Validierung durch die anwendende Person,
-10. Speicherung und Export der erzeugten Ergebnisse.
+Die Software ist die technische Instanziierung des im Rahmen der Masterarbeit
+**„Datengetriebene konzeptionelle Modellierung von Produktions- und
+Intralogistiksystemen: Framework zur systematischen Nutzung historischer Ereignisdaten“**
+entwickelten Frameworks. Sie unterstützt die Fallstudie und macht die einzelnen Arbeitsschritte
+reproduzierbar ausführbar.
 
-Die Anwendung soll dabei keine vollständig automatisierte Modellbildung darstellen. Fachliche Entscheidungen, Domänenwissen und menschliche Validierung bleiben über den gesamten Ablauf hinweg erforderlich.
+Im Mittelpunkt steht die Forschungsfrage:
 
-## Wissenschaftlicher Kontext
-Das Repository begleitet die Masterarbeit mit dem Titel: **Datengetriebene konzeptionelle Modellierung von Produktions- und Intralogistiksystemen: Framework zur systematischen Nutzung historischer Ereignisdaten**
+> Wie können historische Ereignisdaten aus industriellen Informationssystemen systematisch
+> aufbereitet und mit Process Mining analysiert werden, um Elemente für ein konzeptionelles
+> Modell eines Produktions- oder Intralogistiksystems abzuleiten?
 
-Im Mittelpunkt steht folgende Forschungsfrage:
-> Wie können historische Ereignisdaten aus industriellen Informationssystemen systematisch aufbereitet und mit Process Mining analysiert werden, um Elemente für ein konzeptionelles Modell eines Produktions- oder Intralogistiksystems abzuleiten?
+Das methodische Framework ist das primäre Forschungsartefakt. Die Anwendung ist ein Minimum
+Viable Product (MVP), kein fertiges Simulationswerkzeug und keine vollautomatische
+Modellgenerierung. Fachliche Auswahl, Domänenwissen und menschliche Validierung bleiben bewusst
+Bestandteil des Ablaufs.
 
-Das methodische Framework stellt das primäre Forschungsartefakt dar. Die Software dient als praktische Instanziierung dieses Frameworks und wird im Rahmen einer Fallstudie demonstriert und evaluiert.
+Nicht zum Funktionsumfang gehören insbesondere:
 
-## Abgrenzung
-Das Projekt umfasst die Verarbeitung historischer Ereignisdaten bis zur Erstellung eines konzeptionellen Modells. Nicht Bestandteil des MVP sind insbesondere:
-- die vollständige automatisierte Generierung eines operationellen Simulationsmodells,
-- die Ausführung einer ereignisbasierten Simulation,
-- die Verarbeitung kontinuierlich eintreffender Echtzeitdatenströme,
-- die automatische Umsetzung oder Bewertung identifizierter Verbesserungsmaßnahmen.
+- die Erzeugung oder Ausführung eines operationellen Simulationsmodells,
+- die Verarbeitung kontinuierlicher Echtzeitdatenströme,
+- eine automatische Bewertung oder Umsetzung von Verbesserungsmaßnahmen,
+- eine dauerhaft garantierte Cloud-Persistenz,
+- eine XLSX-Reportgenerierung.
 
-Das erzeugte konzeptionelle Modell kann jedoch als Grundlage für eine spätere technische Umsetzung in einer Simulationssoftware dienen.
+## Betriebsarten, Authentifizierung und Mandantentrennung
 
-## Aktueller Funktionsumfang
+Die Anwendung bietet zwei voneinander getrennte Einstiege:
 
-Die Streamlit-Anwendung setzt alle zehn Frameworkschritte um. Schritt 2 übernimmt als
-fachliche Eingabe bereitgestellte CSV- oder XLSX-Datensätze (D) und erzeugt drei persistente
-Ausgaben: den Datenquellenkatalog (Q), das Datenprofil (R) und den aufbereiteten
-Zwischendatensatz (T). Der Projektkontext dient dabei nur der technischen Zuordnung.
+- **Ohne Anmeldung testen** erzeugt ein isoliertes Gastprojekt. Der kryptografisch zufällige
+  Besitznachweis liegt nur im Streamlit Session State. Die Standard-TTL beträgt 24 Stunden seit
+  der letzten Aktivität; bei Appstarts werden abgelaufene Gastprojekte opportunistisch
+  bereinigt. Vor Ablauf kann das Projekt als portables Archiv exportiert werden.
+- **Anmelden / Kursgruppe öffnen** verwendet Streamlits native OIDC-Funktionen `st.login`,
+  `st.user` und `st.logout`. Die Anwendung speichert weder Passwörter noch OIDC-Token. Private
+  Kursgruppen, Mitgliedschaften, Projektteams, Einladungen, Fortschritt, Aufbewahrung und
+  Kursarchive werden serverseitig autorisiert verwaltet.
 
-Die lokale Struktur lautet:
+Teilnehmende sehen nur Projekte, denen sie aktiv zugewiesen sind. Gruppenleitungen können den
+Fortschritt der Gruppenprojekte einsehen, erhalten durch das reine Öffnen aber keinen
+Bearbeitungszugriff. Eine bekannte UUID ist kein Berechtigungsnachweis; Projekt- und
+Gruppenoperationen prüfen den persistenten Zugriffskontext erneut.
 
-```text
-workspace/projects/<projekt-id>/
-├── raw/<sha256>/<sicherer-dateiname>
-├── profiles/<import-id>.json
-├── interim/<zwischendatensatz-id>.csv.gz
-├── interim/<zwischendatensatz-id>.schema.json
-├── interim/<zwischendatensatz-id>.transformation.json
-├── mapping_tables/<mapping-id>.json
-├── mappings/<event-log-konfigurations-id>.json
-├── event_logs/<event-log-id>.csv.gz
-├── event_logs/<event-log-id>.schema.json
-├── event_logs/<event-log-id>.lineage.json
-├── quality/<freigabe-id>.release.json
-├── process_mining/<analyse-id>.discovery.json
-├── process_mining/<analyse-id>.dfg.json
-├── process_mining/<analyse-id>.process-tree.ptml
-├── process_mining/<analyse-id>.model.{ptml|pnml|bpmn}
-├── aggregation/<aggregations-id>.aggregation.json
-├── aggregation/<sollmodell-id>.target.{original|replay}.pnml
-├── aggregation/<conformance-id>.conformance.{json|csv}
-├── aggregation/<auswertungs-id>.deviations.{json|csv}
-├── model_derivations/<modellableitungs-id>/
-│   ├── preliminary-conceptual-model-k.json
-│   └── open-components-o.json
-└── model_validations/<validierungslauf-id>/
-    └── validated-conceptual-model-k-star.json
-```
+Einladungstoken besitzen mindestens 256 Bit Entropie, werden nur einmal vollständig angezeigt
+und in SQLite ausschließlich als SHA-256-Hash gespeichert. Der initiale Systemadmin wird über
+ein exaktes Paar aus OIDC-Issuer und Subject konfiguriert; E-Mail-Adressen dienen nicht als
+Identitätsschlüssel. Ohne OIDC-Konfiguration bleibt der Gastmodus verfügbar, es werden jedoch
+keine Kurs- oder Administrationsrechte vergeben.
 
-## Community-Cloud-Betrieb, Gastmodus und private Kursgruppen
+## Funktionsumfang und zehn Frameworkschritte
 
-Die öffentlich erreichbare Streamlit-App trennt zwei Betriebsarten. **Ohne Anmeldung testen**
-erzeugt ein isoliertes Gastprojekt mit einem kryptografisch zufälligen, nur im Session State
-gehaltenen Besitznachweis. Es gilt der sichtbare Hinweis: „Dieses Projekt wird nur temporär
-gespeichert. Exportieren Sie es, wenn Sie später weiterarbeiten möchten.“ Die Standard-TTL
-beträgt 24 Stunden seit der letzten Aktivität und kann mit
-`FRAMEWORK_MVP_GUEST_TTL_HOURS` (1–720) verändert werden. Streamlit liefert kein verlässliches
-Browser-Tab-Schließereignis; sofortige Löschung gibt es deshalb ausschließlich über
-**Demo beenden und Daten löschen**. Zusätzlich läuft bei Appstarts eine begrenzte,
-opportunistische Bereinigung.
+Die Anwendung zeigt oberhalb jeder Fachseite genau eine zentrale Fortschrittsanzeige. Sie
+berücksichtigt den aktuellen Frameworkschritt und dessen fachlichen Unterschritt und gliedert den
+Ablauf in drei Phasen:
 
-**Anmelden / Kursgruppe öffnen** verwendet ausschließlich Streamlits native OIDC-Funktionen
-`st.login`, `st.user` und `st.logout`. Die Anwendung speichert weder Passwörter noch OIDC-Token.
-Eine fehlende OIDC-Konfiguration lässt den Gastmodus funktionsfähig, schaltet aber keine
-Kursfunktion und insbesondere keine Administration frei. Der lokale Auth-Testmodus ist mit
-`FRAMEWORK_MVP_LOCAL_AUTH_TEST_MODE=true` ausdrücklich zu aktivieren und standardmäßig aus.
+1. **Phase 1 – Aufbereitung der Datenbasis:** Schritte 1–5
+2. **Phase 2 – Datengetriebene Analyse des Systems:** Schritte 6–7
+3. **Phase 3 – Überführung in das konzeptionelle Modell:** Schritte 8–10
 
-### Community Cloud und OIDC konfigurieren
+Technische Anzeigeabschnitte zählen nicht als fachliche Unterschritte. Der aktuelle Fortschritt
+wird für Gast- und Kursprojekte persistiert und im Kursdashboard mit derselben zentralen
+Definition ausgewertet.
 
-1. Die App bleibt in Community Cloud öffentlich. Beim OIDC-Provider wird als Callback exakt
-   `https://<app-name>.streamlit.app/oauth2callback` registriert. Lokal lautet er
-   `http://localhost:8501/oauth2callback`.
-2. `.streamlit/secrets.toml.example` nach `.streamlit/secrets.toml` beziehungsweise in die
-   Community-Cloud-Secrets übertragen und ausschließlich die Platzhalter ersetzen. Die echte
-   Datei und Secrets nie committen.
-3. Unter `[auth]` werden `redirect_uri`, ein zufälliges `cookie_secret`, `client_id`,
-   `client_secret` und `server_metadata_url` gesetzt. `Authlib>=1.3.2,<2.0` ist als
-   Laufzeitabhängigkeit gebunden.
-4. Der erste Systemadmin wird ausschließlich mit einem oder mehreren
-   `[[systemadmin.identities]]`-Einträgen aus exakt passendem OIDC-Issuer und Subject gebootstrapt.
-   E-Mail ist kein Identitätsschlüssel. Danach kann der Systemadmin angemeldete Personen als
-   Gruppenleitung freischalten oder die Freigabe entziehen.
+### 1. Projektrahmen definieren
 
-Gruppenleitungen verwalten private, nicht suchbare Kursgruppen, Mitgliedschaften,
-Einmal-/Mehrfach-Einladungen, Teams, Fortschritt, Aufbewahrung und Archive. Einladungstoken
-besitzen mindestens 256 Bit Entropie, werden nur einmal vollständig angezeigt und in SQLite nur
-als SHA-256 gespeichert. Teilnehmer sehen ausschließlich aktiv zugewiesene Projekte. Eine UUID
-ist nie ein Berechtigungsnachweis; jede Operation prüft den persistenten Zustand erneut.
+Erfasst Projektbezeichnung, Problemstellung, Systemgrenze, Untersuchungszwecke, logistische
+Zielgrößen, Systemklassifikation, gewünschte Auswertungen und KPIs. Daraus entstehen der
+Untersuchungsauftrag U und das Systemprofil S.
 
-### Portable Sicherung
+### 2. ETL durchführen
 
-Projektarchive verwenden ZIP-Formatversion 1 mit `manifest.json`, `project/project.json`,
-projektbezogenen JSON-Tabellen, `artifacts/`, `reports/` und `README.txt`. Manifest und jede Datei
-werden über Größen und SHA-256 geprüft. Benutzer, Rollen, Einladungen, Sessions, Tokens, Secrets,
-globale SQLite-Datei, fremde Projekte, Caches und temporäre Dateien sind ausgeschlossen.
-Projektarchive sind **nicht verschlüsselt** und können Originaldaten enthalten.
+Importiert CSV- oder XLSX-Dateien, dokumentiert ihre Datenquelle und erzeugt den
+Datenquellenkatalog Q, das Datenprofil R und einen aufbereiteten Zwischendatensatz T. CSV-
+Struktur, Kodierung und Kopfzeile beziehungsweise Excel-Arbeitsblatt und Kopfzeile werden vor
+dem Speichern geprüft.
 
-Importe werden vor jedem Schreibzugriff auf ZIP-Struktur, Pfadtraversal, Symlinks,
-Verschlüsselung, Doppelpfade, CRC, erlaubte Pfade/Dateitypen, Ressourcenlimits, Manifest,
-Prüfsummen, Tabellenschema und Lineage geprüft. Es wird kein unkontrolliertes `extractall`
-verwendet. Format-v1-Konflikte werden nur identisch und nach Autorisierung wieder geöffnet;
-abweichende Inhalte werden nicht überschrieben. Kursarchive enthalten Projektarchive und
-fachliche Teamhinweise, übernehmen aber weder aktive Einladungen noch Zugriffsrechte.
-
-Die Standardgrenzen betragen 250 MB komprimiert, 1 GB entpackt, 5.000 Dateien, 250 MB je Datei,
-Kompressionsverhältnis 100 und 512 UTF-8-Bytes je Pfad. Sie sind über
-`FRAMEWORK_MVP_ARCHIVE_MAX_COMPRESSED_MB`, `FRAMEWORK_MVP_ARCHIVE_MAX_UNCOMPRESSED_MB`,
-`FRAMEWORK_MVP_ARCHIVE_MAX_FILES`, `FRAMEWORK_MVP_ARCHIVE_MAX_FILE_MB`,
-`FRAMEWORK_MVP_ARCHIVE_MAX_RATIO` und `FRAMEWORK_MVP_ARCHIVE_MAX_PATH_BYTES` konfigurierbar.
-
-### Persistenz, Migration und Skalierungsgrenze
-
-Schemaversion 11 ergänzt Benutzer, globale Rollen, Kursgruppen, Mitgliedschaften, gehashte
-Einladungen, Projektmandanten/-teams, persistierten Fortschritt, Aufbewahrung sowie
-Archiv-/Bereinigungsmetadaten. Vorhandene Projekte werden verlustfrei als
-`legacy_unassigned` markiert, niemals öffentlich aufgelistet und sind nur für einen expliziten
-Systemadmin kontrolliert übernehmbar. SQLite läuft mit Foreign Keys, WAL, fünf Sekunden
-`busy_timeout` und kurzen Transaktionen.
-
-Streamlit Community Cloud und ihr lokaler Speicher besitzen keine Persistenzgarantie. Diese
-Variante ist für MVP, Fallstudie und überschaubare Lehrveranstaltungen bestimmt. Vor Ablauf ist
-ein Projekt- oder Kursarchiv die vorgesehene portable Sicherung. Für größere Parallelität,
-größere Datenmengen oder dauerhaft produktiven Betrieb kann später ein anderer Speicheradapter
-hinter den vorhandenen Ports ergänzt werden.
-
-## Geplante Funktionen
-### Datenimport
-Die Anwendung importiert strukturierte historische Daten aus Dateien. Direkte Abfragen aus
-betrieblichen Quellsystemen oder Datenbanken sind nicht Bestandteil von Schritt 2.
-
-Aktuell unterstützte Formate sind:
-- CSV,
-- Excel,
-
-Direkte Datenbankverbindungen und weitere tabellarische Formate sind erst für spätere
-Ausbaustufen vorgesehen.
-
-Bekannte Einschränkung: Beim Lesen einzelner XLSX-Dateien kann Openpyxl auf unbekannte oder
-bedingte Formatierungserweiterungen hinweisen. Diese Warnungen betreffen die Darstellung der
-Arbeitsmappe, werden nicht global unterdrückt und verändern weder die hochgeladene Originaldatei
-noch die importierten Zellwerte.
-
-### Semantisches Mapping
-
-Schritt 3 erhält den aktiven, integritätsgeprüften Zwischendatensatz (T) und erzeugt
-ausschließlich die optionale Mappingtabelle (M). Darin können vorhandene technische
-Spaltenbezeichnungen und tatsächlich enthaltene technische Werte freien fachlichen
-Bezeichnungen zugeordnet werden. Wertzuordnungen bewahren Quellspalte, technischen Typ und Wert
-als reproduzierbare Referenz. T selbst wird weder umbenannt noch inhaltlich verändert.
-
-Wenn keine Interpretation erforderlich ist, wird ein ausdrücklich bestätigtes leeres M
-gespeichert. Fall-ID, Aktivität, Zeitstempel, Ressourcen und weitere Event-Log-Rollen werden
-erst in Schritt 4 konfiguriert. Bestehende Konfigurationen dafür bleiben im kompatiblen
-`mappings`-Artefaktformat erhalten und werden nicht als M interpretiert.
-
-### Datenaufbereitung
-Das persistierte Profil umfasst die Strukturkennzahlen, fachlich benannte technische Datentypen,
-potenzielle Fehlwertplatzhalter, Modus beziehungsweise Ausprägungsanzahl kategorialer Spalten
-sowie die numerischen Kennzahlen und IQR-Ausreißergrenzen aus Abschnitt 3.6.6. Quartile werden
-nach Gleichung 3.10 berechnet; die Stichprobenstandardabweichung gehört nicht zu (R).
-
-Neue Transformationspläne bieten ausschließlich:
+Transformationspläne unterstützen:
 
 - Datentyp konvertieren,
 - Werte ersetzen,
 - exakte Tupel-Duplikate entfernen,
-- vollständig leere Spalten entfernen.
+- vollständig leere Spalten entfernen,
+- Zeilen anhand expliziter Text-, Leerwert-, Zahlen-, Zeit- oder Mengenbedingungen löschen,
+- ein festes Präfix oder Suffix entfernen,
+- Text zwischen zwei Begrenzern extrahieren.
 
-Die Auswahl und Ausführung erfolgt ausdrücklich durch die anwendende Person; ein unveränderter
-Durchlauf ist zulässig. Separat aufbereitete Datensätze können per Left, Right, Inner oder Outer
-Join verknüpft werden. Fachliche Interpretationen werden erst in Schritt 3 in M erfasst, neue beziehungsweise
-kombinierte Attribute erst in Schritt 4.
+Die Textbereinigung verwendet für Live-Vorschau und tatsächliche Transformation dieselbe reine
+Funktion. Die Vorschau zeigt unterschiedliche, nichtleere Original- und Ergebniswerte, verändert
+aber weder T noch den Transformationsplan. Nichttreffer bleiben unverändert. Lange Zellinhalte
+werden nur für die Darstellung gekürzt.
 
-### Event-Log-Erstellung
+Mehrere separat aufbereitete Datensätze können kontrolliert per LEFT-, RIGHT-, INNER- oder
+OUTER-Join verknüpft werden. Vor der Ausführung werden Kardinalität, Trefferquote, erwartete
+Zeilenzahl und Risiken einer Zeilenvervielfachung angezeigt.
 
-Schritt 4 verwendet das zentrale Projekt, den aktiven integritätsgeprüften Zwischendatensatz T
-und optional die getrennt gespeicherte Mappingtabelle M. Die Event-Log-Konfiguration enthält
-Fallidentifikation, Aktivitätsdefinition, Zeitstempelquellen, Strukturart, die optionalen
-semantischen Rollen `resource`, `start_timestamp`, `end_timestamp` und `lifecycle` sowie die
-ausdrücklich ausgewählten zusätzlichen Attribute; diese Angaben werden nicht in M gespeichert.
-Konfigurationsversion 3 führt diese Rollen ein. Version 1 und 2 bleiben mit ihrer bisherigen
-Semantik lesbar und reproduzierbar.
+### 3. Semantisches Mapping
 
-Bei ereignisorientierten Daten entsteht aus jeder Zeile von T genau ein Ereignis. Die Aktivität
-kann aus einer vorhandenen Spalte oder aus mindestens zwei geordneten Attributen mit optionalem
-Verknüpfungselement gebildet werden. Bei breiten Zeitstempeldaten entsteht für jeden vorhandenen
-Wert einer ausgewählten Zeitstempelspalte ein Ereignis mit der dafür festgelegten
-Aktivitätsbeschreibung. Ressource und Lifecycle können dort je Zeitstempelzuordnung festgelegt
-werden; eine Start-/Endpaarung wird nicht abgeleitet. Nicht ausgewählte Attribute werden nicht
-nach E übernommen.
+Erzeugt optional die Mappingtabelle M. Sie ordnet vorhandene technische Spaltenbezeichnungen
+oder tatsächlich vorkommende, typisierte Werte fachlichen Bezeichnungen zu. T wird weder
+umbenannt noch verändert. Wenn keine Interpretation erforderlich ist, kann ein ausdrücklich
+leeres M gespeichert werden. Fall-ID, Aktivität, Zeitbezug und weitere Event-Log-Rollen werden
+erst in Schritt 4 festgelegt.
 
-Spalten- und typisierte Wertzuordnungen aus M werden ausschließlich beim Erzeugen von E
-angewandt; T und M bleiben unverändert. E besitzt mindestens `case_id`, `activity` und
-`timestamp` sowie die konfigurierten optionalen kanonischen Spalten, wird fallweise chronologisch
-und bei Gleichständen stabil geordnet und als CSV.GZ mit Schema- und Lineage-JSON gespeichert.
-Strukturelle Konfigurationsfehler blockieren Schritt 4; fehlende oder nicht interpretierbare
-Ereigniswerte bleiben für das Quality-Gate in Schritt 5 erhalten.
+### 4. Event Log aufbauen
 
-### Datenqualität und Freigabe
+Konfiguriert Fallidentifikation, Aktivitätsdefinition, Zeitstempelquellen, Strukturart und
+zusätzliche Attribute. Das Ergebnis E enthält mindestens die kanonischen Spalten `case_id`,
+`activity` und `timestamp`.
 
-Schritt 5 ist ein nicht veränderndes Quality-Gate für die vollständige, aus der Lineage von E
-abgeleitete Artefaktkette. Es prüft die vier Kriterien aus Tabelle 3.14: nachvollziehbar
-dokumentierte Herkunft und Grundlagen in Q, die Vollständigkeit der für Schritt 4 benötigten
-Daten in T, bei vorhandenem M eindeutige und fachlich verständliche Zuordnungen sowie
-vollständige und interpretierbare Mindestbestandteile in E. Fehlendes, ausdrücklich bestätigt
-leeres und befülltes M werden getrennt behandelt.
+Event-Log-Konfigurationsversion 3 unterstützt zusätzlich die optionalen semantischen Rollen:
 
-Automatische Integritäts- und Vollständigkeitsprüfungen werden mit begründeten menschlichen
-Bewertungen verbunden; die vier Prüfbereiche können nicht deaktiviert werden und es gibt keinen
-numerischen Gesamtscore. Ein Mangel blockiert die Freigabe und führt abhängig von seiner
-Ursache zu Schritt 1, 2, 3 oder 4 zurück. Schritt 5 korrigiert, markiert, filtert, ersetzt oder
-löscht keine Daten und erzeugt weder Maßnahmenplan noch Qualitäts-CSV.
+- Ressourcenspalte → `resource`,
+- Startzeitstempel → `start_timestamp`,
+- Endzeitstempel → `end_timestamp`,
+- Lifecycle-/Statusspalte → `lifecycle`.
 
-Bei vollständig bestandenem Gate bedeutet `E* ← E`, dass eine persistierte Freigabereferenz auf
-exakt den ursprünglichen Event Log entsteht. Event-Log-ID, Prüfsumme, Ereignisreihenfolge,
-Spalten, Werte und Datentypen bleiben unverändert. Der JSON-Freigabebericht dokumentiert Q-, T-,
-M-, Konfigurations- und E-Prüfsummen, Lineage, alle Befunde und die menschlichen Begründungen.
-Beim Laden wird die gesamte Kette erneut validiert. Ältere Qualitätsberichte, Maßnahmenpläne und
-Qualitätskopien bleiben als Legacy-Bestand kontrolliert lesbar, gelten aber nicht als E*.
+Eine technische Quellspalte kann nicht zugleich mehreren Standardrollen und einem allgemeinen
+Attribut zugeordnet werden. In ereignisorientierten Daten werden alle vier Rollen unterstützt.
+Bei breiten Zeitstempeldaten können Ressource und Lifecycle je Zeitstempelzuordnung übernommen
+werden; eine nicht eindeutig vorhandene Start-/Endpaarung wird nicht erfunden.
 
-### Process Mining
-Schritt 6 verwendet ausschließlich eine aktuell gültige E*-Freigabe desselben zentralen
-Projekts und lädt damit das unveränderte ursprüngliche E. Legacy-Qualitätskopien und nicht
-freigegebene Event Logs werden nicht als Analysegrundlage angeboten. Aus dem vollständigen E*
-wird stets ein frequenzbasierter Directly-Follows-Graph mit Häufigkeiten gebildet. Der
-menschlich festgelegte Schwellwert `k ∈ [0,1]` wirkt ausschließlich auf die anschließende
-Prozessentdeckung: Bei `k=0` läuft der reguläre Inductive Miner, bei `k>0` Inductive Miner –
-infrequent. Ein höheres k erhöht den Abstraktionsgrad und kann seltenes Verhalten aus dem
-Prozessmodell ausschließen; der DFG und E* bleiben davon unberührt.
+Konfigurationsversionen 1 und 2 bleiben mit ihrer bisherigen Semantik lesbar und reproduzierbar.
+Insbesondere werden zusätzliche Attribute aus Version 2 weiterhin als allgemeine Attribute
+behandelt. E wird stabil sortiert und als CSV.GZ mit Schema- und Lineage-JSON gespeichert.
 
-Der Inductive Miner erzeugt genau einen Prozessbaum. Die anwendende Person wählt diesen
-Prozessbaum, ein daraus konvertiertes Petrinetz oder BPMN als Prozessmodell P. P wird als PTML,
-PNML beziehungsweise BPMN-XML gespeichert. Die Discovery-Ergebnisse A_D dokumentieren den
-vollständigen DFG, k, Miner-Variante, Notation, PM4Py-Version sowie Referenzen und Prüfsummen.
-Neue Analysen erzeugen keine Varianten- oder gefilterte Event-Log-Arbeitskopie. Bestehende
-Heuristics-Miner- und Filteranalysen bleiben als Legacy lesbar, werden aber nicht im regulären
-Ablauf angeboten. Nach erneuter Integritätsprüfung werden P und A_D an Schritt 7 übergeben.
+### 5. Datenqualität prüfen
 
-Conformance Checking, Token Replay, Fitness, Performance-, Ressourcen-, Engpass- und
-Kennzahlenanalysen gehören nicht zu Schritt 6.
+Prüft die vollständige Artefaktkette Q, T, optional M und E. Automatische Integritäts- und
+Vollständigkeitsprüfungen werden mit begründeten menschlichen Bewertungen kombiniert. Schritt 5
+verändert die Daten nicht. Bei bestandener Prüfung verweist E* unverändert auf E; zusätzlich
+wird ein JSON-Freigabebericht mit Entscheidungen, Referenzen und Prüfsummen gespeichert. Ein
+festgestellter Mangel führt zum fachlich passenden früheren Schritt zurück.
 
-### Ergebnisaggregation
+### 6. Process Mining durchführen
 
-Schritt 7 verwendet ausschließlich das aktive Projekt und die erneut validierte Lineage aus U,
-R, T, E*, P und A_D. Die in U gespeicherten KPI-IDs werden über 16 feste, versionierte
-Definitionen aus A.7 bis A.10 angeboten. Jede Rechengröße wird ausdrücklich einer Profilkennzahl
-aus R oder einer Spalte beziehungsweise Zeit-/Aktivitätsreferenz aus T oder E* zugeordnet. Es
-gibt weder semantisches Raten noch zusätzliche KPIs oder einen Formeleditor. Fehlende oder
-mehrdeutige Operanden führen für genau diese Kennzahl zum Status `nicht_berechenbar`; A_D und
-andere berechenbare Bestandteile bleiben speicherbar.
+Verwendet ausschließlich eine erneut validierte E*-Freigabe. Die Anwendung berechnet einen
+vollständigen frequenzbasierten Directly-Follows-Graph und entdeckt mit PM4Py über den Inductive
+Miner ein Prozessmodell. Der einstellbare Schwellwert `k` beeinflusst nur die Prozessentdeckung,
+nicht E* oder den vollständigen DFG.
 
-Conformance Checking ist unabhängig und optional. Die anwendende Person kann es überspringen,
-eine bestätigte lineare Sollsequenz aus vorhandenen E*-Aktivitäten als Workflow-Petrinetz
-erzeugen oder ein unabhängig erstelltes PNML hochladen. Das in Schritt 6 entdeckte P wird nie zu
-P_Soll erklärt. Der lineare Assistent bildet weder Verzweigungen noch Parallelität,
-Synchronisation oder Schleifen ab. Für komplexe Netze steht WoPeD Next eingebettet mit festem
-HTTPS-Link und Fallback in einen neuen Tab bereit; die Übernahme erfolgt ausschließlich über
-bewussten PNML-Export und Upload.
+Als Prozessmodell P stehen Prozessbaum, Petrinetz und BPMN zur Auswahl. Discovery-Ergebnisse A_D
+und Modellartefakte werden gemeinsam gespeichert. Performance-, Ressourcen- oder
+Engpassanalysen sind nicht Teil dieses Schritts.
 
-PNML-Originalbytes bleiben unverändert. Eine getrennte Replay-Fassung darf eindeutig fehlende
-Anfangs- und Endmarkierungen erst nach menschlicher Bestätigung aus genau einem Quell- und
-Senkenplatz ergänzen. Import, Stellen, Transitionen, Kanten, sichtbare eindeutige Bezeichnungen,
-Workflow-Netz und Soundness werden lokal geprüft. Aktivitäten werden nur exakt oder über ein
-bestätigtes manuelles Mapping verbunden. Token Replay verwendet das vollständige E* und
-dokumentiert produzierte, konsumierte, fehlende und verbleibende Tokens je Fall und aggregiert;
-die Fitness folgt Gleichung 3.13. Diese Ergebnisse bilden A_C.
+### 7. Ergebnisse aggregieren
 
-Die ebenfalls unabhängige Soll-Ist-Zeitauswertung verwendet ausdrücklich zugeordnete
-Soll-Zeitstempel aus T, E* oder einer getrennt gespeicherten CSV-/XLSX-Datei. Fall- und
-ereignisbezogene Schlüssel, Zeitstempel, Aktivitäten und Auftretensnummern werden menschlich
-festgelegt; mehrdeutige Verknüpfungen blockieren die Auswertung. A_V enthält nur direkte
-Zeitabweichungen und deren Klassifikation, keine kausale Erklärung oder Maßnahmenempfehlung.
+Verknüpft die erneut geprüfte Lineage aus U, R, T, E*, P und A_D. Für die in U ausgewählten
+KPIs stehen feste, versionierte Definitionen zur Verfügung; benötigte Operanden werden
+ausdrücklich Profilkennzahlen oder Datenspalten zugeordnet. Nicht eindeutig berechenbare
+Kennzahlen werden entsprechend gekennzeichnet.
 
-A_G speichert keine Kopie von A_D, sondern dessen ID, Pfad und Prüfsumme. Es enthält die
-KPI-Konfigurationen und -Ergebnisse sowie optional Referenzen auf P_Soll, Aktivitätsmapping, A_C,
-Soll-Zeitdaten und A_V. A_G-Artefaktversion 2 ergänzt versionierte strukturierte Ergebnisse für
-Aktivität-Ressourcen-Zuordnungen, Übergangswartezeiten und die zeitbezogene Datenauswahl aus
-Q/R/T/E*. Vollständige kanonische Ressourcen werden automatisch, sonst manuell oder begründet
-als `nicht_moeglich` dokumentiert. Bearbeitungszeit ist `Ende(A) − Start(A)`, Übergangswartezeit
-ist `Start(B) − Ende(A)` und Zwischenankunftszeit basiert auf einem ausdrücklichen
-Ankunftszeitpunkt oder dem ersten gültigen Ereignis je Fall. Negative und nicht auswertbare
-Zeitdifferenzen werden getrennt gezählt. A_G v1 bleibt unverändert lesbar; neue Speicherungen
-schreiben v2. Schemaversion 8 ergänzt dafür ausschließlich eine additive Metadatentabelle.
-Ungespeicherte Vorschauen sind an sämtliche Eingaben und Entscheidungen
-gebunden. Beim Laden und vor der Übergabe werden Lineage, Artefaktversion, Existenz und alle
-Prüfsummen erneut geprüft. Schritt 8 erhält ausschließlich das unveränderte P aus Schritt 6 und
-das gültige A_G.
+Optional können ein unabhängiger Sollprozess, Token-Replay-Conformance-Checking und eine
+ausdrücklich konfigurierte Soll-Ist-Zeitauswertung ergänzt werden. A_G-Version 2 speichert
+zusätzlich strukturierte Aktivität-Ressourcen-Zuordnungen, Übergangswartezeiten und die
+zeitbezogene Datenauswahl. Vollständige kanonische Ressourcen werden automatisch übernommen;
+andernfalls ist eine manuelle Zuordnung oder die begründete Entscheidung `nicht_moeglich`
+erforderlich. A_G-Version 1 bleibt lesbar.
 
-### Modellbestandteile ableiten
+Die fachliche Vorschau wird neu berechnet und anschließend ohne redundante
+Bestätigungscheckbox mit einem primären Button gespeichert und an Schritt 8 übergeben.
 
-Schritt 8 lädt ausschließlich die aktive und erneut validierte Lineage U, S, Q, R, T, E*, P
-und A_G. Q wird dabei nur über die in T referenzierten Importe aufgelöst; P muss exakt der
-Prozessmodellreferenz in A_G entsprechen. P_Soll und externe Soll-Zeitdaten sind keine
-eigenständigen Quellen von Schritt 8. A_D, A_C, KPI-Ergebnisse und A_V werden ausschließlich
-über das unveränderte A_G berücksichtigt.
+### 8. Modellbestandteile ableiten
 
-Die elf Bestandteile aus Abschnitt 2.3.1 werden in stabiler Reihenfolge nach der festen
-Quellenmatrix aus Tabelle 3.15 verarbeitet. Direkte Übernahmen, kontrollierte
-Metadatenzusammenfassungen und Artefaktreferenzen tragen jeweils Quell-ID, Quellprüfsumme und
-Strukturpfad. Es gibt in Schritt 8 keine fachliche Berechnung: Eine `case_id` wird nicht zum
-Entitätstyp und Ressourcen-, Übergangswartezeit- sowie Zeitdatenergebnisse werden ausschließlich
-aus der strukturierten A_G-Sektion übernommen. Bei A_G v1 bleiben diese Inhalte nachvollziehbar
-offen, statt aus E* nachberechnet zu werden. Aktivitäten werden unverändert aus Prozessbaum,
-Petrinetz oder BPMN gelesen; stille
-Petrinetztransitionen bleiben ausgeschlossen.
+Ordnet Informationen aus U, S, Q, R, T, E*, P und A_G anhand einer festen Quellenmatrix elf
+Modellbestandteilen zu. Belegte Informationen bilden das vorläufige Modell K; fehlende oder
+nicht ableitbare Punkte werden getrennt in O dokumentiert.
 
-Das vorläufige konzeptionelle Modell K enthält nur belegte Informationen. Fehlende, nicht
-ableitbare oder fachlich unsichere Inhalte stehen getrennt und unverändert `offen` in O. Die
-Bestandteile Ausgaben und Eingaben, Warteschlangen sowie Annahmen und Vereinfachungen behalten
-den tatsächlich nicht ableitbaren Ergänzungsbedarf. Die Vorschau wird beim Öffnen automatisch
-erzeugt und ordnet alle elf Bestandteile in einer Tabelle zu. Schritt 8 besitzt keine
-Unsicherheits- oder Bestätigungscheckbox und keine fachlichen Eingabefelder. UUIDs und
-Prüfsummen stehen nur unter den technischen Details. Der Discovery-Wert k wird als technische
-Abstraktions- und Darstellungsentscheidung, nicht als fachlicher Detaillierungsgrad ausgewiesen.
+Schritt 8 führt keine neue fachliche Berechnung durch. Ressourcen-, Übergangswartezeit- und
+Zeitdatenergebnisse werden ausschließlich aus der strukturierten A_G-Sektion übernommen. Bei
+A_G-Version 1 bleiben diese Inhalte nachvollziehbar offen, statt aus E* nachberechnet zu werden.
+Eine `case_id` wird nicht automatisch zum Entitätstyp und Zeitlücken werden nicht automatisch
+zu Warteschlangen.
 
-K und O werden gemeinsam, projekt-, versions- und lineagegebunden gespeichert. Schemaversion 9
-ergänzt dafür ausschließlich eine additive Metadatentabelle. Identische Eingaben,
-Mappingversion und Eingabefingerabdruck sind idempotent. Die neue Quellenmatrix verwendet
-Mappingversion 2. Bestehende K/O-Artefakte mit Mappingversion 1 werden nicht umgeschrieben;
-sie müssen bei Bedarf aus dem weiterhin lesbaren A_G neu abgeleitet werden. Jede Änderung an
-U, S, Q, R, T,
-E*, P oder A_G invalidiert eine Vorschau. Vor Download, Wiederaufnahme und
-Übergabe werden beide Dateien, ihre gegenseitige Referenz, Prüfsummen, elf Bestandteile und die
-vollständige Eingangslineage erneut geprüft. Schritt 9 erhält ausschließlich K und O. K ist noch
-kein fachlich validiertes K*; Ergänzung, Konfliktauflösung und Validierung gehören zu Schritt 9.
+Die Vorschau entsteht beim Öffnen automatisch. Ein einzelner primärer Button speichert K und O
+und navigiert zu Schritt 9; redundante Vorschau- oder Lineage-Bestätigungen entfallen.
 
-### Modell ergänzen, validieren und ausgeben
+### 9. Modell ergänzen und validieren
 
-Schritt 9 lädt ausschließlich das aktive, erneut validierte Paar K und O. Jeder Eintrag aus O
-wird mit der ursprünglichen Kategorie und Begründung einer menschlichen Entscheidung
-`bestätigt`, `ergänzt_oder_angepasst` oder `nicht_anwendbar` zugeordnet. Fachliche Inhalte und
-Begründungen werden als zusätzliche menschliche Einträge dokumentiert; die ursprünglichen
-Informationen aus K und ihre Herkunft bleiben unverändert. Bei Anpassungsbedarf können auch
-zuvor nicht offene Bestandteile separat ergänzt werden. K* entsteht erst, wenn alle O-Einträge
-behandelt sind, kein weiterer Anpassungsbedarf besteht und die Gesamtvalidierung bewusst
-bestätigt wurde.
+Lädt das zusammengehörige K/O-Paar und verlangt für jeden offenen Punkt eine dokumentierte
+Entscheidung. Begründete fachliche Ergänzungen werden getrennt von den ursprünglichen
+Informationen gespeichert. Ein einzelner primärer Button validiert die Eingaben, nennt konkret
+fehlende Pflichtentscheidungen, speichert K* und navigiert zu Schritt 10. Nach erfolgreicher
+Speicherung erscheint kein redundanter Weiter-Button.
 
-K* enthält alle elf Bestandteile in stabiler Reihenfolge, Referenzen und Prüfsummen von K und O,
-sämtliche menschlichen Entscheidungen sowie Validierungsstatus und -vermerk. Der Lauf wird
-atomar, projektgebunden und für identische Eingaben und Entscheidungen idempotent gespeichert.
-Die gemeinsame additive Schemaversion 10 ergänzt hierfür nur die Metadaten von K*; K und O
-bleiben unverändert.
+### 10. Konzeptionelles Modell ausgeben
 
-Schritt 10 akzeptiert ausschließlich ein erneut geprüftes, fachlich validiertes K*. Aus diesem
-Artefakt werden wahlweise ein kompakter PDF-Report, eine strukturierte Excel-Arbeitsmappe oder
-beide Dateien reproduzierbar erzeugt. Beide Formate enthalten alle elf Bestandteile und trennen
-ursprünglich übernommene Informationen von menschlichen Ergänzungen und Anpassungen. Schritt 10
-ergänzt oder validiert das Modell nicht und persistiert keine Exportdateien.
+Akzeptiert ausschließlich ein erneut geprüftes und fachlich validiertes K*. HTML und PDF werden
+aus derselben formatneutralen Reportdatenstruktur erzeugt und verändern K* nicht.
 
-### Speicherung und Export
-Die Anwendung soll Zwischenergebnisse und finale Ausgaben speichern beziehungsweise exportieren können. Dazu können gehören:
-- aufbereitete Datensätze,
-- Event Logs,
-- Datenqualitätsberichte,
-- Process-Mining-Ergebnisse,
-- Prozessgrafiken,
-- aggregierte Kennzahlen,
-- dokumentierte Modellbestandteile,
-- das resultierende konzeptionelle Modell.
+- **HTML** wird als vollständiges, selbstständiges Dokument mit eingebettetem CSS über den Link
+  **„Konzeptionelles Modell im neuen Tab öffnen“** bereitgestellt. Der Link verwendet
+  `target="_blank"` und `rel="noopener noreferrer"`; HTML wird nicht als Download angeboten.
+- **PDF** bleibt ein Download. Der sichere Dateiname enthält die zur validierten Projekt-ID
+  gehörende Projektbezeichnung, beispielsweise `Konzeptionelles Modell Projekt Ä.pdf`.
+- **XLSX** ist sichtbar, aber als noch nicht implementierter Platzhalter deaktiviert.
 
-## Human-in-the-Loop-Prinzip
-Das Framework und seine softwaretechnische Instanziierung folgen einem Human-in-the-Loop-Ansatz. Die Software unterstützt die Datenverarbeitung und Modellableitung, ersetzt jedoch nicht die fachliche Bewertung. An verschiedenen Stellen sind deshalb menschliche Entscheidungen, Prüfungen und mögliche Rücksprünge vorgesehen. Dies betrifft beispielsweise:
-- die Auswahl relevanter Daten,
-- die semantische Zuordnung von Tabellen und Spalten,
-- die Festlegung des Detaillierungsgrads,
-- die Behandlung von Datenqualitätsproblemen,
-- die Interpretation der Process-Mining-Ergebnisse,
-- die Ergänzung nicht beobachtbarer Modellbestandteile,
-- die konzeptionelle Validierung.
+UUIDs, SHA-256-Werte, Fingerabdrücke und vollständige Lineage bleiben intern erhalten, werden in
+der normalen Fachansicht jedoch nicht angezeigt. Soweit eine Diagnose sinnvoll ist, stehen sie
+in einem standardmäßig geschlossenen Bereich **Technische Details**.
 
-## Geplante Repository-Struktur
-```text
-process-mining-conceptual-model-framework/
-├── README.md
-├── docs/
-│   ├── framework/
-│   ├── anforderungen/
-│   └── entscheidungen/
-├── data/
-│   ├── beispieldaten/
-│   └── README.md
-├── examples/
-├── src/
-│   ├── import/
-│   ├── preprocessing/
-│   ├── event_log/
-│   ├── process_mining/
-│   ├── conceptual_model/
-│   ├── export/
-│   └── app/
-├── tests/
-├── outputs/
-└── requirements.txt
+## Voraussetzungen und lokale Installation
+
+Vorausgesetzt werden:
+
+- Python **>= 3.12, < 3.15**,
+- `pip`,
+- ein lokaler Checkout des Repositorys,
+- optional Graphviz für Process-Mining-Grafiken.
+
+```bash
+git clone <URL-DES-REPOSITORYS>
+cd Masterarbeit
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 ```
 
-## temporärer Miniguide für das Bearbeiten der sqlite-Dateien
-### 1 - Finden
-  cd /Users/georgbommer/MasterarbeitGithubRepo
-  find . -type f \
-    \( -iname "*.sqlite" -o -iname "*.sqlite3" -o -iname "*.db" \) \
-    -not -path "./.git/*" \
-    -not -path "./.venv/*" \
-    -print
-### 2 - Löschen
-  find . -type f \
-  \( -iname "*.sqlite" -o -iname "*.sqlite3" -o -iname "*.db" \) \
-  -not -path "./.git/*" \
-  -not -path "./.venv/*" \
-  -print -delete
-### 3 - Kontrollieren
-find . -type f \
-  \( -iname "*.sqlite" -o -iname "*.sqlite3" -o -iname "*.db" \) \
-  -not -path "./.git/*" \
-  -not -path "./.venv/*" \
-  -print
+Unter Windows PowerShell wird die Umgebung mit `.venv\Scripts\Activate.ps1` aktiviert. Die
+optionale Abhängigkeitsgruppe `dev` installiert Pytest, Coverage, Ruff und Pyright. Jinja2 und
+WeasyPrint sind reguläre Laufzeitabhängigkeiten für das Reporting; Authlib wird für Streamlits
+OIDC-Integration benötigt.
 
-## Initieren der streamlit App als localhost
-  .venv/bin/python -m streamlit run streamlit_app.py
+## Anwendung starten
 
-## Ausgeben der html
-open workspace/report_preview/report.html
+```bash
+.venv/bin/python -m streamlit run streamlit_app.py
+```
+
+Streamlit zeigt anschließend die lokale Adresse an, standardmäßig
+`http://localhost:8501`.
+
+Workspace und SQLite-Datenbank können getrennt konfiguriert werden:
+
+```bash
+export FRAMEWORK_MVP_WORKSPACE_PATH=/absoluter/pfad/zum/workspace
+export FRAMEWORK_MVP_DB_PATH=/absoluter/pfad/framework_mvp.sqlite
+.venv/bin/python -m streamlit run streamlit_app.py
+```
+
+Weitere optionale Umgebungsvariablen:
+
+| Variable | Bedeutung | Standard |
+|---|---|---:|
+| `FRAMEWORK_MVP_GUEST_TTL_HOURS` | Gast-TTL seit letzter Aktivität | `24` |
+| `FRAMEWORK_MVP_MAX_UPLOAD_MB` | maximale CSV-/XLSX-Uploadgröße | `50` |
+| `FRAMEWORK_MVP_LOCAL_AUTH_TEST_MODE` | feste lokale Testidentität aktivieren | aus |
+| `FRAMEWORK_MVP_LOCAL_AUTH_TEST_ADMIN` | Testidentität als Systemadmin bootstrappen | aus |
+| `FRAMEWORK_MVP_ARCHIVE_MAX_COMPRESSED_MB` | komprimierte Projektarchivgröße | `250` |
+| `FRAMEWORK_MVP_ARCHIVE_MAX_UNCOMPRESSED_MB` | entpackte Projektarchivgröße | `1024` |
+| `FRAMEWORK_MVP_ARCHIVE_MAX_FILES` | Dateien je Projektarchiv | `5000` |
+| `FRAMEWORK_MVP_ARCHIVE_MAX_FILE_MB` | Größe je Archivdatei | `250` |
+| `FRAMEWORK_MVP_ARCHIVE_MAX_RATIO` | maximales Kompressionsverhältnis | `100` |
+| `FRAMEWORK_MVP_ARCHIVE_MAX_PATH_BYTES` | maximale UTF-8-Pfadlänge | `512` |
+
+Der lokale Auth-Testmodus ist ausschließlich für Entwicklung und Tests vorgesehen und muss
+explizit aktiviert werden.
+
+## OIDC und Community Cloud konfigurieren
+
+1. Beim OIDC-Provider als Callback lokal
+   `http://localhost:8501/oauth2callback` beziehungsweise in Community Cloud
+   `https://<app-name>.streamlit.app/oauth2callback` registrieren.
+2. `.streamlit/secrets.toml.example` nach `.streamlit/secrets.toml` kopieren oder die Werte in
+   den Community-Cloud-Secrets hinterlegen. Echte Secrets dürfen nicht committet werden.
+3. Unter `[auth]` `redirect_uri`, ein zufälliges `cookie_secret`, `client_id`, `client_secret`
+   und `server_metadata_url` setzen.
+4. Den initialen Systemadmin unter `[[systemadmin.identities]]` mit dem exakten OIDC-Issuer und
+   Subject eintragen.
+
+Streamlit Community Cloud und ihr lokaler Speicher besitzen keine Persistenzgarantie. Die
+Anwendung ist für MVP, Fallstudie und überschaubare Lehrveranstaltungen ausgelegt. Für größere
+Parallelität oder dauerhaft produktiven Betrieb ist ein anderer Speicheradapter hinter den
+vorhandenen Ports erforderlich.
+
+## Speicherung, Lineage und Migration
+
+Die Anwendung verwendet eine hybride lokale Persistenz:
+
+- **SQLite** speichert Metadaten, IDs, Zustände, Beziehungen, Mandanten, Rechte und Referenzen.
+  Die aktuelle Schemaversion ist **11**. Die Migrationskette aktualisiert bestehende Versionen
+  schrittweise; neuere unbekannte Versionen werden abgelehnt. Vorhandene Projekte aus Version 10
+  werden verlustfrei als `legacy_unassigned` markiert und nicht öffentlich aufgelistet.
+- **`workspace/`** enthält Rohdateien und größere fachliche Artefakte. Das Verzeichnis ist in
+  `.gitignore` ausgeschlossen und stellt keine automatische Datensicherung dar.
+
+Vereinfacht entsteht folgende Struktur:
+
+```text
+workspace/
+├── framework_mvp.sqlite
+└── projects/<projekt-id>/
+    ├── raw/
+    ├── profiles/
+    ├── interim/
+    ├── mapping_tables/
+    ├── mappings/
+    ├── event_logs/
+    ├── quality/
+    ├── process_mining/
+    ├── aggregation/
+    ├── model_derivations/
+    └── model_validations/
+```
+
+Persistierte Artefakte verwenden projektbezogene UUIDs, Versionen, Referenzen und
+SHA-256-Prüfsummen. Beim Laden werden IDs, Pfade und Prüfsummen erneut geprüft. Die normale
+Oberfläche bleibt dennoch fachlich kompakt; technische Lineage wird nicht gelöscht, sondern nur
+aus der Hauptansicht herausgehalten.
+
+SQLite läuft mit aktivierten Foreign Keys, WAL, fünf Sekunden `busy_timeout` und kurzen
+Transaktionen.
+
+## Portable Projekt- und Kursarchive
+
+Projektarchive verwenden ZIP-Formatversion 1 mit Manifest, projektbezogenen Datenbankzeilen,
+Artefakten und einer lesbaren Kurzbeschreibung. Manifest und jede Datei werden anhand von Größe
+und SHA-256 geprüft. Benutzer, Rollen, Einladungen, Sessions, Tokens, Secrets, fremde Projekte,
+die globale SQLite-Datei, Caches und temporäre Dateien werden nicht exportiert.
+
+Importe werden vor dem ersten Schreibzugriff auf ZIP-Struktur, Pfadtraversal, Symlinks,
+Verschlüsselung, Doppelpfade, CRC, erlaubte Pfade und Dateitypen, Ressourcenlimits, Manifest,
+Prüfsummen, Tabellenschema und Lineage geprüft. Es wird kein unkontrolliertes `extractall`
+verwendet. Eine bereits vorhandene Projekt-ID wird nur bei identischem Inhalt und bestehender
+Autorisierung wieder geöffnet; abweichende Inhalte werden nicht überschrieben.
+
+Kursarchive enthalten die einzeln validierten Projektarchive und fachliche Teamhinweise. Aktive
+Einladungen und Zugriffsrechte werden nicht übernommen. Archive sind **nicht verschlüsselt** und
+können Originaldaten oder personenbezogene Zuordnungshinweise enthalten.
+
+## Löschen über die Benutzeroberfläche
+
+Im Sidebar-Bereich **Projektrahmen** stehen für das aktive, bearbeitbare Projekt die Aktionen
+**Projekt löschen** und – nur bei vorhandenen Zwischendatensätzen – **Datensatz löschen**. Im
+Gastmodus heißt die Projektaktion **Demo beenden und Daten löschen**.
+
+Die Aktionen verlangen weder Projektname noch UUID, Schlüssel oder Kurz-ID. Ein kompakter
+Dialog benennt das Ziel und bietet **Löschen** und **Abbrechen**. Nach einer Projektlöschung wird
+der projektbezogene Session State bereinigt; nach einer Datensatzlöschung werden nur T und seine
+abhängigen Artefakte zurückgesetzt. Andere Projekte, Datensätze, Rohimporte und Datenquellen
+bleiben unberührt, soweit sie nicht fachlich vom gelöschten Ziel abhängen.
+
+Dateien werden zunächst in einen projektbezogenen Staging-Bereich verschoben. Schlägt die
+Datenbanktransaktion fehl, wird die Dateiverschiebung zurückgerollt.
+
+## Softwarearchitektur
+
+```text
+Masterarbeit/
+├── streamlit_app.py
+├── pyproject.toml
+├── src/framework_mvp/
+│   ├── application/
+│   │   └── ports/
+│   ├── domain/
+│   ├── infrastructure/
+│   ├── reporting/
+│   ├── ui/
+│   ├── bootstrap.py
+│   └── workspace.py
+├── tests/
+│   ├── unit/
+│   └── integration/
+├── docs/decisions/
+└── examples/anonymisierte_daten/
+```
+
+- `application/` enthält Anwendungsservices und fachliche Ablaufkoordination.
+- `application/ports/` definiert Repository-Schnittstellen, sodass Services nicht direkt von
+  konkreten SQLite-Klassen abhängen.
+- `domain/` enthält Modelle, Kataloge, Enums, Validierungsregeln und Domänenausnahmen.
+- `infrastructure/` implementiert Dateiimporte, Artefaktspeicherung und SQLite-Repositories
+  einschließlich Schema und Migrationen.
+- `reporting/` erzeugt formatneutrale Berichtsdaten und rendert HTML und PDF.
+- `ui/` enthält Streamlit-Seiten, Komponenten, zentrale Fortschrittsdefinition, Navigation und
+  Session-State-Bereinigung.
+
+`src/framework_mvp/bootstrap.py` ist der Composition Root. Dort werden konkrete Repositories,
+Autorisierungs- und Fachservices sowie der lokale Artefaktspeicher zusammengesetzt.
+
+## Reporting
+
+Schritt 10 verwendet für HTML und PDF dieselbe formatneutrale Datenstruktur:
+
+- `src/framework_mvp/reporting/report_data.py` prüft K* und erzeugt `report_data` Version 1.
+- `src/framework_mvp/reporting/templates/conceptual_model/V1/` enthält versionierte HTML- und
+  PDF-Templates sowie die jeweiligen Layouts.
+- Jinja2 rendert die Dokumente; WeasyPrint erzeugt das PDF.
+- `asset_resolver.py` bindet vorhandene SVG-Darstellungen von Prozessmodell, DFG und
+  Prozessbaum ein. Fehlende optionale Assets blockieren den Report nicht; vorhandene ungültige
+  SVG-Dateien werden als Fehler behandelt.
+
+Die Ausgaben entstehen temporär und werden nicht als neues fachliches Artefakt persistiert.
+
+## Tests und statische Qualitätssicherung
+
+```bash
+.venv/bin/python -m pytest
+.venv/bin/python -m pytest --cov=framework_mvp --cov-report=term-missing
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+.venv/bin/pyright
+```
+
+Die Tests umfassen Unit-, Integrations-, Persistenz-, Migrations-, Streamlit-App- und
+End-to-End-Prüfungen. Unter anderem werden die Migrationskette bis Schema 11, Event-Log-
+Konfigurationen v1–v3, Projekt- und Kursarchive, Mandantentrennung, Löschdialoge, Fortschritt,
+Reporting und die vollständigen fachlichen Artefaktketten geprüft.
+
+## Architecture Decision Records
+
+- [ADR-001: Lokale Persistenz](docs/decisions/ADR-001-lokale-persistenz.md)
+- [ADR-002: Strukturierter Untersuchungsauftrag](docs/decisions/ADR-002-strukturierter-untersuchungsauftrag.md)
+- [ADR-003: Datenquellenkatalog und Framework-Navigation](docs/decisions/ADR-003-datenquellenkatalog-und-framework-navigation.md)
+- [ADR-004: Importartefakte und Konsistenz](docs/decisions/ADR-004-importartefakte-und-konsistenz.md)
+- [ADR-005: Transformation und semantisches Mapping](docs/decisions/ADR-005-transformation-und-semantisches-mapping.md)
+- [ADR-006: Kanonisches Event Log und E*-Freigabe](docs/decisions/ADR-006-event-log-und-datenqualitaet.md)
+- [ADR-007: Process Mining mit PM4Py](docs/decisions/ADR-007-process-mining-mit-pm4py.md)
+- [ADR-008: Ergebnisaggregation A_G](docs/decisions/ADR-008-ergebnisaggregation-a-g.md)
+- [ADR-009: Vorläufiges Modell K und offene Bestandteile O](docs/decisions/ADR-009-vorlaeufiges-modell-k-und-offene-bestandteile-o.md)
+- [ADR-010: K* validieren und strukturiert ausgeben](docs/decisions/ADR-010-validierung-k-stern-und-strukturierte-ausgabe.md)
+- [ADR-011: Portable Projekte und Kursmandanten](docs/decisions/ADR-011-portable-projekte-und-kursmandanten.md)
+
+## Bekannte Einschränkungen und mögliche Erweiterungen
+
+- CSV und XLSX sind die regulär unterstützten Importformate. Direkte Datenbankzugriffe und
+  Echtzeitquellen sind nicht implementiert.
+- Warteschlangen und Ressourcen werden nur quellengebunden übernommen. Fehlen geeignete
+  Informationen, bleiben sie in O offen und müssen in Schritt 9 fachlich behandelt werden.
+- Schritt 6 bietet Process Discovery und einen vollständigen DFG, aber keine eigenständige
+  Performance-, Ressourcen- oder Engpassanalyse.
+- Der lineare Sollprozessassistent in Schritt 7 bildet keine Verzweigungen, Parallelität,
+  Synchronisation oder Schleifen ab; komplexere Sollnetze müssen als PNML bereitgestellt werden.
+- Die XLSX-Reportausgabe ist noch nicht implementiert.
+- Der lokale Workspace und Community-Cloud-Speicher sind keine automatische Datensicherung.
+- Ein austauschbarer, dauerhaft persistenter Cloud-Speicheradapter ist eine mögliche spätere
+  Erweiterung.
+- Im Repository liegt derzeit keine `LICENSE`-Datei. Aus dem Quellcode folgt daher keine
+  behauptete Open-Source-Lizenz oder allgemeine Erlaubnis zur freien Weiterverwendung.
