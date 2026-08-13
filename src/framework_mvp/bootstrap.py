@@ -9,6 +9,7 @@ from framework_mvp.application.datenquelle_service import DatenquelleService
 from framework_mvp.application.ergebnisaggregation_service import ErgebnisaggregationService
 from framework_mvp.application.event_log_service import EventLogService
 from framework_mvp.application.importvorgang_service import ImportvorgangService
+from framework_mvp.application.loesch_service import LoeschService
 from framework_mvp.application.mapping_service import (
     EventLogKonfigurationService,
     MappingService,
@@ -33,6 +34,9 @@ from framework_mvp.infrastructure.persistence.sqlite_event_log_repository import
 )
 from framework_mvp.infrastructure.persistence.sqlite_importvorgang_repository import (
     SQLiteImportvorgangRepository,
+)
+from framework_mvp.infrastructure.persistence.sqlite_loesch_repository import (
+    SQLiteLoeschRepository,
 )
 from framework_mvp.infrastructure.persistence.sqlite_mapping_repository import (
     SQLiteMappingRepository,
@@ -72,6 +76,17 @@ def ermittle_datenbankpfad(datenbankpfad: Path | str | None = None) -> Path:
 def erstelle_projekt_service(datenbankpfad: Path | str | None = None) -> ProjektService:
     """Erzeugt einen Projektservice ohne globale veränderliche Instanz."""
     return ProjektService(SQLiteProjektRepository(ermittle_datenbankpfad(datenbankpfad)))
+
+
+def erstelle_loesch_service(
+    datenbankpfad: Path | str | None = None,
+    workspace: WorkspaceKonfiguration | None = None,
+) -> LoeschService:
+    """Erzeugt die kontrollierte DB-/Dateisystem-Löschkoordination."""
+    return LoeschService(
+        SQLiteLoeschRepository(ermittle_datenbankpfad(datenbankpfad)),
+        workspace or WorkspaceKonfiguration.ermitteln(),
+    )
 
 
 def erstelle_datenquelle_service(
@@ -259,4 +274,8 @@ def erstelle_modellausgabe_service(
     workspace: WorkspaceKonfiguration | None = None,
 ) -> ModellausgabeService:
     """Erzeugt Algorithmus 10 ohne zusätzliche Exportpersistenz."""
-    return ModellausgabeService(erstelle_modellvalidierung_service(datenbankpfad, workspace))
+    workspace_konfiguration = workspace or WorkspaceKonfiguration.ermitteln()
+    return ModellausgabeService(
+        erstelle_modellvalidierung_service(datenbankpfad, workspace_konfiguration),
+        workspace_konfiguration,
+    )

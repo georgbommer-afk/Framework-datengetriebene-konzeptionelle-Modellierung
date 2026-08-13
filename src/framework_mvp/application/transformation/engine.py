@@ -180,10 +180,16 @@ def _ausreisser(daten: pd.DataFrame, schritt: Transformationsschritt) -> tuple[p
 def _filtermaske(spalte: pd.Series, parameter: dict[str, Any]) -> pd.Series:
     operator = parameter["operator"]
     wert = parameter.get("wert")
+    vergleichsspalte = spalte
+    if pd.api.types.is_numeric_dtype(spalte.dtype) and wert is not None:
+        wert = float(wert)
+    elif pd.api.types.is_datetime64_any_dtype(spalte.dtype) and wert is not None:
+        vergleichsspalte = pd.to_datetime(spalte, errors="coerce", utc=True)
+        wert = pd.to_datetime(wert, utc=True)
     if operator == "gleich":
-        return spalte == wert
+        return vergleichsspalte == wert
     if operator == "ungleich":
-        return spalte != wert
+        return vergleichsspalte != wert
     if operator in {"enthält", "beginnt mit", "endet mit"}:
         text = spalte.astype("string")
         return {
@@ -205,20 +211,88 @@ def _filtermaske(spalte: pd.Series, parameter: dict[str, Any]) -> pd.Series:
             "größer oder gleich": vergleich >= grenze,
         }[operator]
     if operator in {"zwischen", "zeitlich zwischen"}:
-        vergleich = (
-            pd.to_datetime(spalte, errors="coerce")
-            if operator.startswith("zeitlich")
-            else pd.to_numeric(spalte, errors="coerce")
-        )
-        return vergleich.between(parameter["von"], parameter["bis"])
+        if operator.startswith("zeitlich"):
+            vergleich = pd.to_datetime(spalte, errors="coerce", utc=True)
+            von = pd.to_datetime(parameter["von"], utc=True)
+            bis = pd.to_datetime(parameter["bis"], utc=True)
+        else:
+            vergleich = pd.to_numeric(spalte, errors="coerce")
+            von, bis = float(parameter["von"]), float(parameter["bis"])
+        return vergleich.between(von, bis)
     if operator in {"vor", "nach"}:
-        vergleich = pd.to_datetime(spalte, errors="coerce")
-        grenze = pd.Timestamp(wert)
+        vergleich = pd.to_datetime(spalte, errors="coerce", utc=True)
+        grenze = pd.to_datetime(wert, utc=True)
         return vergleich < grenze if operator == "vor" else vergleich > grenze
     if operator in {"enthalten in", "nicht enthalten in"}:
-        maske = spalte.isin(parameter.get("werte", []))
+        werte = parameter.get("werte", [])
+        if pd.api.types.is_numeric_dtype(spalte.dtype):
+            werte = [float(eintrag) for eintrag in werte]
+        elif pd.api.types.is_datetime64_any_dtype(spalte.dtype):
+            werte = [pd.to_datetime(eintrag, utc=True) for eintrag in werte]
+            vergleichsspalte = pd.to_datetime(spalte, errors="coerce", utc=True)
+        maske = vergleichsspalte.isin(werte)
         return maske if operator == "enthalten in" else ~maske
     raise Domaenenfehler(f"Der Filteroperator {operator} ist unbekannt.")
+
+
+def zaehle_zu_loeschende_zeilen(daten: pd.DataFrame, spalte: str, parameter: dict[str, Any]) -> int:
+    """Validiert eine Löschbedingung und zählt ihre Treffer ohne Datenmutation."""
+    if spalte not in daten.columns:
+        raise Domaenenfehler(f"Die ausgewählte Spalte {spalte} ist nicht vorhanden.")
+    return int(_filtermaske(daten[spalte], parameter).fillna(False).sum())
+
+
+def _text_bereinigen(spalte: pd.Series, parameter: dict[str, Any]) -> tuple[pd.Series, int]:
+    """Wendet eine allgemeine Textoperation an und bewahrt Nichttreffer standardmäßig."""
+    art = str(parameter["art"])
+    nichttreffer = str(parameter.get("nichttreffer", "Originalwert beibehalten"))
+    if nichttreffer not in {"Originalwert beibehalten", "Fehlwert setzen"}:
+        raise Domaenenfehler("Das Verhalten für Textwerte ohne Treffer ist unbekannt.")
+    text = spalte.astype("string")
+    if art == "Festen Präfix entfernen":
+        begrenzer = str(parameter.get("praefix", ""))
+        if not begrenzer:
+            raise Domaenenfehler("Der zu entfernende Präfix darf nicht leer sein.")
+        treffer = text.str.startswith(begrenzer, na=False)
+        transformiert = text.str.slice(start=len(begrenzer))
+    elif art == "Festen Suffix entfernen":
+        begrenzer = str(parameter.get("suffix", ""))
+        if not begrenzer:
+            raise Domaenenfehler("Der zu entfernende Suffix darf nicht leer sein.")
+        treffer = text.str.endswith(begrenzer, na=False)
+        transformiert = text.str.slice(stop=-len(begrenzer))
+    elif art == "Zwischen Begrenzern extrahieren":
+        start = str(parameter.get("startbegrenzer", ""))
+        ende = str(parameter.get("endbegrenzer", ""))
+        if not start or not ende:
+            raise Domaenenfehler("Start- und Endbegrenzer dürfen nicht leer sein.")
+        startposition = text.str.find(start)
+        inhaltsstart = startposition + len(start)
+        endposition = pd.Series(
+            [
+                wert.find(ende, start_index) if pd.notna(wert) and start_index >= len(start) else -1
+                for wert, start_index in zip(text, inhaltsstart, strict=True)
+            ],
+            index=spalte.index,
+            dtype="Int64",
+        )
+        treffer = (startposition >= 0) & (endposition >= inhaltsstart)
+        transformiert = pd.Series(
+            [
+                wert[start_index:end_index] if pd.notna(wert) and bool(ok) else pd.NA
+                for wert, start_index, end_index, ok in zip(
+                    text, inhaltsstart, endposition, treffer, strict=True
+                )
+            ],
+            index=spalte.index,
+            dtype="string",
+        )
+    else:
+        raise Domaenenfehler(f"Die Textoperation {art} ist unbekannt.")
+    ergebnis = transformiert.where(
+        treffer, text if nichttreffer == "Originalwert beibehalten" else pd.NA
+    )
+    return ergebnis.astype("string"), int(treffer.sum())
 
 
 def _abgeleitet(daten: pd.DataFrame, parameter: dict[str, Any]) -> None:
@@ -395,6 +469,15 @@ def _wende_schritt_an(
         name = schritt.betroffene_spalten[0]
         maske = _filtermaske(daten[name], parameter).fillna(False)
         return daten.loc[maske].copy(), f"{int((~maske).sum())} Zeilen herausgefiltert"
+    if schritt.typ is Transformationsart.ZEILEN_LOESCHEN:
+        name = schritt.betroffene_spalten[0]
+        maske = _filtermaske(daten[name], parameter).fillna(False)
+        geloescht = int(maske.sum())
+        return daten.loc[~maske].copy(), f"{geloescht} Zeilen gelöscht"
+    if schritt.typ is Transformationsart.TEXT_BEREINIGEN:
+        name = schritt.betroffene_spalten[0]
+        daten[name], treffer = _text_bereinigen(daten[name], parameter)
+        return daten, f"{treffer} Textwerte transformiert"
     if schritt.typ is Transformationsart.ABGELEITETE_SPALTE:
         _abgeleitet(daten, parameter)
         return daten, f"Spalte {parameter['zielspalte']} erzeugt"

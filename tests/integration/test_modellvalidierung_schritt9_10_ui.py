@@ -1,6 +1,7 @@
 """Kompakte Streamlit-Verträge der Schritte 9 und 10."""
 
 from pathlib import Path
+from typing import Any, cast
 
 from streamlit.testing.v1 import AppTest
 
@@ -8,7 +9,10 @@ SCHRITT_9_APP = r"""
 from types import SimpleNamespace
 from uuid import UUID
 
+import streamlit as st
+
 from framework_mvp.application.modellableitung import MODELLBESTANDTEILE
+from framework_mvp.application.modellvalidierung_service import Validierungsarbeitsfassung
 from framework_mvp.ui.pages.modellvalidierung import zeige_modellvalidierung_seite
 
 P = UUID("11111111-1111-1111-1111-111111111111")
@@ -44,6 +48,30 @@ class Service:
         assert projekt_id == P and modellableitungs_id == M
         assert kwargs["erwartete_k_id"] == K and kwargs["erwartete_o_id"] == O
         return BASIS
+    def arbeitsfassung_erstellen(self, **kwargs):
+        return Validierungsarbeitsfassung(
+            BASIS,
+            kwargs["behandlungen"], kwargs["zusaetzliche_anpassungen"],
+            kwargs["gesamtvalidierungsstatus"], kwargs["validierungsvermerk"],
+            "b" * 64, (),
+        )
+    def speichern(self, arbeitsfassung, validierungslauf_id, k_stern_id, fachlich_bestaetigt):
+        assert arbeitsfassung.finalisierbar and fachlich_bestaetigt
+        return SimpleNamespace(
+            validierungslauf_id=validierungslauf_id,
+            k_stern_id=k_stern_id,
+            projekt_id=P,
+        )
+    def laden(self, validierungslauf_id):
+        return (
+            SimpleNamespace(
+                validierungslauf_id=validierungslauf_id,
+                k_stern_id=UUID(st.session_state["aktuelle_k_stern_id"]),
+                projekt_id=P,
+            ),
+            {"k_stern_id": st.session_state["aktuelle_k_stern_id"]},
+        )
+    def k_stern_download_laden(self, validierungslauf_id): return b"{}"
 
 zeige_modellvalidierung_seite(Projekte(), Service())
 """
@@ -52,6 +80,7 @@ SCHRITT_10_APP = r"""
 from uuid import UUID
 
 from framework_mvp.application.modellableitung import MODELLBESTANDTEILE
+from framework_mvp.application.modellausgabe_service import StrukturierteModellausgabe
 from framework_mvp.ui.pages.modellausgabe import zeige_modellausgabe_seite
 
 P = UUID("11111111-1111-1111-1111-111111111111")
@@ -76,7 +105,14 @@ class Validierungen:
     def uebergabe_schritt10(self, validierungslauf_id, projekt_id, k_stern_id):
         assert (validierungslauf_id, projekt_id, k_stern_id) == (V, P, KS)
         return K_STERN
-class Ausgaben: pass
+class Ausgaben:
+    def erzeugen(self, **kwargs):
+        assert kwargs["html"] is True and kwargs["pdf"] is True
+        assert "excel" not in kwargs and "report" not in kwargs
+        return StrukturierteModellausgabe(
+            b"<!DOCTYPE html><style></style>", "modell.html",
+            b"%PDF-1.7", "modell.pdf",
+        )
 
 zeige_modellausgabe_seite(Projekte(), Validierungen(), Ausgaben())
 """
@@ -124,6 +160,36 @@ def test_schritt_9_zeigt_elf_schreibgeschuetzte_bestandteile_und_o_behandlung() 
     assert not {"Projekt", "K", "O", "Modellableitung"} & {wert.label for wert in app.selectbox}
 
 
+def test_k_stern_speichern_setzt_ids_und_oeffnet_schritt_zehn() -> None:
+    app = _schritt_9()
+    next(wert for wert in app.selectbox if wert.label == "Fachliche Entscheidung").set_value(
+        "bestätigt"
+    )
+    next(
+        wert
+        for wert in app.text_area
+        if wert.label == "Fachliche Ergänzung beziehungsweise Begründung"
+    ).set_value("Fachlich geprüft und bestätigt.")
+    next(
+        wert for wert in app.radio if wert.label == "Status der fachlichen Gesamtvalidierung"
+    ).set_value("fachlich validiert")
+    next(wert for wert in app.button if wert.label == "Arbeitsfassung prüfen").click().run()
+    next(
+        wert
+        for wert in app.checkbox
+        if wert.label == "Ich bestätige die fachliche Gesamtvalidierung und die Erzeugung von K*."
+    ).check().run()
+    next(
+        wert for wert in app.button if wert.label == "K* speichern und zu Schritt 10"
+    ).click().run()
+
+    assert app.session_state["aktuelle_validierungslauf_id"]
+    assert app.session_state["aktuelle_k_stern_id"]
+    assert app.session_state["naechster_framework_bereich"] == (
+        "10 Konzeptionelles Modell ausgeben"
+    )
+
+
 def test_schritt_10_verlangt_validiertes_k_stern_und_bietet_ruecknavigation() -> None:
     app = _schritt_10(aktiv=False)
     assert not app.exception
@@ -133,13 +199,23 @@ def test_schritt_10_verlangt_validiertes_k_stern_und_bietet_ruecknavigation() ->
     )
 
 
-def test_schritt_10_zeigt_elf_bestandteile_und_nur_report_excel() -> None:
+def test_schritt_10_bietet_html_pdf_und_nur_deaktivierten_xlsx_dummy() -> None:
     app = _schritt_10()
     assert not app.exception
     assert len(app.expander) == 11
     auswahl = next(wert for wert in app.multiselect if wert.label == "Ausgabeformen")
-    assert auswahl.options == ["Report", "Excel"]
-    assert any(wert.label == "Ausgewählte Dateien erzeugen" for wert in app.button)
+    assert auswahl.options == ["HTML", "PDF"]
+    dummy = next(
+        wert for wert in app.button if wert.label == "XLSX-Ausgabe – noch nicht implementiert"
+    )
+    assert dummy.disabled
+    next(wert for wert in app.button if wert.label == "Ausgewählte Dateien erzeugen").click().run()
+    downloads = cast(list[Any], app.get("download_button"))
+    assert {wert.label for wert in downloads} == {
+        "HTML-Report herunterladen",
+        "PDF-Report herunterladen",
+    }
+    assert not any("Excel-Ausgabe herunterladen" == wert.label for wert in downloads)
     assert not app.text_input
     assert not app.text_area
 

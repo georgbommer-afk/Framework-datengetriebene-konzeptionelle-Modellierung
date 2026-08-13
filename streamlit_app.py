@@ -11,6 +11,7 @@ from framework_mvp.bootstrap import (
     erstelle_event_log_konfigurations_service,
     erstelle_event_log_service,
     erstelle_importvorgang_service,
+    erstelle_loesch_service,
     erstelle_mappingtabelle_service,
     erstelle_modellableitung_service,
     erstelle_modellausgabe_service,
@@ -52,7 +53,7 @@ seite = st.sidebar.radio(
 projekt_service = erstelle_projekt_service()
 workspace = WorkspaceKonfiguration.ermitteln()
 if seite == "Schritt 1: Projektrahmen definieren":
-    zeige_projektverwaltung(projekt_service)
+    zeige_projektverwaltung(projekt_service, erstelle_loesch_service(workspace=workspace))
 elif seite == "2 ETL durchführen":
     zeige_etl_seite(
         projekt_service,
@@ -61,6 +62,7 @@ elif seite == "2 ETL durchführen":
         erstelle_importvorgang_service(workspace=workspace),
         erstelle_transformations_service(workspace=workspace),
         workspace,
+        erstelle_loesch_service(workspace=workspace),
     )
 elif seite == "3 Semantisches Mapping":
     transformations_service = erstelle_transformations_service(workspace=workspace)

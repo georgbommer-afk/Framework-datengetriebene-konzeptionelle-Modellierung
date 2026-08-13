@@ -295,13 +295,16 @@ def zeige_modellableitung_seite(
             "dies ist keine fachliche Validierung von K.",
             key="modellableitung_speichern_bestaetigt",
         )
-        if st.button("K und O gemeinsam speichern", disabled=veraltet or not bestaetigt):
+        if st.button(
+            "K und O speichern und zu Schritt 9",
+            disabled=veraltet or not bestaetigt,
+        ):
             try:
                 ableitung = service.speichern(vorschau, menschlich_bestaetigt=bestaetigt)
                 st.session_state.aktuelle_modellableitungs_id = str(ableitung.modellableitungs_id)
                 st.session_state.aktuelle_k_id = str(ableitung.k_id)
                 st.session_state.aktuelle_o_id = str(ableitung.o_id)
-                st.rerun()
+                framework_bereich_oeffnen(schritt=9, projekt_id=projekt_id)
             except (Domaenenfehler, Importintegritaetsfehler) as fehler:
                 st.error(f"K und O konnten nicht gespeichert werden: {fehler}")
     gespeicherte_id = st.session_state.get("aktuelle_modellableitungs_id")

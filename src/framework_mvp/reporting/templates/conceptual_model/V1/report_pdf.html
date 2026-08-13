@@ -861,7 +861,32 @@
 
             </div>
 
-        {% else %}
+        {% endif %}
+
+        {% set wartestellenhinweise =
+            warteschlangen.get("wartestellenhinweise", [])
+        %}
+
+        {% if wartestellenhinweise %}
+            <h3 class="pdf-subheading">Positive Wartestellenhinweise</h3>
+            <div class="pdf-kpi-list">
+                {% for hinweis in wartestellenhinweise %}
+                    <div class="pdf-kpi-row">
+                        <div class="pdf-kpi-name">
+                            {{ hinweis.get("uebergang", {}).get("von", "–") }}
+                            →
+                            {{ hinweis.get("uebergang", {}).get("zu", "–") }}
+                            · n={{ hinweis.get("positive_hinweise", "–") }}
+                        </div>
+                        <div class="pdf-kpi-value">
+                            Ø {{ hinweis.get("mittlere_wartezeit_sekunden", "–") }} s
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {% if not wartezeit_kpis and not wartestellenhinweise %}
 
             <div class="pdf-notice">
                 Aus den vorliegenden Artefakten wurde keine explizite
@@ -988,6 +1013,43 @@
             </div>
 
         </div>
+
+        {% set aktivitaet_ressourcen =
+            ressourcen.get("aktivitaet_ressourcen", [])
+        %}
+        {% set manuelle_zuordnungen =
+            ressourcen.get("manuelle_aktivitaet_ressourcen", [])
+        %}
+
+        {% if aktivitaet_ressourcen or manuelle_zuordnungen %}
+            <h3 class="pdf-subheading">Aktivität-Ressourcen-Zuordnungen</h3>
+            <div class="pdf-kpi-list">
+                {% for zuordnung in aktivitaet_ressourcen %}
+                    <div class="pdf-kpi-row">
+                        <div class="pdf-kpi-name">
+                            {{ zuordnung.get("aktivitaet", "–") }}
+                        </div>
+                        <div class="pdf-kpi-value">
+                            {{ zuordnung.get("ressourcen", []) | join(", ") }}
+                        </div>
+                    </div>
+                {% endfor %}
+                {% for zuordnung in manuelle_zuordnungen %}
+                    <div class="pdf-kpi-row">
+                        <div class="pdf-kpi-name">
+                            {{ zuordnung.get("aktivitaet", "–") }} · menschlich
+                        </div>
+                        <div class="pdf-kpi-value">
+                            {% if zuordnung.get("ressourcen") %}
+                                {{ zuordnung.get("ressourcen", []) | join(", ") }}
+                            {% else %}
+                                bewusst offen
+                            {% endif %}
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
 
 
         {% set ressourcen_kpis =

@@ -15,6 +15,7 @@ import streamlit as st
 from framework_mvp.domain.models import (
     Eingangsartefakt, Projekt, Projektstatus, Systemtyp, Untersuchungsauftrag,
 )
+from framework_mvp.application.modellableitung_service import Modellableitungsvorschau
 from framework_mvp.ui.pages.modellableitung import zeige_modellableitung_seite
 
 P = UUID("11111111-1111-1111-1111-111111111111")
@@ -47,6 +48,7 @@ BASIS = SimpleNamespace(
     lineage={
         "artefakte": {wert.value: referenz for wert, referenz in REFERENZEN.items()}
     },
+    a_g={"warnungen": []},
     eingabefingerabdruck="c" * 64,
 )
 
@@ -62,7 +64,32 @@ class Service:
         st.session_state["aufgerufene_unsicherheit"] = sorted(
             wert.value for wert in kwargs["fachlich_unsichere_bestandteile"]
         )
-        return None
+        return Modellableitungsvorschau(
+            BASIS,
+            kwargs["modellableitungs_id"], kwargs["k_id"], kwargs["o_id"],
+            kwargs["fachlich_unsichere_bestandteile"], (), (), "d" * 64,
+            {"k_id": str(kwargs["k_id"])}, {"o_id": str(kwargs["o_id"])},
+            b"{}", b"{}", "e" * 64, "f" * 64,
+        )
+    def speichern(self, vorschau, menschlich_bestaetigt):
+        assert menschlich_bestaetigt
+        return SimpleNamespace(
+            modellableitungs_id=vorschau.modellableitungs_id,
+            k_id=vorschau.k_id, o_id=vorschau.o_id, projekt_id=P,
+        )
+    def laden(self, ableitungs_id):
+        return (
+            SimpleNamespace(
+                modellableitungs_id=ableitungs_id, projekt_id=P,
+                k_id=st.session_state["aktuelle_k_id"],
+                o_id=st.session_state["aktuelle_o_id"],
+                k_sha256="e" * 64, o_sha256="f" * 64,
+            ),
+            {"k_id": st.session_state["aktuelle_k_id"]},
+            {"o_id": st.session_state["aktuelle_o_id"]},
+        )
+    def k_download_laden(self, ableitungs_id): return b"{}"
+    def o_download_laden(self, ableitungs_id): return b"{}"
 
 zeige_modellableitung_seite(Projekte(), Service())
 """
@@ -120,6 +147,26 @@ def test_unsicherheit_wird_menschlich_markiert_ohne_ersatzwert() -> None:
     assert app.session_state["aufgerufene_unsicherheit"] == ["aktivitaeten"]
     assert not app.text_input
     assert not app.text_area
+
+
+def test_speichern_setzt_k_o_ids_und_oeffnet_schritt_neun() -> None:
+    app = _app()
+    next(wert for wert in app.button if wert.label == "Vorschau von K und O erzeugen").click().run()
+    next(
+        wert
+        for wert in app.checkbox
+        if wert.label.startswith("Ich bestätige ausschließlich")
+    ).check().run()
+    next(
+        wert for wert in app.button if wert.label == "K und O speichern und zu Schritt 9"
+    ).click().run()
+
+    assert app.session_state["aktuelle_modellableitungs_id"]
+    assert app.session_state["aktuelle_k_id"]
+    assert app.session_state["aktuelle_o_id"]
+    assert app.session_state["naechster_framework_bereich"] == (
+        "9 Modell ergänzen und validieren"
+    )
 
 
 def test_seite_enthaelt_fuenf_abschnitte_und_validierte_schritt_neun_uebergabe() -> None:

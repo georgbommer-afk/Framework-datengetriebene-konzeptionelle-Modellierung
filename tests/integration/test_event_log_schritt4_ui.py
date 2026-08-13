@@ -180,9 +180,20 @@ def test_ereignisorientierter_ablauf_speichert_e_und_setzt_aktiven_kontext() -> 
     assert not app.exception
     assert any("Fallbezogener Event Log (E)" in wert.value for wert in app.markdown)
     _button(app, "Weiter").click().run()
-    _button(app, "Fallbezogenen Event Log speichern").click().run()
+    _button(app, "Event Log E speichern und zu Schritt 5").click().run()
     assert not app.exception
     assert app.session_state["aktuelles_event_log_id"] == str(
         app.session_state["test_event_log_id"]
     )
+    assert app.session_state["naechster_framework_bereich"] == "5 Datenqualität prüfen"
     assert any("wurde gespeichert" in wert.value for wert in app.success)
+
+    zustand = app.session_state["event_log_zustaende"][str(projekt_id)]
+    event_log_id = zustand["event_log_id"]
+    konfigurations_id = zustand["konfigurations_id"]
+    _button(app, "Zurück").click().run()
+    zustand = app.session_state["event_log_zustaende"][str(projekt_id)]
+    assert zustand["schritt"] == 4
+    assert zustand["event_log_id"] == event_log_id
+    assert zustand["konfigurations_id"] == konfigurations_id
+    assert "artefakt" in zustand

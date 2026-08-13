@@ -2,8 +2,9 @@
 
 import logging
 import re
+from collections.abc import MutableMapping
 from dataclasses import asdict, replace
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -21,6 +22,7 @@ from framework_mvp.application.importvorgang_service import (
     GeladenerImport,
     ImportvorgangService,
 )
+from framework_mvp.application.loesch_service import LoeschService
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.application.transformation import pruefe_join
 from framework_mvp.application.transformations_service import TransformationsService
@@ -57,6 +59,7 @@ from framework_mvp.ui.navigation import (
     framework_bereich_oeffnen,
     schritt_abschliessen_und_weiter,
 )
+from framework_mvp.ui.session_cleanup import zwischendatensatz_zustand_bereinigen
 from framework_mvp.workspace import WorkspaceKonfiguration
 
 LOGGER = logging.getLogger(__name__)
@@ -785,12 +788,26 @@ def _join_konfigurieren(
             ),
         )
         rechter_datensatz, rechte_daten = service.zwischendatensatz_laden(rechter_datensatz_id)
+        widget_praefix = f"etl_join_{projekt_id}_{plan.transformationsplan_id}"
+        linke_optionen = [str(wert) for wert in linke_daten.columns]
+        linke_key = f"{widget_praefix}_links"
+        st.session_state[linke_key] = [
+            wert for wert in st.session_state.get(linke_key, ()) if wert in linke_optionen
+        ]
         linke_schluessel = st.multiselect(
-            "Schlüsselspalte im Hauptdatensatz", [str(wert) for wert in linke_daten.columns]
+            "Schlüsselspalte im Hauptdatensatz",
+            linke_optionen,
+            key=linke_key,
         )
+        rechte_optionen = [str(wert) for wert in rechte_daten.columns]
+        rechte_key = f"{widget_praefix}_rechts_{rechter_datensatz_id}"
+        st.session_state[rechte_key] = [
+            wert for wert in st.session_state.get(rechte_key, ()) if wert in rechte_optionen
+        ]
         rechte_schluessel = st.multiselect(
             "Schlüsselspalte in der zusätzlichen Tabelle",
-            [str(wert) for wert in rechte_daten.columns],
+            rechte_optionen,
+            key=rechte_key,
         )
         join_texte = {
             "Alle Zeilen der Haupttabelle behalten (LEFT JOIN)": "LEFT",
@@ -1050,20 +1067,19 @@ def _zwischendatensatz(
         zustand.update({"schritt": 1, "durchlauf_version": version})
         st.rerun()
     datensatz_id = zustand.setdefault("zwischendatensatz_id", uuid4())
-    speichern, weiter = st.columns(2)
-    if speichern.button(
-        "Q, R und T verbindlich speichern",
+    if datensatz is None and st.button(
+        "Q, R und T speichern und zu Schritt 3",
         type="primary",
-        disabled=datensatz is not None,
     ):
         datensatz = service.zwischendatensatz_erzeugen(plan, ergebnis, datensatz_id)
         zustand["zwischendatensatz"] = datensatz
         st.session_state.aktueller_zwischendatensatz_id = str(datensatz.zwischendatensatz_id)
-        st.rerun()
-    if weiter.button("Weiter", disabled=datensatz is None):
+        schritt_abschliessen_und_weiter(aktueller_schritt=2, projekt_id=projekt_id)
+    if datensatz is not None and st.button("Weiter zu Schritt 3", type="primary"):
+        st.session_state.aktueller_zwischendatensatz_id = str(datensatz.zwischendatensatz_id)
         schritt_abschliessen_und_weiter(aktueller_schritt=2, projekt_id=projekt_id)
     if datensatz is None:
-        st.info("Speichern Sie zuerst Q, R und T, bevor Sie fortfahren.")
+        st.info("Speichern Sie Q, R und T, um mit Schritt 3 fortzufahren.")
 
 
 def _kann_weiter(zustand: dict[str, Any]) -> bool:
@@ -1094,9 +1110,11 @@ def _navigation(zustand: dict[str, Any]) -> None:
     if zurueck.button("Zurück", disabled=zustand["schritt"] == 1, width="content"):
         zustand["schritt"] -= 1
         st.rerun()
+    if zustand["schritt"] >= len(ETL_SCHRITTE):
+        return
     if weiter.button(
         "Weiter",
-        disabled=zustand["schritt"] >= len(ETL_SCHRITTE) or not _kann_weiter(zustand),
+        disabled=not _kann_weiter(zustand),
         type="primary",
         width="content",
     ):
@@ -1111,6 +1129,7 @@ def zeige_etl_seite(
     importvorgang_service: ImportvorgangService,
     transformations_service: TransformationsService,
     workspace: WorkspaceKonfiguration,
+    loesch_service: LoeschService | None = None,
 ) -> None:
     """Zeigt Framework-Schritt 2 als fokussierten fünfstufigen ETL-Ablauf."""
     st.header("Schritt 2: ETL durchführen")
@@ -1155,8 +1174,46 @@ def zeige_etl_seite(
                 projekt_id,
                 zustand,
             )
-        if zustand["schritt"] < len(ETL_SCHRITTE):
-            _navigation(zustand)
+        _navigation(zustand)
+        if loesch_service is not None:
+            datensaetze = transformations_service.datensaetze_fuer_projekt(projekt_id)
+            if datensaetze:
+                st.divider()
+                with st.expander("Gefahrenbereich: Zwischendatensatz T löschen"):
+                    datensatz_id = st.selectbox(
+                        "Zu löschender Zwischendatensatz T",
+                        [wert.zwischendatensatz_id for wert in datensaetze],
+                        format_func=lambda wert: next(
+                            f"T {str(eintrag.zwischendatensatz_id)[:8]} · "
+                            f"{eintrag.zeilenanzahl:,} Zeilen · {eintrag.spaltenanzahl:,} Spalten"
+                            for eintrag in datensaetze
+                            if eintrag.zwischendatensatz_id == wert
+                        ),
+                    )
+                    kurz_id = str(datensatz_id)[:8]
+                    st.warning(
+                        "T und alle ausschließlich davon abhängigen Artefakte werden gelöscht. "
+                        "Rohimporte und Datenquellen bleiben erhalten."
+                    )
+                    bestaetigung = st.text_input(
+                        f"Zur Bestätigung die Kurz-ID {kurz_id} eingeben",
+                        key=f"t_loeschen_bestaetigung_{datensatz_id}",
+                    )
+                    if st.button(
+                        f"T {kurz_id} dauerhaft löschen",
+                        disabled=bestaetigung != kurz_id,
+                        key=f"t_loeschen_{datensatz_id}",
+                    ):
+                        loesch_service.zwischendatensatz_loeschen(projekt_id, datensatz_id)
+                        zwischendatensatz_zustand_bereinigen(
+                            cast("MutableMapping[str, Any]", st.session_state),
+                            projekt_id,
+                            datensatz_id,
+                        )
+                        st.session_state.etl_erfolgsmeldung = (
+                            f"Zwischendatensatz T {kurz_id} wurde vollständig gelöscht."
+                        )
+                        st.rerun()
     except (Domaenenfehler, Datenimportfehler) as fehler:
         st.error(str(fehler))
     except NichtUnterstuetzteSchemaversion as fehler:

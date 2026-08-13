@@ -24,6 +24,8 @@ class Transformationsart(StrEnum):
     DUPLIKATE_BEHANDELN = "duplikate_behandeln"
     AUSREISSER_BEHANDELN = "ausreisser_behandeln"
     ZEILEN_FILTERN = "zeilen_filtern"
+    ZEILEN_LOESCHEN = "zeilen_loeschen"
+    TEXT_BEREINIGEN = "text_bereinigen"
     ABGELEITETE_SPALTE = "abgeleitete_spalte"
     TABELLEN_JOIN = "tabellen_join"
 
@@ -33,6 +35,8 @@ FRAMEWORKKONFORME_TRANSFORMATIONSARTEN = (
     Transformationsart.WERTE_ERSETZEN,
     Transformationsart.EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN,
     Transformationsart.VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN,
+    Transformationsart.ZEILEN_LOESCHEN,
+    Transformationsart.TEXT_BEREINIGEN,
 )
 
 TRANSFORMATIONSART_BEZEICHNUNGEN = {
@@ -42,6 +46,8 @@ TRANSFORMATIONSART_BEZEICHNUNGEN = {
     Transformationsart.VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN: (
         "Vollständig leere Spalten entfernen"
     ),
+    Transformationsart.ZEILEN_LOESCHEN: "Zeilen anhand einer Bedingung löschen",
+    Transformationsart.TEXT_BEREINIGEN: "Text bereinigen oder extrahieren",
 }
 
 

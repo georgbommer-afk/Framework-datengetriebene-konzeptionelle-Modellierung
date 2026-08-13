@@ -1,4 +1,4 @@
-"""Framework-Schritt 10: Report- und Excel-Ausgabe eines validierten K*."""
+"""Framework-Schritt 10: HTML- und PDF-Ausgabe eines validierten K*."""
 
 from uuid import UUID
 
@@ -72,7 +72,8 @@ def zeige_modellausgabe_seite(
                 f"**{len(bestandteil.get('menschliche_eintraege', []))}**"
             )
     st.subheader("2. Ausgabeformen wählen")
-    formate = st.multiselect("Ausgabeformen", ["Report", "Excel"], default=["Report", "Excel"])
+    formate = st.multiselect("Ausgabeformen", ["HTML", "PDF"], default=["HTML", "PDF"])
+    st.button("XLSX-Ausgabe – noch nicht implementiert", disabled=True)
     signatur = (str(validierungslauf_id), str(k_stern_id), tuple(formate))
     if st.button("Ausgewählte Dateien erzeugen", disabled=not formate, type="primary"):
         try:
@@ -80,8 +81,8 @@ def zeige_modellausgabe_seite(
                 validierungslauf_id=validierungslauf_id,
                 projekt_id=projekt_id,
                 k_stern_id=k_stern_id,
-                report="Report" in formate,
-                excel="Excel" in formate,
+                html="HTML" in formate,
+                pdf="PDF" in formate,
             )
             st.session_state.schritt10_ausgabe_signatur = signatur
         except (Domaenenfehler, Importintegritaetsfehler, KeyError) as fehler:
@@ -92,17 +93,17 @@ def zeige_modellausgabe_seite(
             st.warning("K* oder die Formatauswahl wurde geändert; die Ausgabe ist veraltet.")
             return
         st.subheader("3. Strukturierte Ausgabe herunterladen")
-        if ausgabe.report_pdf is not None and ausgabe.report_dateiname is not None:
+        if ausgabe.report_html is not None and ausgabe.html_dateiname is not None:
+            st.download_button(
+                "HTML-Report herunterladen",
+                ausgabe.report_html,
+                ausgabe.html_dateiname,
+                "text/html",
+            )
+        if ausgabe.report_pdf is not None and ausgabe.pdf_dateiname is not None:
             st.download_button(
                 "PDF-Report herunterladen",
                 ausgabe.report_pdf,
-                ausgabe.report_dateiname,
+                ausgabe.pdf_dateiname,
                 "application/pdf",
-            )
-        if ausgabe.excel_xlsx is not None and ausgabe.excel_dateiname is not None:
-            st.download_button(
-                "Excel-Ausgabe herunterladen",
-                ausgabe.excel_xlsx,
-                ausgabe.excel_dateiname,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )

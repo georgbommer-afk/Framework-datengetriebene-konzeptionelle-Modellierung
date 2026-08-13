@@ -342,7 +342,12 @@ def _aktivitaetsdefinition(daten: pd.DataFrame, zustand: dict[str, Any]) -> Akti
         definition = Aktivitaetsdefinition(Aktivitaetsbildungsart.VORHANDENE_SPALTE, (name,))
         _aktivitaetskennzahlen(daten[name])
         return definition
-    quellen = st.multiselect("Quellspalten in gewünschter Reihenfolge", spalten)
+    datensatz_id = zustand.get("datensatz_id", "ohne_datensatz")
+    quellen = st.multiselect(
+        "Quellspalten in gewünschter Reihenfolge",
+        spalten,
+        key=f"mapping_aktivitaetsquellen_{datensatz_id}",
+    )
     trennzeichen = st.text_input("Text oder Trennzeichen", value=" → ")
     praefix = st.text_input("Präfix (optional)")
     suffix = st.text_input("Suffix (optional)")
@@ -455,13 +460,15 @@ def _attribute(
         optionen = [wert for wert in spalten if wert not in belegt and wert not in fremde]
         if not optionen:
             continue
+        widget_key = f"mapping_attribute_{zustand.get('datensatz_id', 'ohne_datensatz')}_{key}"
+        widget_wert = st.session_state.get(widget_key, bisher[key])
+        st.session_state[widget_key] = [wert for wert in widget_wert if wert in optionen]
         auswahl = tuple(
             st.multiselect(
                 titel,
                 optionen,
-                default=[wert for wert in bisher[key] if wert in optionen],
                 help=hilfe,
-                key=f"mapping_attribute_{key}",
+                key=widget_key,
             )
         )
         ergebnis[key] = auswahl
@@ -501,7 +508,11 @@ def _rollen_und_aktivitaet(
         verwendet.add(zeitstempel)
         _zeitkennzahlen(daten, zeitstempel)
     else:
-        zeitspalten = st.multiselect("Zeitstempelspalten", _zeitspalten(daten))
+        zeitspalten = st.multiselect(
+            "Zeitstempelspalten",
+            _zeitspalten(daten),
+            key=f"mapping_zeitspalten_{datensatz_id}",
+        )
         zuordnungen = []
         for name in zeitspalten:
             bezeichnung = st.text_input(
@@ -893,10 +904,19 @@ def zeige_semantisches_mapping(
             projekt_id, datensatz.zwischendatensatz_id, mappingtabelle_service
         )
         mapping: Mappingtabelle = zustand["mappingtabelle"]
+        modus_key = f"mappingtabelle_modus_{datensatz.zwischendatensatz_id}"
+        st.session_state.setdefault(
+            modus_key,
+            (
+                "Kein semantisches Mapping erforderlich"
+                if mapping.kein_mapping_erforderlich
+                else "Semantische Zuordnungen erfassen"
+            ),
+        )
         modus = st.radio(
             "Ist eine Interpretation technischer Bezeichnungen erforderlich?",
             ("Semantische Zuordnungen erfassen", "Kein semantisches Mapping erforderlich"),
-            index=1 if mapping.kein_mapping_erforderlich else 0,
+            key=modus_key,
         )
         if modus == "Semantische Zuordnungen erfassen":
             art = st.radio(
@@ -904,6 +924,7 @@ def zeige_semantisches_mapping(
                 (Mappingeintragsart.SPALTENBEZEICHNUNG, Mappingeintragsart.TECHNISCHER_WERT),
                 format_func=lambda wert: wert.value,
                 horizontal=True,
+                key=f"mappingtabelle_art_{datensatz.zwischendatensatz_id}",
             )
             mapping = (
                 _spaltenzuordnung_erfassen(daten, mapping)
@@ -913,21 +934,26 @@ def zeige_semantisches_mapping(
             mapping = _mappingeintrag_bearbeiten(mapping)
         _mappingtabelle_anzeigen(mapping)
         zustand["mappingtabelle"] = mapping
-        speichern, weiter = st.columns(2)
-        if speichern.button("Mappingtabelle M speichern", type="primary"):
+        modus_geaendert = mapping.kein_mapping_erforderlich != (
+            modus == "Kein semantisches Mapping erforderlich"
+        )
+        gespeichert = mapping.status is Mappingtabellenstatus.BESTAETIGT and not modus_geaendert
+        if not gespeichert and st.button(
+            "Mappingtabelle M speichern und zu Schritt 4", type="primary"
+        ):
             mapping = mapping.bestaetigen(
                 kein_mapping_erforderlich=(modus == "Kein semantisches Mapping erforderlich")
             )
             zustand["mappingtabelle"] = mapping
             zustand["mapping_pfad"] = mappingtabelle_service.speichern(mapping)
             st.session_state.aktuelle_mappingtabelle_id = str(mapping.mapping_id)
-            st.success("Mappingtabelle (M) wurde gespeichert und T unverändert weitergegeben.")
-        gespeichert = mapping.status is Mappingtabellenstatus.BESTAETIGT
+            schritt_abschliessen_und_weiter(aktueller_schritt=3, projekt_id=projekt_id)
         if pfad := zustand.get("mapping_pfad"):
             st.caption(f"Gespeichertes Artefakt: `{pfad}`")
-        if weiter.button("Weiter", disabled=not gespeichert):
+        if gespeichert and st.button("Weiter zu Schritt 4", type="primary"):
+            st.session_state.aktuelle_mappingtabelle_id = str(mapping.mapping_id)
             schritt_abschliessen_und_weiter(aktueller_schritt=3, projekt_id=projekt_id)
         if not gespeichert:
-            st.info("Speichern Sie zuerst die Mappingtabelle M, bevor Sie fortfahren.")
+            st.info("Speichern Sie die Mappingtabelle M, um mit Schritt 4 fortzufahren.")
     except (Domaenenfehler, Importintegritaetsfehler) as fehler:
         st.error(str(fehler))

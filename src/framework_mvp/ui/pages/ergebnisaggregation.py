@@ -9,7 +9,6 @@ from uuid import UUID, uuid5
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 from framework_mvp.application.ergebnisaggregation import kpi_definition
 from framework_mvp.application.ergebnisaggregation.sollprozess import (
@@ -335,7 +334,8 @@ def _woped_hilfe() -> None:
             f"[Alternative PNML-Werkzeuge]({PNML_TOOLS_URL})"
         )
         st.link_button("WoPeD Next in neuem Tab öffnen", WOPED_NEXT_URL)
-        st.iframe(WOPED_NEXT_URL, height=900, scrolling=True) #das alte "components.iframe" hat zum Fehlerfall geführt
+        # Das frühere components.iframe(WOPED_NEXT_URL, height=900, scrolling=True) schlug fehl.
+        st.iframe(WOPED_NEXT_URL, height=900, scrolling=True)
 
 
 def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None, bool]:
@@ -758,7 +758,11 @@ def zeige_ergebnisaggregation_seite(
             "Ich bestätige die Vorschau, alle Zuordnungen und die vollständige Lineage von A_G.",
             key="ag_speichern_bestaetigt",
         )
-        if st.button("A_G reproduzierbar speichern", type="primary"):
+        if st.button(
+            "A_G speichern und zu Schritt 8",
+            type="primary",
+            disabled=not bestaetigt,
+        ):
             try:
                 aggregations_id = (
                     UUID(str(st.session_state.get("ag_neue_id")))
@@ -772,7 +776,11 @@ def zeige_ergebnisaggregation_seite(
                     aggregations_id, vorschau, menschlich_bestaetigt=bestaetigt
                 )
                 st.session_state.aktuelle_aggregations_id = str(aggregation.aggregations_id)
-                st.success("A_G wurde atomar gespeichert und vollständig erneut validiert.")
+                service.uebergabe_schritt8(
+                    aggregation.aggregations_id, projekt_id, freigabe_id, analyse_id
+                )
+                st.session_state.naechster_framework_bereich = "8 Modellbestandteile ableiten"
+                st.rerun()
             except (Domaenenfehler, Importintegritaetsfehler, ValueError) as fehler:
                 st.error(str(fehler))
     aktive_id = st.session_state.get("aktuelle_aggregations_id")

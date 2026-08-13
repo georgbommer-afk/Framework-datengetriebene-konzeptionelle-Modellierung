@@ -6,8 +6,12 @@ from typing import Any, cast
 import pandas as pd
 import streamlit as st
 
-from framework_mvp.application.transformation import ermittle_ersatzwert_aus_profil
+from framework_mvp.application.transformation import (
+    ermittle_ersatzwert_aus_profil,
+    zaehle_zu_loeschende_zeilen,
+)
 from framework_mvp.application.transformations_service import TransformationsService
+from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     FRAMEWORKKONFORME_TRANSFORMATIONSARTEN,
     TRANSFORMATIONSART_BEZEICHNUNGEN,
@@ -179,6 +183,98 @@ def _leere_spalten_formular(
     )
 
 
+FILTEROPERATOREN = (
+    "gleich",
+    "ungleich",
+    "enthält",
+    "beginnt mit",
+    "endet mit",
+    "ist leer",
+    "ist nicht leer",
+    "kleiner",
+    "kleiner oder gleich",
+    "größer",
+    "größer oder gleich",
+    "zwischen",
+    "vor",
+    "nach",
+    "zeitlich zwischen",
+    "enthalten in",
+    "nicht enthalten in",
+)
+
+
+def _zeilen_loeschen_formular(
+    daten: pd.DataFrame,
+) -> tuple[tuple[str, ...], dict[str, Any], str] | None:
+    spalte = fachliche_auswahl("Spalte für Löschbedingung", [str(name) for name in daten.columns])
+    operator = fachliche_auswahl("Operator der Löschbedingung", FILTEROPERATOREN)
+    if spalte is None or operator is None:
+        st.info("Wählen Sie eine Spalte und einen Operator aus.")
+        return None
+    parameter: dict[str, Any] = {"operator": operator}
+    if operator in {"zwischen", "zeitlich zwischen"}:
+        parameter["von"] = st.text_input("Unterer Wert beziehungsweise Startzeitpunkt")
+        parameter["bis"] = st.text_input("Oberer Wert beziehungsweise Endzeitpunkt")
+        vollstaendig = bool(parameter["von"] and parameter["bis"])
+    elif operator in {"enthalten in", "nicht enthalten in"}:
+        listenwert = st.text_area("Werteliste (ein Wert pro Zeile)")
+        parameter["werte"] = [wert.strip() for wert in listenwert.splitlines() if wert.strip()]
+        vollstaendig = bool(parameter["werte"])
+    elif operator in {"ist leer", "ist nicht leer"}:
+        vollstaendig = True
+    else:
+        parameter["wert"] = st.text_input("Vergleichswert")
+        vollstaendig = bool(str(parameter["wert"]))
+    if not vollstaendig:
+        st.info("Vervollständigen Sie die Löschbedingung.")
+        return None
+    try:
+        anzahl = zaehle_zu_loeschende_zeilen(daten, spalte, parameter)
+    except (Domaenenfehler, TypeError, ValueError) as fehler:
+        st.error(f"Die Löschbedingung ist ungültig: {fehler}")
+        return None
+    st.info(f"Vorschau: {anzahl} von {len(daten)} Zeilen werden gelöscht.")
+    parameter["vorschau_zu_loeschende_zeilen"] = anzahl
+    return (spalte,), parameter, f"{anzahl} Zeilen in {spalte} löschen"
+
+
+def _text_bereinigen_formular(
+    daten: pd.DataFrame,
+) -> tuple[tuple[str, ...], dict[str, Any], str] | None:
+    spalte = fachliche_auswahl("Textspalte", [str(name) for name in daten.columns])
+    art = fachliche_auswahl(
+        "Textoperation",
+        (
+            "Festen Präfix entfernen",
+            "Festen Suffix entfernen",
+            "Zwischen Begrenzern extrahieren",
+        ),
+    )
+    if spalte is None or art is None:
+        st.info("Wählen Sie eine Textspalte und eine Textoperation aus.")
+        return None
+    parameter: dict[str, Any] = {
+        "art": art,
+        "nichttreffer": "Originalwert beibehalten",
+    }
+    if art == "Festen Präfix entfernen":
+        parameter["praefix"] = st.text_input("Fester Präfix")
+        vollstaendig = bool(parameter["praefix"])
+    elif art == "Festen Suffix entfernen":
+        parameter["suffix"] = st.text_input("Fester Suffix")
+        vollstaendig = bool(parameter["suffix"])
+    else:
+        parameter["startbegrenzer"] = st.text_input("Startbegrenzer")
+        parameter["endbegrenzer"] = st.text_input("Endbegrenzer")
+        vollstaendig = bool(parameter["startbegrenzer"] and parameter["endbegrenzer"])
+    st.caption("Sicherer Standard: Werte ohne Treffer bleiben unverändert.")
+    if not vollstaendig:
+        st.info("Geben Sie die erforderlichen Begrenzer vollständig an.")
+        return None
+    return (spalte,), parameter, f"Text in {spalte}: {art}"
+
+
 def _neuer_schritt(
     art: Transformationsart,
     daten: pd.DataFrame,
@@ -191,8 +287,12 @@ def _neuer_schritt(
         ergebnis = _wertersetzung_formular(daten, profil)
     elif art is Transformationsart.EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN:
         ergebnis = _duplikate_formular(daten)
-    else:
+    elif art is Transformationsart.VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN:
         ergebnis = _leere_spalten_formular(daten)
+    elif art is Transformationsart.ZEILEN_LOESCHEN:
+        ergebnis = _zeilen_loeschen_formular(daten)
+    else:
+        ergebnis = _text_bereinigen_formular(daten)
     if ergebnis is None:
         return None
     spalten, parameter, beschreibung = ergebnis
@@ -211,7 +311,7 @@ def zeige_transformationseditor(
     ausgangsdaten: pd.DataFrame,
     ausgangsprofil: dict[str, Any],
 ) -> Transformationsplan:
-    """Erfasst ausschließlich die vier Transformationen aus Tabelle 3.11."""
+    """Erfasst die explizit frameworkkonformen Transformationen für Schritt 2."""
     st.subheader("Transformationsplan")
     st.caption(
         "Transformationen werden nur nach Ihrer ausdrücklichen Auswahl ausgeführt. "

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pandas as pd
+import streamlit as st
 
 from framework_mvp.domain.models import (
     Freigabestatus, LogistischeZielgroesse, Mappingzustand, Projekt, Projektstatus,
@@ -22,6 +23,7 @@ F = UUID("22222222-2222-2222-2222-222222222222")
 E = UUID("33333333-3333-3333-3333-333333333333")
 A = UUID("44444444-4444-4444-4444-444444444444")
 T = UUID("55555555-5555-5555-5555-555555555555")
+AG = UUID("66666666-6666-6666-6666-666666666666")
 JETZT = datetime(2026, 1, 1, tzinfo=UTC)
 AUFTRAG = Untersuchungsauftrag(
     "Problem", "Leistung bewerten", Systemtyp.KOMBINIERT, "Werk",
@@ -58,6 +60,20 @@ class Aggregation:
         assert (projekt_id, freigabe_id, analyse_id) == (P, F, A)
         return BASIS
     def konfigurationsfingerabdruck(self, **kwargs): return "6" * 64
+    def vorschau(self, **kwargs):
+        return SimpleNamespace(
+            grundlage=BASIS, kpi_ergebnisse=(), conformance_ergebnis=None,
+            zeitvergleich_ergebnis=None, warnungen=(), konfigurationsfingerabdruck="6" * 64,
+        )
+    def speichern(self, aggregations_id, vorschau, menschlich_bestaetigt):
+        assert menschlich_bestaetigt
+        return SimpleNamespace(aggregations_id=AG)
+    def uebergabe_schritt8(self, aggregations_id, projekt_id, freigabe_id, analyse_id):
+        assert (aggregations_id, projekt_id, freigabe_id, analyse_id) == (AG, P, F, A)
+        st.session_state["test_uebergabe_schritt8"] = True
+    def laden(self, aggregations_id):
+        return SimpleNamespace(aggregations_id=AG), {}
+    def a_g_download_laden(self, aggregations_id): return b"{}"
 
 zeige_ergebnisaggregation_seite(Projekte(), Aggregation())
 """
@@ -99,6 +115,27 @@ def test_aktive_kette_hat_keine_lokale_auswahl_und_nur_kpis_aus_u() -> None:
     assert any(
         wert.label == "Direkte zeitbezogene Soll-Ist-Auswertung durchführen"
         for wert in app.checkbox
+    )
+
+
+def test_a_g_speichern_setzt_id_uebergabe_und_schritt_acht() -> None:
+    app = _app()
+    next(wert for wert in app.button if wert.label == "A_G vollständig neu berechnen").click().run()
+    next(
+        wert
+        for wert in app.checkbox
+        if wert.label.startswith("Ich bestätige die Vorschau")
+    ).check().run()
+    next(
+        wert for wert in app.button if wert.label == "A_G speichern und zu Schritt 8"
+    ).click().run()
+
+    assert app.session_state["aktuelle_aggregations_id"] == (
+        "66666666-6666-6666-6666-666666666666"
+    )
+    assert app.session_state["test_uebergabe_schritt8"] is True
+    assert app.session_state["naechster_framework_bereich"] == (
+        "8 Modellbestandteile ableiten"
     )
 
 

@@ -1,21 +1,13 @@
 """PDF-Rendering des konzeptionellen Modells."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 from weasyprint import HTML
 
-
-_TEMPLATE_DIR = (
-    Path(__file__).resolve().parent
-    / "templates"
-    / "conceptual_model"
-    / "V1"
-)
+_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates" / "conceptual_model" / "V1"
 
 _PDF_TEMPLATE = "report_pdf.html"
 
@@ -35,8 +27,9 @@ def render_report_pdf(
 
     try:
         environment = Environment(
-            loader=FileSystemLoader(_TEMPLATE_DIR),
+            loader=FileSystemLoader(str(_TEMPLATE_DIR)),
             autoescape=select_autoescape(["html", "xml"]),
+            undefined=StrictUndefined,
         )
 
         template = environment.get_template(_PDF_TEMPLATE)
@@ -50,8 +43,6 @@ def render_report_pdf(
         ).write_pdf(str(ziel))
 
     except Exception as fehler:
-        raise PdfRenderingFehler(
-            f"PDF-Report konnte nicht gerendert werden: {fehler}"
-        ) from fehler
+        raise PdfRenderingFehler(f"PDF-Report konnte nicht gerendert werden: {fehler}") from fehler
 
     return ziel

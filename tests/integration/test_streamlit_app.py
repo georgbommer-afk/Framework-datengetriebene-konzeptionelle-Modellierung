@@ -82,6 +82,63 @@ def test_anwendung_startet_mit_fuenf_schritten_und_tooltips(
     assert not any(element.label == "Projektstatus" for element in anwendung.selectbox)
 
 
+def test_problemstellung_bleibt_bei_reruns_und_vor_zurueck_navigation_erhalten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    anwendung = _anwendung_starten(tmp_path, monkeypatch)
+    problem = next(wert for wert in anwendung.text_area if wert.label == "Problemstellung")
+    problem.set_value("Unveränderte fachliche Problemstellung").run()
+    anwendung.run()
+    _schaltflaeche(anwendung, "Weiter").click().run()
+    _schaltflaeche(anwendung, "Zurück").click().run()
+
+    problem = next(wert for wert in anwendung.text_area if wert.label == "Problemstellung")
+    assert problem.value == "Unveränderte fachliche Problemstellung"
+    assert (
+        anwendung.session_state["wizard_entwurf"]["problemstellung"]
+        == "Unveränderte fachliche Problemstellung"
+    )
+
+
+def test_projektwechsel_vermischt_keine_widgetwerte(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    datenbankpfad = tmp_path / "streamlit.sqlite"
+    monkeypatch.setenv(DATENBANKPFAD_UMGEBUNGSVARIABLE, str(datenbankpfad))
+    service = erstelle_projekt_service()
+    for name, problem in (("Projekt A", "Problem A"), ("Projekt B", "Problem B")):
+        service.projekt_anlegen(
+            bezeichnung=name,
+            untersuchungsauftrag=Untersuchungsauftrag(
+                problem, "System analysieren", Systemtyp.PRODUKTION, "Grenze"
+            ),
+        )
+    anwendung = AppTest.from_file(ANWENDUNGSPFAD).run()
+    projektauswahl = next(
+        wert for wert in anwendung.selectbox if wert.label == "Vorhandenes Projekt auswählen"
+    )
+    projektauswahl.select_index(projektauswahl.options.index("Projekt A")).run()
+    next(
+        wert for wert in anwendung.text_area if wert.label == "Problemstellung"
+    ).set_value("Ungespeicherte Änderung A").run()
+
+    projektauswahl = next(
+        wert for wert in anwendung.selectbox if wert.label == "Vorhandenes Projekt auswählen"
+    )
+    projektauswahl.select_index(projektauswahl.options.index("Projekt B")).run()
+    assert next(
+        wert for wert in anwendung.text_area if wert.label == "Problemstellung"
+    ).value == "Problem B"
+
+    projektauswahl = next(
+        wert for wert in anwendung.selectbox if wert.label == "Vorhandenes Projekt auswählen"
+    )
+    projektauswahl.select_index(projektauswahl.options.index("Projekt A")).run()
+    assert next(
+        wert for wert in anwendung.text_area if wert.label == "Problemstellung"
+    ).value == "Problem A"
+
+
 def test_untersuchungszwecke_und_logistikziele_sind_kompakt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -218,6 +275,28 @@ def test_systemspezifische_merkmale_werden_bedingt_angezeigt(
     assert "Auflagegröße" not in labels
 
 
+def test_handlingvorgaenge_bleiben_beim_erweitern_gemeinsam_ausgewaehlt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    anwendung = _anwendung_starten(tmp_path, monkeypatch)
+    anwendung.session_state["wizard_schritt"] = 3
+    anwendung.run()
+    next(wert for wert in anwendung.selectbox if wert.label == "Systemtyp").set_value(
+        "Intralogistik"
+    ).run()
+    handling = next(wert for wert in anwendung.multiselect if wert.label == "Handlingvorgänge")
+    handling.set_value(["Kommissionierung"]).run()
+    handling = next(wert for wert in anwendung.multiselect if wert.label == "Handlingvorgänge")
+    handling.set_value(["Kommissionierung", "Sortierung"]).run()
+
+    assert set(
+        anwendung.session_state["wizard_entwurf"]["intralogistik"]["handlingvorgaenge"]
+    ) == {"Kommissionierung", "Sortierung"}
+    assert set(
+        next(wert for wert in anwendung.multiselect if wert.label == "Handlingvorgänge").value
+    ) == {"Kommissionierung", "Sortierung"}
+
+
 def test_kpi_hinweis_und_entfernte_allgemeine_freitexte(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -305,7 +384,10 @@ def test_vorhandene_datenquelle_ist_von_schritt_1_entkoppelt(
     anwendung.run()
     assert not any("ERP-Export" in element.value for element in anwendung.markdown)
     assert not anwendung.date_input
-    assert any(element.label == "Projektrahmen speichern" for element in anwendung.button)
+    assert any(
+        element.label == "Projektrahmen speichern und zu Schritt 2"
+        for element in anwendung.button
+    )
 
 
 def test_altprojekt_wird_ohne_verlust_verdeckt_geladen(
@@ -360,7 +442,7 @@ def test_altprojekt_wird_ohne_verlust_verdeckt_geladen(
     _vollstaendiges_produktionsprofil(anwendung.session_state["wizard_entwurf"])
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    _schaltflaeche(anwendung, "Projektrahmen speichern").click().run()
+    _schaltflaeche(anwendung, "Projektrahmen speichern und zu Schritt 2").click().run()
     erneut = service.projekt_laden(projekt.projekt_id)
     assert erneut is not None
     assert erneut.status is Projektstatus.AKTIV
@@ -386,13 +468,12 @@ def test_vollstaendiges_neues_projekt_navigiert_zu_etl(
     _vollstaendiges_produktionsprofil(entwurf)
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    _schaltflaeche(anwendung, "Projektrahmen speichern").click().run()
+    _schaltflaeche(anwendung, "Projektrahmen speichern und zu Schritt 2").click().run()
     assert not anwendung.exception
     gespeicherte = erstelle_projekt_service().projekte_auflisten()
     assert len(gespeicherte) == 1
     assert str(gespeicherte[0].projekt_id) == anwendung.session_state["aktuelles_projekt_id"]
     assert gespeicherte[0].status is Projektstatus.ENTWURF
-    _schaltflaeche(anwendung, "Weiter").click().run()
     assert anwendung.radio[0].value == "2 ETL durchführen"
 
 
@@ -406,7 +487,7 @@ def test_validierungsfehler_verhindert_navigation(
     )
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    _schaltflaeche(anwendung, "Projektrahmen speichern").click().run()
+    _schaltflaeche(anwendung, "Projektrahmen speichern und zu Schritt 2").click().run()
     assert anwendung.radio[0].value == "Schritt 1: Projektrahmen definieren"
     assert any("müssen ausgefüllt sein" in element.value for element in anwendung.error)
     assert not erstelle_projekt_service().projekte_auflisten()
@@ -428,7 +509,7 @@ def test_nicht_ausgewaehlte_pflicht_dropdowns_blockieren_das_speichern(
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
 
-    _schaltflaeche(anwendung, "Projektrahmen speichern").click().run()
+    _schaltflaeche(anwendung, "Projektrahmen speichern und zu Schritt 2").click().run()
 
     assert any("Wählen Sie für die Systemklassifikation" in wert.value for wert in anwendung.error)
     assert not erstelle_projekt_service().projekte_auflisten()

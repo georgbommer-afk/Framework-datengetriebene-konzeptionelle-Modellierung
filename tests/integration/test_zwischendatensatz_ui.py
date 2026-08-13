@@ -103,7 +103,7 @@ def test_schritt_neun_zeigt_alle_artefaktpfade_ohne_attributfehler(
     monkeypatch.setenv(WORKSPACE_UMGEBUNGSVARIABLE, str(workspace))
     anwendung = AppTest.from_string(ANWENDUNG).run()
     next(
-        wert for wert in anwendung.button if wert.label == "Q, R und T verbindlich speichern"
+        wert for wert in anwendung.button if wert.label == "Q, R und T speichern und zu Schritt 3"
     ).click().run()
     assert not anwendung.exception
     ausgabe = "\n".join(wert.value for wert in anwendung.markdown)
@@ -113,6 +113,7 @@ def test_schritt_neun_zeigt_alle_artefaktpfade_ohne_attributfehler(
     assert "Datenquellenkatalog (Q)" in ausgabe
     assert "Datenprofil (R)" in ausgabe
     assert "Aufbereiteter Zwischendatensatz (T)" in ausgabe
+    assert anwendung.session_state["naechster_framework_bereich"] == "3 Semantisches Mapping"
     with sqlite3.connect(datenbank) as verbindung:
         zeile = verbindung.execute(
             "SELECT relativer_daten_pfad, relativer_schema_pfad, "

@@ -205,15 +205,22 @@ def test_technischer_mangel_blockiert_e_stern_und_navigiert_zur_ursache(
 
 def test_erfolgreiche_freigabe_setzt_e_stern_kontext_und_erlaubt_schritt_sechs() -> None:
     app = _app(schritt=4)
-    _button(app, "Event Log E unverändert als E* freigeben").click().run()
+    _button(app, "Event Log E als E* freigeben und zu Schritt 6").click().run()
     assert not app.exception
     assert app.session_state["aktuelle_freigabe_id"] == "55555555-5555-5555-5555-555555555555"
     assert app.session_state["freigegebenes_event_log_id"] == (
         "22222222-2222-2222-2222-222222222222"
     )
     assert any("keine zusätzliche Qualitäts-CSV" in wert.value for wert in app.success)
-    _button(app, "Weiter").click().run()
     assert app.session_state["naechster_framework_bereich"] == "6 Process Mining durchführen"
+
+    _button(app, "Zurück").click().run()
+    zustand = app.session_state["quality_gate_zustaende"][
+        "11111111-1111-1111-1111-111111111111"
+    ]
+    assert zustand["schritt"] == 3
+    assert str(zustand["freigabe_id"]) == "55555555-5555-5555-5555-555555555555"
+    assert len(zustand["entscheidungen"]) == 2
 
 
 def test_automatische_pruefung_verwendet_die_fachliche_ueberschrift() -> None:

@@ -850,7 +850,40 @@
             </article>
         {% endfor %}
 
-    {% else %}
+    {% endif %}
+
+    {% if warteschlangen.wartestellenhinweise %}
+        <div class="content-card">
+            <h2>Positive Wartestellenhinweise aus E*</h2>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Übergang</th>
+                        <th>Anzahl</th>
+                        <th>Mittelwert (s)</th>
+                        <th>Median (s)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for hinweis in warteschlangen.wartestellenhinweise %}
+                        <tr>
+                            <td>
+                                {{ hinweis.get("uebergang", {}).get("von", "–") }}
+                                →
+                                {{ hinweis.get("uebergang", {}).get("zu", "–") }}
+                            </td>
+                            <td>{{ hinweis.get("positive_hinweise", "–") }}</td>
+                            <td>{{ hinweis.get("mittlere_wartezeit_sekunden", "–") }}</td>
+                            <td>{{ hinweis.get("mediane_wartezeit_sekunden", "–") }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+
+    {% if not warteschlangen.wartezeit_kpis
+          and not warteschlangen.wartestellenhinweise %}
         <div class="notice-block">
             Aus den vorliegenden Artefakten wurde keine explizite
             Warteschlangenstruktur als eigener Modellbestandteil abgeleitet.
@@ -910,6 +943,39 @@
 
         {{ liste_oder_strich(ressourcen.event_log_ressourcen) }}
     </div>
+
+    {% if ressourcen.aktivitaet_ressourcen %}
+        <div class="content-card">
+            <h2>Beobachtete Aktivität-Ressourcen-Zuordnungen</h2>
+            <table class="data-table">
+                <thead><tr><th>Aktivität</th><th>Ressourcen</th></tr></thead>
+                <tbody>
+                    {% for zuordnung in ressourcen.aktivitaet_ressourcen %}
+                        <tr>
+                            <td>{{ zuordnung.get("aktivitaet", "–") }}</td>
+                            <td>{{ zuordnung.get("ressourcen", []) | join(", ") }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+
+    {% if ressourcen.manuelle_aktivitaet_ressourcen %}
+        <div class="human-input">
+            <div class="human-input-title">Manuelle Ressourcenzuordnung aus Schritt 9</div>
+            {% for zuordnung in ressourcen.manuelle_aktivitaet_ressourcen %}
+                <div class="human-input-entry">
+                    <strong>{{ zuordnung.get("aktivitaet", "–") }}:</strong>
+                    {% if zuordnung.get("ressourcen") %}
+                        {{ zuordnung.get("ressourcen", []) | join(", ") }}
+                    {% else %}
+                        bewusst offen
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
 
     {% if ressourcen.ressourcenbezogene_kpis %}
 

@@ -52,6 +52,9 @@ class ProcessMining:
     def analysen_fuer_freigabe(self, projekt_id, freigabe_id): return []
     def graphviz_status(self): return GraphvizStatus(False, "", "", False)
     def vorschau(self, freigabe_id, konfiguration):
+        st.session_state["test_vorschau_aufrufe"] = (
+            st.session_state.get("test_vorschau_aufrufe", 0) + 1
+        )
         dfg = DfgErgebnis(
             ("A", "B", "C"), (("A", 2), ("B", 1), ("C", 1)),
             (DfgKante("A", "B", 1, 0.5), DfgKante("A", "C", 1, 0.5)),
@@ -109,6 +112,14 @@ def _button(app: AppTest, label: str):  # type: ignore[no-untyped-def]
     return next(wert for wert in app.button if wert.label == label)
 
 
+def _vorschau_aufrufe(app: AppTest) -> int:
+    return (
+        int(app.session_state["test_vorschau_aufrufe"])
+        if "test_vorschau_aufrufe" in app.session_state
+        else 0
+    )
+
+
 def test_ohne_aktive_freigabe_ist_process_mining_blockiert_und_schritt_fuenf_erreichbar() -> None:
     app = _app(aktive_freigabe=False)
     assert not app.exception
@@ -133,7 +144,9 @@ def test_aktives_e_stern_wird_ohne_lokale_auswahl_kompakt_angezeigt() -> None:
 
 def test_regulaerer_ablauf_bietet_nur_k_und_notation_und_uebergibt_p_und_a_d() -> None:
     app = _app()
+    assert _vorschau_aufrufe(app) == 0
     _button(app, "Weiter").click().run()
+    assert _vorschau_aufrufe(app) == 0
     assert {wert.label for wert in app.slider} == {"Schwellwert k"}
     assert {wert.label for wert in app.radio} == {"Prozessnotation für P"}
     alle_labels = {
@@ -150,11 +163,15 @@ def test_regulaerer_ablauf_bietet_nur_k_und_notation_und_uebergibt_p_und_a_d() -
         }
         & alle_labels
     )
-    app.slider[0].set_value(0.2).run()
-    app.radio[0].set_value("BPMN").run()
+    app.slider[0].set_value(0.2)
+    app.radio[0].set_value("BPMN")
+    _button(app, "Modell berechnen").click().run()
+    assert app.session_state["test_vorschau_aufrufe"] == 1
     assert any("Inductive Miner – infrequent" in wert.value for wert in app.warning)
+    app.run()
+    assert app.session_state["test_vorschau_aufrufe"] == 1
     _button(app, "Weiter").click().run()
-    _button(app, "P und A_D reproduzierbar speichern").click().run()
+    _button(app, "P und A_D speichern und zu Schritt 7").click().run()
     assert app.session_state["aktuelle_analyse_id"] == "44444444-4444-4444-4444-444444444444"
     assert app.session_state["aktuelles_prozessmodell_id"] == (
         "44444444-4444-4444-4444-444444444444"
@@ -162,5 +179,32 @@ def test_regulaerer_ablauf_bietet_nur_k_und_notation_und_uebergibt_p_und_a_d() -
     assert app.session_state["aktuelle_discovery_ergebnisse_id"] == (
         "44444444-4444-4444-4444-444444444444"
     )
-    _button(app, "Weiter zu Schritt 7: Ergebnisse aggregieren").click().run()
     assert app.session_state["naechster_framework_bereich"] == "7 Ergebnisse aggregieren"
+
+
+def test_zurueck_aus_dem_letzten_abschnitt_bewahrt_vorschau_und_konfiguration() -> None:
+    app = _app()
+    _button(app, "Weiter").click().run()
+    app.slider[0].set_value(0.2)
+    app.radio[0].set_value("BPMN")
+    _button(app, "Modell berechnen").click().run()
+    _button(app, "Weiter").click().run()
+    zustand = app.session_state["process_mining_zustaende"][
+        "11111111-1111-1111-1111-111111111111"
+    ]
+    signatur = zustand["vorschau_signatur"]
+    analyse_id = zustand["analyse_id"]
+
+    [wert for wert in app.button if wert.label == "Zurück"][-1].click().run()
+
+    zustand = app.session_state["process_mining_zustaende"][
+        "11111111-1111-1111-1111-111111111111"
+    ]
+    assert zustand["schritt"] == 2
+    assert zustand["vorschau_signatur"] == signatur
+    assert zustand["analyse_id"] == analyse_id
+    assert app.slider[0].value == 0.2
+    notation = app.radio[0].value
+    assert notation is not None
+    assert notation.value == "bpmn"
+    assert app.session_state["test_vorschau_aufrufe"] == 1

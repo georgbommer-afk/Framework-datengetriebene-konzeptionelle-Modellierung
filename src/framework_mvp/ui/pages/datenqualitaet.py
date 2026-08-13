@@ -71,6 +71,8 @@ def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
     if links.button("Zurück", disabled=zustand["schritt"] == 1, width="stretch"):
         zustand["schritt"] -= 1
         st.rerun()
+    if zustand["schritt"] == len(SCHRITTE):
+        return
     if rechts.button(
         "Weiter",
         disabled=not weiter,
@@ -309,11 +311,9 @@ def _abschluss(
         zustand["freigabe"] = freigabe
         st.session_state.aktuelle_freigabe_id = str(freigabe.freigabe_id)
         st.session_state.freigegebenes_event_log_id = str(event_log_id)
-    speichern, weiter = st.columns(2)
-    if speichern.button(
-        "Event Log E unverändert als E* freigeben",
+    if freigabe is None and st.button(
+        "Event Log E als E* freigeben und zu Schritt 6",
         type="primary",
-        disabled=freigabe is not None,
     ):
         freigabe = service.freigeben(
             zustand["freigabe_id"],
@@ -329,7 +329,7 @@ def _abschluss(
         zustand["freigabe"] = geladen
         st.session_state.aktuelle_freigabe_id = str(geladen.freigabe_id)
         st.session_state.freigegebenes_event_log_id = str(event_log_id)
-        st.rerun()
+        schritt_abschliessen_und_weiter(aktueller_schritt=5, projekt_id=projekt_id)
     if freigabe is None:
         st.info("Geben Sie zuerst E unverändert als E* frei, bevor Sie fortfahren.")
         return
@@ -354,7 +354,7 @@ def _abschluss(
         or wert in kontext.lineage.get("herkunft_zusaetzliche_attribute", {})
     ]
     st.dataframe(e_stern.loc[:, fachspalten].head(200), width="stretch")
-    if weiter.button("Weiter"):
+    if st.button("Weiter zu Schritt 6", type="primary"):
         schritt_abschliessen_und_weiter(aktueller_schritt=5, projekt_id=projekt_id)
 
 
@@ -419,5 +419,6 @@ def zeige_datenqualitaet_seite(
                 qualitaet_service,
                 zustand,
             )
+            _navigation(zustand, False)
     except (Domaenenfehler, Importintegritaetsfehler) as fehler:
         st.error(str(fehler))

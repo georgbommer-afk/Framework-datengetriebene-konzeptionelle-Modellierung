@@ -5,6 +5,7 @@ from framework_mvp.application.transformation.engine import (
     ermittle_ersatzwert_aus_profil,
     fuehre_transformationsplan_aus,
     kombiniere_textspalten,
+    zaehle_zu_loeschende_zeilen,
 )
 from framework_mvp.application.transformation.joins import (
     JoinPruefung,
@@ -20,4 +21,5 @@ __all__ = [
     "fuehre_transformationsplan_aus",
     "kombiniere_textspalten",
     "pruefe_join",
+    "zaehle_zu_loeschende_zeilen",
 ]

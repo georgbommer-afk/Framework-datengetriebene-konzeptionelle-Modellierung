@@ -74,7 +74,10 @@ MODELLBESTANDTEILE = (
     ModellbestandteilDefinition(
         ModellbestandteilId.WARTESCHLANGEN,
         "Warteschlangen",
-        (Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,),
+        (
+            Eingangsartefakt.EVENT_LOG_E_STERN,
+            Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
+        ),
         True,
     ),
     ModellbestandteilDefinition(
@@ -458,12 +461,75 @@ def _warteschlangen_ressourcen(sammlung: _Sammlung) -> None:
             f"kpi_ergebnisse.wartezeit[{index}]",
             wert,
         )
-    if not warte_kpis:
+    e_stern = sammlung.basis.event_log
+    wartehinweise: list[dict[str, Any]] = []
+    if {"case_id", "activity", "start_timestamp", "end_timestamp"} <= set(e_stern.columns):
+        arbeitskopie = e_stern.copy(deep=True)
+        arbeitskopie["start_timestamp"] = pd.to_datetime(
+            arbeitskopie["start_timestamp"], errors="coerce", utc=True
+        )
+        arbeitskopie["end_timestamp"] = pd.to_datetime(
+            arbeitskopie["end_timestamp"], errors="coerce", utc=True
+        )
+        arbeitskopie = arbeitskopie.dropna(subset=["case_id"])
+        arbeitskopie["_reihenfolge"] = range(len(arbeitskopie))
+        differenzen: list[dict[str, Any]] = []
+        for _, fall in arbeitskopie.groupby("case_id", sort=False, dropna=False):
+            sortiert = fall.sort_values(
+                ["start_timestamp", "_reihenfolge"], kind="stable", na_position="last"
+            )
+            for position in range(len(sortiert) - 1):
+                aktuell = sortiert.iloc[position]
+                folgend = sortiert.iloc[position + 1]
+                if (
+                    pd.isna(aktuell["activity"])
+                    or pd.isna(folgend["activity"])
+                    or not str(aktuell["activity"]).strip()
+                    or not str(folgend["activity"]).strip()
+                    or pd.isna(aktuell["end_timestamp"])
+                    or pd.isna(folgend["start_timestamp"])
+                ):
+                    continue
+                delta = folgend["start_timestamp"] - aktuell["end_timestamp"]
+                sekunden = float(delta.total_seconds())
+                if sekunden <= 0:
+                    continue
+                differenzen.append(
+                    {
+                        "von_aktivitaet": str(aktuell["activity"]),
+                        "zu_aktivitaet": str(folgend["activity"]),
+                        "wartezeit_sekunden": sekunden,
+                    }
+                )
+        if differenzen:
+            differenz_tabelle = pd.DataFrame(differenzen)
+            for schluessel, gruppe in differenz_tabelle.groupby(
+                ["von_aktivitaet", "zu_aktivitaet"], sort=True
+            ):
+                von, zu = cast(tuple[Hashable, Hashable], schluessel)
+                wartezeiten = cast(pd.Series, gruppe["wartezeit_sekunden"])
+                wartehinweise.append(
+                    {
+                        "uebergang": {"von": von, "zu": zu},
+                        "positive_hinweise": len(gruppe),
+                        "mittlere_wartezeit_sekunden": float(wartezeiten.mean()),
+                        "mediane_wartezeit_sekunden": float(wartezeiten.median()),
+                    }
+                )
+            sammlung.info(
+                ModellbestandteilId.WARTESCHLANGEN,
+                Eingangsartefakt.EVENT_LOG_E_STERN,
+                "start_timestamp_end_timestamp.positive_uebergangsdifferenzen",
+                tuple(wartehinweise),
+                Uebernahmeart.METADATENZUSAMMENFASSUNG,
+            )
+    if not warte_kpis and not wartehinweise:
         sammlung.oeffnen(
             ModellbestandteilId.WARTESCHLANGEN,
             Offenheitskategorie.NICHT_ABLEITBAR,
-            "A_G enthält keine ausdrücklich als Wartezeit oder WIP dokumentierte Information. "
-            "Zeitliche Lücken und Prozessknoten werden nicht als Warteschlange interpretiert.",
+            "E* enthält keine ableitbaren positiven Übergangsdifferenzen aus ausdrücklich "
+            "vorhandenen Start-/Endzeitstempeln und A_G keine ausdrücklich dokumentierte "
+            "Warteinformation. Andere Spalten werden nicht als Warteschlange interpretiert.",
         )
     sammlung.oeffnen(
         ModellbestandteilId.WARTESCHLANGEN,
@@ -486,10 +552,20 @@ def _warteschlangen_ressourcen(sammlung: _Sammlung) -> None:
             Uebernahmeart.METADATENZUSAMMENFASSUNG,
         )
     if "resource" in sammlung.basis.event_log.columns:
-        werte = cast("pd.Series", sammlung.basis.event_log["resource"])
-        gueltig = cast(
-            "pd.Series",
-            werte[werte.notna() & werte.astype("string").str.strip().ne("")],
+        ressourcendaten = sammlung.basis.event_log.loc[:, ["activity", "resource"]].copy()
+        ressourcendaten["activity"] = ressourcendaten["activity"].astype("string").str.strip()
+        ressourcendaten["resource"] = ressourcendaten["resource"].astype("string").str.strip()
+        ressourcendaten = (
+            ressourcendaten.dropna()
+            .loc[lambda tabelle: tabelle["activity"].ne("") & tabelle["resource"].ne("")]
+            .drop_duplicates()
+        )
+        gruppiert = tuple(
+            {
+                "aktivitaet": str(aktivitaet),
+                "ressourcen": tuple(sorted(gruppe["resource"].astype(str).unique())),
+            }
+            for aktivitaet, gruppe in ressourcendaten.groupby("activity", sort=True)
         )
         sammlung.info(
             ModellbestandteilId.RESSOURCEN,
@@ -497,7 +573,8 @@ def _warteschlangen_ressourcen(sammlung: _Sammlung) -> None:
             "schema.resource",
             {
                 "attribut": "resource",
-                "eindeutige_werte": tuple(sorted(gueltig.astype("string").unique())),
+                "eindeutige_werte": tuple(sorted(ressourcendaten["resource"].astype(str).unique())),
+                "aktivitaet_ressourcen": gruppiert,
             },
             Uebernahmeart.METADATENZUSAMMENFASSUNG,
         )
@@ -512,12 +589,13 @@ def _warteschlangen_ressourcen(sammlung: _Sammlung) -> None:
             ressourcen_kpis,
             Uebernahmeart.METADATENZUSAMMENFASSUNG,
         )
-    if not any(ressourcen.values()) and "resource" not in sammlung.basis.event_log.columns:
+    if "resource" not in sammlung.basis.event_log.columns:
         sammlung.oeffnen(
             ModellbestandteilId.RESSOURCEN,
             Offenheitskategorie.NICHT_ABLEITBAR,
-            "S und E* enthalten keine ausdrücklich als Ressource dokumentierte Angabe. Rollen, "
-            "Kapazitäten und Zuordnungsregeln werden nicht aus beliebigen Attributen erraten.",
+            "E* enthält kein kanonisches Ressourcenattribut resource. Die Zuordnung jeder "
+            "Aktivität zu einer oder mehreren Ressourcen muss in Schritt 9 manuell dokumentiert "
+            "oder bewusst offen gelassen werden.",
         )
     else:
         sammlung.oeffnen(

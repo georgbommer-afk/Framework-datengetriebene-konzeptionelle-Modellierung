@@ -43,12 +43,14 @@ def _plan(*schritte: Transformationsschritt) -> Transformationsplan:
     return Transformationsplan(uuid4(), uuid4(), (uuid4(),), schritte, jetzt, jetzt)
 
 
-def test_genau_vier_neue_transformationsarten_sind_frameworkkonform() -> None:
+def test_frameworkkonforme_transformationsarten_sind_explizit_begrenzt() -> None:
     assert FRAMEWORKKONFORME_TRANSFORMATIONSARTEN == (
         Transformationsart.DATENTYP_KONVERTIEREN,
         Transformationsart.WERTE_ERSETZEN,
         Transformationsart.EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN,
         Transformationsart.VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN,
+        Transformationsart.ZEILEN_LOESCHEN,
+        Transformationsart.TEXT_BEREINIGEN,
     )
 
 
@@ -178,6 +180,88 @@ def test_durchlauf_ohne_transformation_ist_zulaessig() -> None:
     ergebnis = fuehre_transformationsplan_aus(daten, _plan())
     pd.testing.assert_frame_equal(ergebnis.daten, daten)
     assert ergebnis.historie == ()
+
+
+@pytest.mark.parametrize(
+    ("werte", "operator", "parameter", "verbleibend"),
+    [
+        (["A", "B"], "gleich", {"wert": "A"}, ["B"]),
+        (["A", "B"], "ungleich", {"wert": "A"}, ["A"]),
+        (["abc", "xyz"], "enthält", {"wert": "b"}, ["xyz"]),
+        (["abc", "xbc"], "beginnt mit", {"wert": "a"}, ["xbc"]),
+        (["abc", "abx"], "endet mit", {"wert": "c"}, ["abx"]),
+        ([None, "A"], "ist leer", {}, ["A"]),
+        ([None, "A"], "ist nicht leer", {}, [None]),
+        ([1, 2], "kleiner", {"wert": 2}, [2]),
+        ([1, 2], "kleiner oder gleich", {"wert": 1}, [2]),
+        ([1, 2], "größer", {"wert": 1}, [1]),
+        ([1, 2], "größer oder gleich", {"wert": 2}, [1]),
+        ([1, 2, 3], "zwischen", {"von": 1, "bis": 2}, [3]),
+        (["2025-01-01", "2025-01-03"], "vor", {"wert": "2025-01-02"}, ["2025-01-03"]),
+        (["2025-01-01", "2025-01-03"], "nach", {"wert": "2025-01-02"}, ["2025-01-01"]),
+        (
+            ["2025-01-01", "2025-01-03", "2025-01-05"],
+            "zeitlich zwischen",
+            {"von": "2025-01-02", "bis": "2025-01-04"},
+            ["2025-01-01", "2025-01-05"],
+        ),
+        (["A", "B", "C"], "enthalten in", {"werte": ["A", "C"]}, ["B"]),
+        (["A", "B", "C"], "nicht enthalten in", {"werte": ["A", "C"]}, ["A", "C"]),
+    ],
+)
+def test_zeilen_loeschen_deckt_operatorgruppen_ab(
+    werte: list[object], operator: str, parameter: dict[str, object], verbleibend: list[object]
+) -> None:
+    daten = pd.DataFrame({"wert": werte, "beleg": range(len(werte))})
+    original = daten.copy(deep=True)
+    schritt = _schritt(
+        Transformationsart.ZEILEN_LOESCHEN,
+        ("wert",),
+        {"operator": operator, **parameter},
+    )
+
+    ergebnis = fuehre_transformationsplan_aus(daten, _plan(schritt))
+
+    tatsaechlich = ergebnis.daten["wert"].tolist()
+    assert len(tatsaechlich) == len(verbleibend)
+    assert all(
+        pd.isna(ist) if soll is None else ist == soll
+        for ist, soll in zip(tatsaechlich, verbleibend, strict=True)
+    )
+    assert ergebnis.historie[0].zeilen_vorher == len(werte)
+    assert ergebnis.historie[0].zeilen_nachher == len(verbleibend)
+    assert "Zeilen gelöscht" in ergebnis.historie[0].ergebnis_oder_warnung
+    pd.testing.assert_frame_equal(daten, original)
+
+
+@pytest.mark.parametrize(
+    ("art", "parameter", "werte", "erwartet"),
+    [
+        ("Festen Präfix entfernen", {"praefix": "RS "}, ["RS TX", "AX"], ["TX", "AX"]),
+        ("Festen Suffix entfernen", {"suffix": ".csv"}, ["a.csv", "b"], ["a", "b"]),
+        (
+            "Zwischen Begrenzern extrahieren",
+            {"startbegrenzer": "(", "endbegrenzer": ")"},
+            ["RS TX (abc)", "ohne Treffer"],
+            ["abc", "ohne Treffer"],
+        ),
+    ],
+)
+def test_allgemeine_texttransformation_bewahrt_nichttreffer_und_eingangsdaten(
+    art: str, parameter: dict[str, object], werte: list[str], erwartet: list[str]
+) -> None:
+    daten = pd.DataFrame({"text": werte})
+    original = daten.copy(deep=True)
+    schritt = _schritt(
+        Transformationsart.TEXT_BEREINIGEN,
+        ("text",),
+        {"art": art, "nichttreffer": "Originalwert beibehalten", **parameter},
+    )
+
+    ergebnis = fuehre_transformationsplan_aus(daten, _plan(schritt))
+
+    assert ergebnis.daten["text"].tolist() == erwartet
+    pd.testing.assert_frame_equal(daten, original)
 
 
 @pytest.mark.parametrize(

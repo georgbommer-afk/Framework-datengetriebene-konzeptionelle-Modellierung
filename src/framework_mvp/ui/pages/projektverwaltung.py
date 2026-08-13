@@ -1,13 +1,15 @@
 """Wizard für Schritt 1: Projektrahmen definieren mit den Ausgaben U und S."""
 
 import logging
+from collections.abc import MutableMapping
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import streamlit as st
 
 from framework_mvp.application.ergebnisaggregation import KPI_DEFINITIONEN
+from framework_mvp.application.loesch_service import LoeschService
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.kataloge import (
@@ -40,6 +42,7 @@ from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemavers
 from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
 from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import schritt_abschliessen_und_weiter
+from framework_mvp.ui.session_cleanup import projekt_zustand_bereinigen
 
 LOGGER = logging.getLogger(__name__)
 
@@ -161,6 +164,21 @@ def _initialisieren() -> None:
             st.session_state[schluessel] = wert
 
 
+def _widget_key(feld: str) -> str:
+    """Bindet einen Widgetzustand an Projekt beziehungsweise Entwurfsgeneration."""
+    projekt_id = st.session_state.ausgewaehlte_projekt_id
+    kontext = str(projekt_id) if projekt_id is not None else "neu"
+    return f"projektrahmen_{kontext}_{st.session_state.auswahl_generation}_{feld}"
+
+
+def _widget_initialisieren(feld: str, wert: Any) -> str:
+    """Initialisiert einen fachlichen Widgetwert genau einmal je Projektkontext."""
+    key = _widget_key(feld)
+    if key not in st.session_state:
+        st.session_state[key] = wert
+    return key
+
+
 def _projekt_nach_id(projekte: list[Projekt], projekt_id: UUID | None) -> Projekt | None:
     return next((projekt for projekt in projekte if projekt.projekt_id == projekt_id), None)
 
@@ -187,6 +205,7 @@ def _seitenleiste(projekte: list[Projekt]) -> Projekt | None:
             _neuer_entwurf() if projekt is None else _entwurf_aus_projekt(projekt)
         )
         st.session_state.wizard_schritt = 1
+        st.session_state.auswahl_generation += 1
         st.rerun()
     if st.sidebar.button("Neues Projekt", width="stretch"):
         st.session_state.ausgewaehlte_projekt_id = None
@@ -207,16 +226,18 @@ def _kopf(schritt: int) -> None:
 
 def _schritt_problem(daten: dict[str, Any]) -> None:
     daten["bezeichnung"] = st.text_input(
-        "Projektbezeichnung", daten["bezeichnung"], help="Eindeutige Bezeichnung des Projekts."
+        "Projektbezeichnung",
+        key=_widget_initialisieren("bezeichnung", daten["bezeichnung"]),
+        help="Eindeutige Bezeichnung des Projekts.",
     )
     daten["problemstellung"] = st.text_area(
         "Problemstellung",
-        daten["problemstellung"],
+        key=_widget_initialisieren("problemstellung", daten["problemstellung"]),
         help=PROBLEM_HILFE,
     )
     daten["systemgrenze"] = st.text_area(
         "Systemgrenze",
-        daten["systemgrenze"],
+        key=_widget_initialisieren("systemgrenze", daten["systemgrenze"]),
         help=SYSTEMGRENZE_HILFE,
     )
 
@@ -240,14 +261,26 @@ def _zweck_hinzufuegen(daten: dict[str, Any], eingabe: str) -> bool:
 
 def _schritt_ziele(daten: dict[str, Any]) -> None:
     optionen = (*VORDEFINIERTE_UNTERSUCHUNGSZWECKE, *daten["individuelle_zwecke"])
+    zwecke_key = _widget_initialisieren(
+        "untersuchungszwecke", [zweck for zweck in daten["zwecke"] if zweck in optionen]
+    )
+    if (ausstehend := st.session_state.pop(f"{zwecke_key}_synchronisieren", None)) is not None:
+        st.session_state[zwecke_key] = ausstehend
     daten["zwecke"] = st.multiselect(
         "Untersuchungszwecke",
         optionen,
-        default=[zweck for zweck in daten["zwecke"] if zweck in optionen],
+        key=zwecke_key,
     )
-    if st.checkbox(WEITERER_ZWECK):
-        eingabe = st.text_input("Individueller Untersuchungszweck")
+    if st.checkbox(
+        WEITERER_ZWECK,
+        key=_widget_initialisieren("weiterer_untersuchungszweck", False),
+    ):
+        eingabe = st.text_input(
+            "Individueller Untersuchungszweck",
+            key=_widget_initialisieren("individueller_untersuchungszweck", ""),
+        )
         if st.button("Untersuchungszweck hinzufügen") and _zweck_hinzufuegen(daten, eingabe):
+            st.session_state[f"{zwecke_key}_synchronisieren"] = list(daten["zwecke"])
             st.rerun()
     st.markdown("### Logistische Zielgrößen")
     st.caption("Übergeordnetes Ziel: Leistungsfähigkeit des betrachteten Systems steigern")
@@ -259,8 +292,7 @@ def _schritt_ziele(daten: dict[str, Any]) -> None:
             for ziel in gruppe.zielgroessen:
                 if st.checkbox(
                     ZIELGROESSEN_BEZEICHNUNGEN[ziel],
-                    value=ziel in gewaehlt,
-                    key=f"ziel_{ziel.value}",
+                    key=_widget_initialisieren(f"ziel_{ziel.value}", ziel in gewaehlt),
                 ):
                     gewaehlt.add(ziel)
                 else:
@@ -268,18 +300,19 @@ def _schritt_ziele(daten: dict[str, Any]) -> None:
     daten["zielgroessen"] = [ziel for ziel in LogistischeZielgroesse if ziel in gewaehlt]
 
 
-def _auswahl(label: str, optionen: tuple[str, ...], wert: str) -> str:
-    return fachliche_auswahl(label, optionen, wert=wert) or ""
+def _auswahl(feld: str, label: str, optionen: tuple[str, ...], wert: str) -> str:
+    key = _widget_initialisieren(feld, wert if wert in optionen else None)
+    return fachliche_auswahl(label, optionen, key=key) or ""
 
 
 def _mehrfach(
-    label: str, optionen: tuple[str, ...], wert: tuple[str, ...] | list[str]
+    feld: str,
+    label: str,
+    optionen: tuple[str, ...],
+    wert: tuple[str, ...] | list[str],
 ) -> tuple[str, ...]:
-    return tuple(
-        st.multiselect(
-            label, optionen, default=[eintrag for eintrag in wert if eintrag in optionen]
-        )
-    )
+    key = _widget_initialisieren(feld, [eintrag for eintrag in wert if eintrag in optionen])
+    return tuple(st.multiselect(label, optionen, key=key))
 
 
 def _produktionsauswahl(daten: dict[str, Any]) -> None:
@@ -287,9 +320,19 @@ def _produktionsauswahl(daten: dict[str, Any]) -> None:
     for merkmal in PRODUKTIONSSPEZIFISCHE_MERKMALE:
         aktueller_wert = produktion.get(merkmal.feldname, () if merkmal.mehrfachauswahl else "")
         produktion[merkmal.feldname] = (
-            _mehrfach(merkmal.bezeichnung, merkmal.auspraegungen, aktueller_wert)
+            _mehrfach(
+                f"produktion_{merkmal.feldname}",
+                merkmal.bezeichnung,
+                merkmal.auspraegungen,
+                aktueller_wert,
+            )
             if merkmal.mehrfachauswahl
-            else _auswahl(merkmal.bezeichnung, merkmal.auspraegungen, aktueller_wert)
+            else _auswahl(
+                f"produktion_{merkmal.feldname}",
+                merkmal.bezeichnung,
+                merkmal.auspraegungen,
+                aktueller_wert,
+            )
         )
 
 
@@ -298,9 +341,19 @@ def _intralogistikauswahl(daten: dict[str, Any]) -> None:
     for merkmal in INTRALOGISTIKSPEZIFISCHE_MERKMALE:
         aktueller_wert = intralogistik.get(merkmal.feldname, () if merkmal.mehrfachauswahl else "")
         intralogistik[merkmal.feldname] = (
-            _mehrfach(merkmal.bezeichnung, merkmal.auspraegungen, aktueller_wert)
+            _mehrfach(
+                f"intralogistik_{merkmal.feldname}",
+                merkmal.bezeichnung,
+                merkmal.auspraegungen,
+                aktueller_wert,
+            )
             if merkmal.mehrfachauswahl
-            else _auswahl(merkmal.bezeichnung, merkmal.auspraegungen, aktueller_wert)
+            else _auswahl(
+                f"intralogistik_{merkmal.feldname}",
+                merkmal.bezeichnung,
+                merkmal.auspraegungen,
+                aktueller_wert,
+            )
         )
 
 
@@ -317,29 +370,47 @@ def _schritt_system(daten: dict[str, Any]) -> None:
         Systemtyp.INTRALOGISTIK,
     )
     aktueller_typ = daten["systemtyp"]
+    systemtyp_key = _widget_initialisieren(
+        "systemtyp", aktueller_typ if aktueller_typ in optionen else None
+    )
     daten["systemtyp"] = fachliche_auswahl(
         "Systemtyp",
         optionen,
-        wert=aktueller_typ,
         format_func=_enum_text,
+        key=systemtyp_key,
     )
+    gestalt_optionen = list(GestaltDerGueter)
     daten["gestalt"] = fachliche_auswahl(
         "Gestalt der Güter",
-        list(GestaltDerGueter),
-        wert=daten["gestalt"],
+        gestalt_optionen,
         format_func=GESTALT_DER_GUETER_BEZEICHNUNGEN.__getitem__,
+        key=_widget_initialisieren(
+            "gestalt", daten["gestalt"] if daten["gestalt"] in gestalt_optionen else None
+        ),
     )
+    erzeugnis_optionen = list(Erzeugnisstrukturtyp)
     daten["erzeugnisstrukturtyp"] = fachliche_auswahl(
         "Erzeugnisstrukturtyp",
-        list(Erzeugnisstrukturtyp),
-        wert=daten["erzeugnisstrukturtyp"],
+        erzeugnis_optionen,
         format_func=ERZEUGNISSTRUKTURTYP_BEZEICHNUNGEN.__getitem__,
+        key=_widget_initialisieren(
+            "erzeugnisstrukturtyp",
+            (
+                daten["erzeugnisstrukturtyp"]
+                if daten["erzeugnisstrukturtyp"] in erzeugnis_optionen
+                else None
+            ),
+        ),
     )
+    kontinuitaet_optionen = list(Materialflusskontinuitaet)
     daten["kontinuitaet"] = fachliche_auswahl(
         "Kontinuität des Materialflusses",
-        list(Materialflusskontinuitaet),
-        wert=daten["kontinuitaet"],
+        kontinuitaet_optionen,
         format_func=MATERIALFLUSSKONTINUITAET_BEZEICHNUNGEN.__getitem__,
+        key=_widget_initialisieren(
+            "kontinuitaet",
+            daten["kontinuitaet"] if daten["kontinuitaet"] in kontinuitaet_optionen else None,
+        ),
     )
     if daten["systemtyp"] is Systemtyp.PRODUKTION:
         _produktionsauswahl(daten)
@@ -382,8 +453,7 @@ def _schritt_auswertungen(daten: dict[str, Any]) -> None:
         formel.write(definition.formel)
         if auswahl.checkbox(
             "Auswählen",
-            kandidat.kpi_id in gewaehlt,
-            key=f"kpi_{kandidat.kpi_id}",
+            key=_widget_initialisieren(f"kpi_{kandidat.kpi_id}", kandidat.kpi_id in gewaehlt),
             label_visibility="collapsed",
         ):
             gewaehlt.add(kandidat.kpi_id)
@@ -566,7 +636,7 @@ def _speichern(
     service: ProjektService,
     projekt: Projekt | None,
     daten: dict[str, Any],
-) -> None:
+) -> Projekt | None:
     try:
         fehlende_pflichtangaben = [
             label
@@ -605,20 +675,19 @@ def _speichern(
             )
     except (Domaenenfehler, NichtUnterstuetzteSchemaversion) as fehler:
         st.error(str(fehler))
-        return
+        return None
     except Exception:
         LOGGER.exception("Unerwarteter technischer Fehler beim Speichern von Auftrag U.")
         st.error(
             "Der Untersuchungsauftrag konnte aufgrund eines technischen Fehlers "
             "nicht gespeichert werden."
         )
-        return
+        return None
     st.session_state.ausgewaehlte_projekt_id = gespeichert.projekt_id
     st.session_state.auswahl_generation += 1
     st.session_state.wizard_entwurf = _entwurf_aus_projekt(gespeichert)
     st.session_state.aktuelles_projekt_id = str(gespeichert.projekt_id)
-    st.session_state.erfolgsmeldung = "Projektrahmen wurde gespeichert."
-    st.rerun()
+    return gespeichert
 
 
 def _navigation(
@@ -636,19 +705,21 @@ def _navigation(
             st.session_state.wizard_schritt = schritt + 1
             st.rerun()
     else:
-        aktuell_gespeichert = projekt is not None and daten == _entwurf_aus_projekt(projekt)
-        speichern, weiter = st.columns(2)
-        if speichern.button("Projektrahmen speichern", type="primary", width="content"):
-            _speichern(service, projekt, daten)
-        if weiter.button("Weiter", disabled=not aktuell_gespeichert, width="content"):
-            assert projekt is not None
-            schritt_abschliessen_und_weiter(aktueller_schritt=1, projekt_id=projekt.projekt_id)
-        if not aktuell_gespeichert:
-            st.info("Speichern Sie zuerst den Projektrahmen, bevor Sie fortfahren.")
+        if rechts.button(
+            "Projektrahmen speichern und zu Schritt 2",
+            type="primary",
+            width="content",
+        ):
+            gespeichert = _speichern(service, projekt, daten)
+            if gespeichert is not None:
+                schritt_abschliessen_und_weiter(
+                    aktueller_schritt=1, projekt_id=gespeichert.projekt_id
+                )
 
 
 def zeige_projektverwaltung(
     service: ProjektService,
+    loesch_service: LoeschService | None = None,
 ) -> None:
     """Zeigt ausschließlich die fünf methodisch erforderlichen Unterabschnitte."""
     _initialisieren()
@@ -675,3 +746,35 @@ def zeige_projektverwaltung(
     else:
         _schritt_auftrag(daten)
     _navigation(service, projekt, daten)
+    if projekt is not None and loesch_service is not None:
+        st.divider()
+        with st.expander("Gefahrenbereich: Projekt löschen"):
+            st.warning(
+                f"Projekt **{projekt.bezeichnung}** und alle zugehörigen Artefakte werden "
+                "dauerhaft gelöscht. Andere Projekte bleiben unverändert."
+            )
+            bestaetigung = st.text_input(
+                f"Zur Bestätigung exakt „{projekt.bezeichnung}“ eingeben",
+                key=f"projekt_loeschen_bestaetigung_{projekt.projekt_id}",
+            )
+            if st.button(
+                f"Projekt {projekt.bezeichnung} dauerhaft löschen",
+                disabled=bestaetigung != projekt.bezeichnung,
+                key=f"projekt_loeschen_{projekt.projekt_id}",
+            ):
+                try:
+                    loesch_service.projekt_loeschen(projekt.projekt_id)
+                except Domaenenfehler as fehler:
+                    st.error(str(fehler))
+                except Exception:
+                    LOGGER.exception("Unerwarteter Fehler beim Löschen eines Projekts.")
+                    st.error("Das Projekt konnte nicht vollständig gelöscht werden.")
+                else:
+                    projekt_zustand_bereinigen(
+                        cast("MutableMapping[str, Any]", st.session_state),
+                        projekt.projekt_id,
+                    )
+                    st.session_state.erfolgsmeldung = (
+                        f"Projekt „{projekt.bezeichnung}“ wurde vollständig gelöscht."
+                    )
+                    st.rerun()

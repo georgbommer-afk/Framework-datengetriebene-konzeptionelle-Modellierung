@@ -225,7 +225,7 @@ def test_elf_bestandteile_und_quellenmatrix_sind_exakt_und_stabil() -> None:
         ModellbestandteilId.MODELLUMFANG_GRENZEN_DETAILLIERUNG: ("U", "S", "P", "A_G"),
         ModellbestandteilId.ENTITAETEN: ("S", "E*"),
         ModellbestandteilId.AKTIVITAETEN: ("P", "A_G"),
-        ModellbestandteilId.WARTESCHLANGEN: ("A_G",),
+        ModellbestandteilId.WARTESCHLANGEN: ("E*", "A_G"),
         ModellbestandteilId.RESSOURCEN: ("S", "E*", "A_G"),
         ModellbestandteilId.ANNAHMEN_UND_VEREINFACHUNGEN: ("P", "A_G"),
         ModellbestandteilId.DATENAUSWAHL_UND_DATEN: ("Q", "R", "T", "E*"),
@@ -281,6 +281,164 @@ def test_menschliche_unsicherheit_erzeugt_nur_offenen_eintrag(tmp_path: Path) ->
         ("A", "B")
     ]
     assert markierung.status == "offen"
+
+
+def test_ressourcen_werden_pro_aktivitaet_bereinigt_und_gruppiert(tmp_path: Path) -> None:
+    basis = _basis(tmp_path)
+    basis.event_log = pd.DataFrame(
+        {
+            "case_id": ["1"] * 6,
+            "activity": ["A", "A", "A", "B", "B", "B"],
+            "timestamp": pd.date_range("2026-01-01", periods=6, tz="UTC"),
+            "resource": [" M1 ", "M1", "M2", "M2", "", None],
+        }
+    )
+
+    bestandteile, _ = leite_modellbestandteile_ab(basis)
+
+    ressourcen = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.RESSOURCEN
+    )
+    information = next(
+        wert for wert in ressourcen.informationen if wert.strukturreferenz == "schema.resource"
+    )
+    assert information.wert == {
+        "attribut": "resource",
+        "eindeutige_werte": ("M1", "M2"),
+        "aktivitaet_ressourcen": (
+            {"aktivitaet": "A", "ressourcen": ("M1", "M2")},
+            {"aktivitaet": "B", "ressourcen": ("M2",)},
+        ),
+    }
+
+
+def test_positive_uebergangsdifferenzen_werden_aggregiert_ohne_e_stern_mutation(
+    tmp_path: Path,
+) -> None:
+    basis = _basis(tmp_path)
+    basis.a_g["kpi_ergebnisse"] = []
+    basis.event_log = pd.DataFrame(
+        {
+            "case_id": ["1", "1", "2", "2", "3", "3"],
+            "activity": ["A", "B", "A", "B", "A", "B"],
+            "timestamp": pd.to_datetime(["2026-01-01"] * 6, utc=True),
+            "start_timestamp": pd.to_datetime(
+                [
+                    "2026-01-01 10:00",
+                    "2026-01-01 10:03",
+                    "2026-01-01 11:00",
+                    "2026-01-01 11:05",
+                    "2026-01-01 12:00",
+                    "2026-01-01 12:01",
+                ],
+                utc=True,
+            ),
+            "end_timestamp": pd.to_datetime(
+                [
+                    "2026-01-01 10:01",
+                    "2026-01-01 10:04",
+                    "2026-01-01 11:01",
+                    "2026-01-01 11:06",
+                    "2026-01-01 12:02",
+                    "2026-01-01 12:03",
+                ],
+                utc=True,
+            ),
+        }
+    )
+    vorher = basis.event_log.copy(deep=True)
+
+    bestandteile, offen = leite_modellbestandteile_ab(basis)
+
+    pd.testing.assert_frame_equal(basis.event_log, vorher)
+    warteschlangen = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
+    )
+    hinweis = next(
+        wert
+        for wert in warteschlangen.informationen
+        if wert.strukturreferenz == "start_timestamp_end_timestamp.positive_uebergangsdifferenzen"
+    )
+    assert hinweis.wert == (
+        {
+            "uebergang": {"von": "A", "zu": "B"},
+            "positive_hinweise": 2,
+            "mittlere_wartezeit_sekunden": 180.0,
+            "mediane_wartezeit_sekunden": 180.0,
+        },
+    )
+    assert not any(
+        wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
+        and "keine ableitbaren positiven" in wert.begruendung
+        for wert in offen
+    )
+
+
+def test_null_negative_und_fehlende_differenzen_bleiben_ohne_wartehinweis(
+    tmp_path: Path,
+) -> None:
+    basis = _basis(tmp_path)
+    basis.a_g["kpi_ergebnisse"] = []
+    basis.event_log = pd.DataFrame(
+        {
+            "case_id": ["null", "null", "negativ", "negativ", "fehlend", "fehlend"],
+            "activity": ["A", "B"] * 3,
+            "timestamp": pd.to_datetime(["2026-01-01"] * 6, utc=True),
+            "start_timestamp": pd.to_datetime(
+                [
+                    "2026-01-01 10:00",
+                    "2026-01-01 10:01",
+                    "2026-01-01 11:00",
+                    "2026-01-01 11:01",
+                    "2026-01-01 12:00",
+                    None,
+                ],
+                utc=True,
+            ),
+            "end_timestamp": pd.to_datetime(
+                [
+                    "2026-01-01 10:01",
+                    "2026-01-01 10:02",
+                    "2026-01-01 11:02",
+                    "2026-01-01 11:03",
+                    "2026-01-01 12:01",
+                    "2026-01-01 12:02",
+                ],
+                utc=True,
+            ),
+        }
+    )
+
+    bestandteile, offen = leite_modellbestandteile_ab(basis)
+
+    warteschlangen = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
+    )
+    assert not any(
+        wert.strukturreferenz == "start_timestamp_end_timestamp.positive_uebergangsdifferenzen"
+        for wert in warteschlangen.informationen
+    )
+    assert any(
+        wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
+        and "keine ableitbaren positiven" in wert.begruendung
+        for wert in offen
+    )
+
+
+def test_fehlende_zeitspalten_und_warteinformation_erzeugen_offenen_eintrag(
+    tmp_path: Path,
+) -> None:
+    basis = _basis(tmp_path)
+    basis.a_g["kpi_ergebnisse"] = []
+
+    _, offen = leite_modellbestandteile_ab(basis)
+
+    assert any(
+        wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
+        and wert.kategorie is Offenheitskategorie.NICHT_ABLEITBAR
+        and "Andere Spalten werden nicht" in wert.begruendung
+        for wert in offen
+    )
 
 
 def test_fehlende_problemstellung_und_widerspruechliche_grenzen_bleiben_offen(

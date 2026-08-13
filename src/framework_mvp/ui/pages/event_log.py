@@ -277,13 +277,15 @@ def _attribute(
         *(w.zeitstempelspalte for w in zustand.get("zeitstempelzuordnungen", ())),
     }
     optionen = [str(w) for w in daten.columns if str(w) not in kern]
+    widget_key = f"event_zusatzattribute_{zustand['datensatz_id']}"
+    bisher = st.session_state.get(widget_key, zustand.get("zusaetzliche_attribute", ()))
+    st.session_state[widget_key] = [w for w in bisher if w in optionen]
     zustand["zusaetzliche_attribute"] = tuple(
         st.multiselect(
             "Weitere Attribute in E übernehmen",
             optionen,
-            default=[w for w in zustand.get("zusaetzliche_attribute", ()) if w in optionen],
             format_func=lambda w: _spaltenlabel(mapping, w),
-            key=f"event_zusatzattribute_{zustand['datensatz_id']}",
+            key=widget_key,
         )
     )
     if not zustand["zusaetzliche_attribute"]:
@@ -467,20 +469,20 @@ def _speichern(
         st.write(f"**CSV.GZ:** {artefakt.relativer_csv_pfad}")
         st.write(f"**Schema:** {artefakt.relativer_schema_pfad}")
         st.write(f"**Lineage:** {artefakt.relativer_lineage_pfad}")
-    speichern, weiter = st.columns(2)
-    if speichern.button(
-        "Fallbezogenen Event Log speichern",
+    if artefakt is None and st.button(
+        "Event Log E speichern und zu Schritt 5",
         type="primary",
-        disabled=artefakt is not None,
     ):
         zustand["artefakt"] = service.speichern(event_log_id, konfiguration.mapping_id)
         st.session_state.aktuelles_event_log_id = str(event_log_id)
         st.session_state.event_log_id = event_log_id
-        st.rerun()
-    if weiter.button("Weiter", disabled=artefakt is None):
+        schritt_abschliessen_und_weiter(aktueller_schritt=4, projekt_id=projekt_id)
+    if artefakt is not None and st.button("Weiter zu Schritt 5", type="primary"):
+        st.session_state.aktuelles_event_log_id = str(event_log_id)
+        st.session_state.event_log_id = event_log_id
         schritt_abschliessen_und_weiter(aktueller_schritt=4, projekt_id=projekt_id)
     if artefakt is None:
-        st.info("Speichern Sie zuerst den fallbezogenen Event Log, bevor Sie fortfahren.")
+        st.info("Speichern Sie den fallbezogenen Event Log, um mit Schritt 5 fortzufahren.")
 
 
 def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
@@ -488,9 +490,11 @@ def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
     if links.button("Zurück", disabled=zustand["schritt"] == 1, width="stretch"):
         zustand["schritt"] -= 1
         st.rerun()
+    if zustand["schritt"] == len(SCHRITTE):
+        return
     if rechts.button(
         "Weiter",
-        disabled=zustand["schritt"] == len(SCHRITTE) or not weiter,
+        disabled=not weiter,
         type="primary",
         width="stretch",
     ):
@@ -576,7 +580,6 @@ def zeige_event_log_seite(
                 mapping,
                 zustand,
             )
-        if zustand["schritt"] < len(SCHRITTE):
-            _navigation(zustand, weiter)
+        _navigation(zustand, weiter)
     except (Domaenenfehler, Importintegritaetsfehler) as fehler:
         st.error(str(fehler))

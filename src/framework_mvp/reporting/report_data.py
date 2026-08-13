@@ -1,14 +1,12 @@
-"""Formatneutrale Aufbereitung eines validierten K* für Report- und Excel-Layouts."""
+"""Formatneutrale Aufbereitung eines validierten K* für HTML- und PDF-Layouts."""
 
-from __future__ import annotations
-
+import json
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
 from enum import Enum
 from typing import Any, cast
 from uuid import UUID
-
 
 REPORT_DATA_VERSION = 1
 
@@ -104,9 +102,7 @@ def _bestandteile_nach_id(k_stern: Mapping[str, Any]) -> dict[str, Mapping[str, 
         if not bestandteil_id:
             raise ReportDataFehler("Ein Modellbestandteil besitzt keine Bestandteil-ID.")
         if bestandteil_id in ergebnis:
-            raise ReportDataFehler(
-                f"Der Modellbestandteil '{bestandteil_id}' kommt mehrfach vor."
-            )
+            raise ReportDataFehler(f"Der Modellbestandteil '{bestandteil_id}' kommt mehrfach vor.")
         ergebnis[bestandteil_id] = bestandteil
 
     erwartet = set(ERWARTETE_BESTANDTEIL_IDS)
@@ -147,9 +143,7 @@ def _info_wert(
     if not treffer:
         return _normalisieren(standard)
     if len(treffer) > 1:
-        raise ReportDataFehler(
-            f"Die Strukturreferenz '{strukturreferenz}' ist nicht eindeutig."
-        )
+        raise ReportDataFehler(f"Die Strukturreferenz '{strukturreferenz}' ist nicht eindeutig.")
     return _normalisieren(treffer[0].get("wert"))
 
 
@@ -176,8 +170,7 @@ def _fachliche_entscheidungen(
     return [
         cast(dict[str, Any], _normalisieren(wert))
         for wert in roh
-        if isinstance(wert, Mapping)
-        and str(wert.get("bestandteil_id", "")) == bestandteil_id
+        if isinstance(wert, Mapping) and str(wert.get("bestandteil_id", "")) == bestandteil_id
     ]
 
 
@@ -200,10 +193,38 @@ def _fachliche_anpassungen(
                 "anpassungsnummer": eintrag.get("anpassungsnummer"),
                 "fachlicher_inhalt": str(eintrag.get("fachlicher_inhalt", "")),
                 "begruendung": str(eintrag.get("begruendung", "")),
-                "menschliche_entscheidung": bool(
-                    eintrag.get("menschliche_entscheidung")
-                ),
+                "menschliche_entscheidung": bool(eintrag.get("menschliche_entscheidung")),
             }
+        )
+    return ergebnis
+
+
+def _manuelle_ressourcenzuordnungen(
+    bestandteil: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Liest ausschließlich bereits in K* dokumentierte menschliche Zuordnungen."""
+    roh = bestandteil.get("menschliche_eintraege", [])
+    if not isinstance(roh, list):
+        return []
+    ergebnis: list[dict[str, Any]] = []
+    for eintrag in roh:
+        if not isinstance(eintrag, Mapping):
+            continue
+        dokumentation = eintrag.get("fachliche_ergaenzung_oder_begruendung")
+        if isinstance(dokumentation, str):
+            try:
+                dokumentation = json.loads(dokumentation)
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(dokumentation, Mapping):
+            continue
+        zuordnungen = dokumentation.get("aktivitaet_ressourcen", [])
+        if not isinstance(zuordnungen, list):
+            continue
+        ergebnis.extend(
+            cast(dict[str, Any], _normalisieren(zuordnung))
+            for zuordnung in zuordnungen
+            if isinstance(zuordnung, Mapping)
         )
     return ergebnis
 
@@ -265,20 +286,12 @@ def _kpi_aufbereiten(wert: Any) -> dict[str, Any]:
         "bezugsmenge": _normalisieren(wert.get("bezugsmenge")),
         "formel": _normalisieren(wert.get("formel")),
         "rechenweg": _normalisieren(wert.get("rechenweg")),
-        "fehlende_voraussetzungen": _listenwert(
-            wert.get("fehlende_voraussetzungen")
-        ),
+        "fehlende_voraussetzungen": _listenwert(wert.get("fehlende_voraussetzungen")),
         "wertebedingungen": _normalisieren(wert.get("wertebedingungen", [])),
-        "zugeordnete_operanden": _normalisieren(
-            wert.get("zugeordnete_operanden", [])
-        ),
+        "zugeordnete_operanden": _normalisieren(wert.get("zugeordnete_operanden", [])),
         "zwischensummen": _normalisieren(wert.get("zwischensummen", {})),
-        "ausgeschlossene_werte": _normalisieren(
-            wert.get("ausgeschlossene_werte")
-        ),
-        "quellenreferenzen": _normalisieren(
-            wert.get("quellenreferenzen", [])
-        ),
+        "ausgeschlossene_werte": _normalisieren(wert.get("ausgeschlossene_werte")),
+        "quellenreferenzen": _normalisieren(wert.get("quellenreferenzen", [])),
     }
 
 
@@ -313,7 +326,7 @@ def _aktivitaetsfrequenzen(wert: Any) -> list[dict[str, Any]]:
 
 
 def _profil_aufbereiten(wert: Any) -> dict[str, Any]:
-    """Verdichtet R zu einer für Report und Excel unmittelbar nutzbaren Struktur."""
+    """Verdichtet R zu einer für beide Reportlayouts unmittelbar nutzbaren Struktur."""
     if not isinstance(wert, Mapping):
         return {"wert": _normalisieren(wert)}
 
@@ -332,17 +345,11 @@ def _profil_aufbereiten(wert: Any) -> dict[str, Any]:
         "raw_sha256": _normalisieren(wert.get("raw_sha256")),
         "datei_pruefsumme": _normalisieren(wert.get("datei_pruefsumme")),
         "zeilenanzahl": _normalisieren(gesamt.get("zeilen")),
-        "spaltenanzahl": _normalisieren(
-            gesamt.get("spalten", len(spaltenprofile))
-        ),
+        "spaltenanzahl": _normalisieren(gesamt.get("spalten", len(spaltenprofile))),
         "echte_fehlwerte": _normalisieren(gesamt.get("echte_fehlwerte")),
-        "textuelle_platzhalter": _normalisieren(
-            gesamt.get("textuelle_platzhalter")
-        ),
+        "textuelle_platzhalter": _normalisieren(gesamt.get("textuelle_platzhalter")),
         "exakte_duplikate": _normalisieren(gesamt.get("exakte_duplikate")),
-        "vollstaendig_leere_spalten": _normalisieren(
-            gesamt.get("vollstaendig_leere_spalten")
-        ),
+        "vollstaendig_leere_spalten": _normalisieren(gesamt.get("vollstaendig_leere_spalten")),
         "spaltenprofile": _normalisieren(spaltenprofile),
     }
 
@@ -357,24 +364,14 @@ def _lineage_informationen(
             ergebnis.append(
                 {
                     "bestandteil_id": bestandteil_id,
-                    "informations_id": _normalisieren(
-                        information.get("informations_id")
-                    ),
-                    "strukturreferenz": _normalisieren(
-                        information.get("strukturreferenz")
-                    ),
-                    "herkunftsartefakt": _normalisieren(
-                        information.get("herkunftsartefakt")
-                    ),
-                    "herkunftsartefakt_id": _normalisieren(
-                        information.get("herkunftsartefakt_id")
-                    ),
+                    "informations_id": _normalisieren(information.get("informations_id")),
+                    "strukturreferenz": _normalisieren(information.get("strukturreferenz")),
+                    "herkunftsartefakt": _normalisieren(information.get("herkunftsartefakt")),
+                    "herkunftsartefakt_id": _normalisieren(information.get("herkunftsartefakt_id")),
                     "herkunftsartefakt_sha256": _normalisieren(
                         information.get("herkunftsartefakt_sha256")
                     ),
-                    "uebernahmeart": _normalisieren(
-                        information.get("uebernahmeart")
-                    ),
+                    "uebernahmeart": _normalisieren(information.get("uebernahmeart")),
                 }
             )
     return ergebnis
@@ -432,6 +429,14 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(event_log_ressourcen, Mapping):
         event_log_ressourcen = {}
 
+    wartestellenhinweise = _listenwert(
+        _info_wert(
+            warteschlangen,
+            "start_timestamp_end_timestamp.positive_uebergangsdifferenzen",
+            [],
+        )
+    )
+
     modellierungsentscheidungen = _info_wert(
         annahmen,
         "discovery_ergebnisse_a_d.modellierungsentscheidungen",
@@ -449,10 +454,7 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
         schwellwert_auswirkung = {}
 
     datenquellen = _info_werte_mit_praefix(daten, "datenquellen[")
-    profile = [
-        _profil_aufbereiten(wert)
-        for wert in _info_werte_mit_praefix(daten, "profile[")
-    ]
+    profile = [_profil_aufbereiten(wert) for wert in _info_werte_mit_praefix(daten, "profile[")]
 
     zwischendatensatz = _info_wert(daten, "schema_und_referenz", {})
     if not isinstance(zwischendatensatz, Mapping):
@@ -495,9 +497,7 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
         },
         "modell": {
             "k_stern_id": _normalisieren(k_stern.get("k_stern_id")),
-            "validierungslauf_id": _normalisieren(
-                k_stern.get("validierungslauf_id")
-            ),
+            "validierungslauf_id": _normalisieren(k_stern.get("validierungslauf_id")),
             "artefaktart": _normalisieren(k_stern.get("artefaktart")),
             "artefaktversion": _normalisieren(k_stern.get("artefaktversion")),
             "erstellt_am": _normalisieren(k_stern.get("erstellt_am")),
@@ -505,15 +505,9 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
         "validierung": {
             "status": _normalisieren(status),
             "status_anzeige": _anzeigetext(status),
-            "validierungsvermerk": _normalisieren(
-                gesamtvalidierung.get("validierungsvermerk")
-            ),
-            "menschlich_bestaetigt": bool(
-                gesamtvalidierung.get("menschlich_bestaetigt")
-            ),
-            "entscheidungen": _normalisieren(
-                k_stern.get("behandlungen_offener_eintraege", [])
-            ),
+            "validierungsvermerk": _normalisieren(gesamtvalidierung.get("validierungsvermerk")),
+            "menschlich_bestaetigt": bool(gesamtvalidierung.get("menschlich_bestaetigt")),
+            "entscheidungen": _normalisieren(k_stern.get("behandlungen_offener_eintraege", [])),
         },
         "problemstellung": {
             **_abschnitt_metadaten(k_stern, problemstellung),
@@ -580,24 +574,16 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
                 umfang,
                 "systemprofil.bereich",
             ),
-            "sichtbare_aktivitaeten": _listenwert(
-                _info_wert(umfang, "sichtbare_aktivitaeten")
-            ),
+            "sichtbare_aktivitaeten": _listenwert(_info_wert(umfang, "sichtbare_aktivitaeten")),
             "startaktivitaeten": _aktivitaetsfrequenzen(
                 start_und_ende.get("startaktivitaeten", [])
             ),
-            "endaktivitaeten": _aktivitaetsfrequenzen(
-                start_und_ende.get("endaktivitaeten", [])
-            ),
+            "endaktivitaeten": _aktivitaetsfrequenzen(start_und_ende.get("endaktivitaeten", [])),
         },
         "entitaeten": {
             **_abschnitt_metadaten(k_stern, entitaeten),
-            "objekte_gueter": _listenwert(
-                _info_wert(entitaeten, "systemprofil.objekte_gueter")
-            ),
-            "kanonisches_fallattribut": _normalisieren(
-                case_id.get("kanonisches_attribut")
-            ),
+            "objekte_gueter": _listenwert(_info_wert(entitaeten, "systemprofil.objekte_gueter")),
+            "kanonisches_fallattribut": _normalisieren(case_id.get("kanonisches_attribut")),
             "fallanzahl": _normalisieren(case_id.get("fallanzahl")),
         },
         "aktivitaeten": {
@@ -616,6 +602,7 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
                     "kpi_ergebnisse.wartezeit[",
                 )
             ],
+            "wartestellenhinweise": wartestellenhinweise,
         },
         "ressourcen": {
             **_abschnitt_metadaten(k_stern, ressourcen),
@@ -623,9 +610,11 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
             "event_log_ressourcen": _normalisieren(
                 event_log_ressourcen.get("eindeutige_werte", [])
             ),
-            "ressourcenattribut": _normalisieren(
-                event_log_ressourcen.get("attribut")
+            "ressourcenattribut": _normalisieren(event_log_ressourcen.get("attribut")),
+            "aktivitaet_ressourcen": _normalisieren(
+                event_log_ressourcen.get("aktivitaet_ressourcen", [])
             ),
+            "manuelle_aktivitaet_ressourcen": _manuelle_ressourcenzuordnungen(ressourcen),
             "ressourcenbezogene_kpis": [
                 _kpi_aufbereiten(wert)
                 for wert in _listenwert(
@@ -639,19 +628,13 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
         },
         "annahmen": {
             **_abschnitt_metadaten(k_stern, annahmen),
-            "modellierungsentscheidungen": _normalisieren(
-                modellierungsentscheidungen
-            ),
+            "modellierungsentscheidungen": _normalisieren(modellierungsentscheidungen),
             "prozessnotation": _info_wert(
                 annahmen,
                 "prozessnotation",
             ),
-            "prozessnotation_anzeige": _anzeigetext(
-                _info_wert(annahmen, "prozessnotation")
-            ),
-            "schwellwert_auswirkung": _normalisieren(
-                schwellwert_auswirkung
-            ),
+            "prozessnotation_anzeige": _anzeigetext(_info_wert(annahmen, "prozessnotation")),
+            "schwellwert_auswirkung": _normalisieren(schwellwert_auswirkung),
         },
         "daten": {
             **_abschnitt_metadaten(k_stern, daten),
@@ -662,34 +645,20 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
         },
         "prozessdarstellung": {
             **_abschnitt_metadaten(k_stern, darstellung),
-            "prozessmodell_id": _normalisieren(
-                prozessmodell_referenz.get("prozessmodell_id")
-            ),
+            "prozessmodell_id": _normalisieren(prozessmodell_referenz.get("prozessmodell_id")),
             "process_mining_analyse_id": _normalisieren(
                 prozessmodell_referenz.get("process_mining_analyse_id")
             ),
-            "notation": _normalisieren(
-                prozessmodell_referenz.get("notation")
-            ),
-            "notation_anzeige": _anzeigetext(
-                prozessmodell_referenz.get("notation")
-            ),
-            "relativer_pfad": _normalisieren(
-                prozessmodell_referenz.get("relativer_pfad")
-            ),
+            "notation": _normalisieren(prozessmodell_referenz.get("notation")),
+            "notation_anzeige": _anzeigetext(prozessmodell_referenz.get("notation")),
+            "relativer_pfad": _normalisieren(prozessmodell_referenz.get("relativer_pfad")),
         },
         "lineage": {
             "k_referenz": _normalisieren(k_stern.get("k_referenz")),
             "o_referenz": _normalisieren(k_stern.get("o_referenz")),
-            "eingabefingerabdruck": _normalisieren(
-                k_stern.get("eingabefingerabdruck")
-            ),
-            "entscheidungsfingerabdruck": _normalisieren(
-                k_stern.get("entscheidungsfingerabdruck")
-            ),
-            "gesamtpruefsumme": _normalisieren(
-                k_stern.get("gesamtpruefsumme")
-            ),
+            "eingabefingerabdruck": _normalisieren(k_stern.get("eingabefingerabdruck")),
+            "entscheidungsfingerabdruck": _normalisieren(k_stern.get("entscheidungsfingerabdruck")),
+            "gesamtpruefsumme": _normalisieren(k_stern.get("gesamtpruefsumme")),
             "informationen": _lineage_informationen(bestandteile),
         },
     }

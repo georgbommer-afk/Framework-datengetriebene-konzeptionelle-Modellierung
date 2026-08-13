@@ -30,9 +30,25 @@ plan = Transformationsplan.neu(
 zeige_transformationseditor(
     object(),
     plan,
-    pd.DataFrame({"Wert": [1, 2]}),
+    pd.DataFrame({"Text": ["RS TX (abc)", "ohne Treffer"], "Wert": [1, 2]}),
     {"spaltenprofile": []},
 )
+"""
+
+ETL_NAVIGATION_APP = r"""
+import streamlit as st
+
+from framework_mvp.ui.pages.etl import _navigation
+
+zustand = st.session_state.setdefault(
+    "zustand",
+    {
+        "schritt": 5,
+        "transformationsplan": "plan-bleibt-erhalten",
+        "zwischendatensatz_id": "datensatz-bleibt-erhalten",
+    },
+)
+_navigation(zustand)
 """
 
 
@@ -143,3 +159,52 @@ def test_transformation_startet_ohne_vorbelegten_typ() -> None:
     assert next(
         e for e in anwendung.button if e.label == "Transformation zum Plan hinzufügen"
     ).disabled
+
+
+def test_zeilen_loeschen_formular_zeigt_bedingung_und_vorschau() -> None:
+    anwendung = AppTest.from_string(TRANSFORMATIONS_APP).run()
+    next(e for e in anwendung.selectbox if e.label == "Transformationsart").set_value(
+        "Zeilen anhand einer Bedingung löschen"
+    ).run()
+    next(e for e in anwendung.selectbox if e.label == "Spalte für Löschbedingung").set_value(
+        "Wert"
+    ).run()
+    next(e for e in anwendung.selectbox if e.label == "Operator der Löschbedingung").set_value(
+        "größer"
+    ).run()
+    next(e for e in anwendung.text_input if e.label == "Vergleichswert").set_value("1").run()
+
+    assert not anwendung.exception
+    assert any("1 von 2 Zeilen werden gelöscht" in wert.value for wert in anwendung.info)
+    assert not next(
+        e for e in anwendung.button if e.label == "Transformation zum Plan hinzufügen"
+    ).disabled
+
+
+def test_textbereinigungsformular_zeigt_allgemeine_begrenzer_und_sicheren_standard() -> None:
+    anwendung = AppTest.from_string(TRANSFORMATIONS_APP).run()
+    next(e for e in anwendung.selectbox if e.label == "Transformationsart").set_value(
+        "Text bereinigen oder extrahieren"
+    ).run()
+    next(e for e in anwendung.selectbox if e.label == "Textspalte").set_value("Text").run()
+    next(e for e in anwendung.selectbox if e.label == "Textoperation").set_value(
+        "Zwischen Begrenzern extrahieren"
+    ).run()
+    next(e for e in anwendung.text_input if e.label == "Startbegrenzer").set_value("(")
+    next(e for e in anwendung.text_input if e.label == "Endbegrenzer").set_value(")").run()
+
+    assert not anwendung.exception
+    assert any("Werte ohne Treffer bleiben unverändert" in wert.value for wert in anwendung.caption)
+    assert not next(
+        e for e in anwendung.button if e.label == "Transformation zum Plan hinzufügen"
+    ).disabled
+
+
+def test_zurueck_aus_dem_letzten_etl_abschnitt_bewahrt_den_zustand() -> None:
+    anwendung = AppTest.from_string(ETL_NAVIGATION_APP).run()
+    next(wert for wert in anwendung.button if wert.label == "Zurück").click().run()
+
+    zustand = anwendung.session_state["zustand"]
+    assert zustand["schritt"] == 4
+    assert zustand["transformationsplan"] == "plan-bleibt-erhalten"
+    assert zustand["zwischendatensatz_id"] == "datensatz-bleibt-erhalten"

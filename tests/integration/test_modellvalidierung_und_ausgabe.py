@@ -2,12 +2,12 @@
 """Fachliche End-to-End-Verträge der Algorithmen 9 und 10."""
 
 import copy
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from openpyxl import load_workbook
 
 from framework_mvp.application.modellableitung import MODELLBESTANDTEILE
 from framework_mvp.application.modellausgabe_service import ModellausgabeService
@@ -18,6 +18,7 @@ from framework_mvp.domain.models import (
     Gesamtvalidierungsstatus,
     Modellableitung,
     Modellableitungsstatus,
+    ModellbestandteilId,
     Modellvalidierungsstatus,
     Offenheitsentscheidung,
     Offenheitskategorie,
@@ -158,7 +159,13 @@ def _umgebung(tmp_path):  # type: ignore[no-untyped-def]
     artefakte = ImportartefaktSpeicher(WorkspaceKonfiguration(tmp_path / "workspace"))
     modellableitungen = _Modellableitungen(ableitung, k, o)
     service = ModellvalidierungService(repository, modellableitungen, artefakte)
-    return service, ModellausgabeService(service), repository, artefakte, modellableitungen
+    return (
+        service,
+        ModellausgabeService(service, WorkspaceKonfiguration(tmp_path / "workspace")),
+        repository,
+        artefakte,
+        modellableitungen,
+    )
 
 
 def _behandlungen(o):  # type: ignore[no-untyped-def]
@@ -239,6 +246,76 @@ def test_k_stern_entsteht_idempotent_und_laesst_k_und_o_unveraendert(tmp_path) -
     )
     assert ableitungen.k == k_vorher
     assert ableitungen.o == o_vorher
+
+
+def test_manuelle_mehrfachressource_und_bewusst_offen_erscheinen_in_k_stern(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    service, _, _, _, ableitungen = _umgebung(tmp_path)
+    ressourcen_offen = {
+        "offener_eintrag_id": "ressourcen-manuell",
+        "bestandteil_id": ModellbestandteilId.RESSOURCEN.value,
+        "kategorie": Offenheitskategorie.NICHT_ABLEITBAR.value,
+        "begruendung": (
+            "E* enthält kein kanonisches Ressourcenattribut resource. "
+            "Die Zuordnung ist in Schritt 9 zu dokumentieren."
+        ),
+        "status": "offen",
+        "kennzeichnungsherkunft": "systematisch_erkannt",
+        "belegreferenzen": [],
+    }
+    ableitungen.o["offene_eintraege"].append(ressourcen_offen)
+    dokumentation = {
+        "aktivitaet_ressourcen": [
+            {
+                "aktivitaet": "A",
+                "ressourcen": ["M1", "M2"],
+                "status": "zugeordnet",
+                "menschliche_entscheidung": True,
+            },
+            {
+                "aktivitaet": "B",
+                "ressourcen": [],
+                "status": "bewusst_offen",
+                "menschliche_entscheidung": True,
+            },
+        ]
+    }
+    behandlungen = (
+        *_behandlungen({"offene_eintraege": ableitungen.o["offene_eintraege"][:2]}),
+        BehandlungOffenerEintrag(
+            "ressourcen-manuell",
+            ModellbestandteilId.RESSOURCEN,
+            Offenheitskategorie.NICHT_ABLEITBAR,
+            ressourcen_offen["begruendung"],
+            Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST,
+            json.dumps(dokumentation, ensure_ascii=False, sort_keys=True),
+        ),
+    )
+    arbeitsfassung = _arbeitsfassung(service, ableitungen, behandlungen=behandlungen)
+
+    gespeichert = service.speichern(
+        arbeitsfassung,
+        validierungslauf_id=uuid4(),
+        k_stern_id=uuid4(),
+        fachlich_bestaetigt=True,
+    )
+    _, k_stern = service.laden(gespeichert.validierungslauf_id)
+
+    ressourcen = next(
+        wert
+        for wert in k_stern["modellbestandteile"]
+        if wert["bestandteil_id"] == ModellbestandteilId.RESSOURCEN.value
+    )
+    menschlicher_eintrag = next(
+        wert
+        for wert in ressourcen["menschliche_eintraege"]
+        if wert["offener_eintrag_id"] == "ressourcen-manuell"
+    )
+    assert menschlicher_eintrag["menschliche_entscheidung"] is True
+    assert (
+        json.loads(menschlicher_eintrag["fachliche_ergaenzung_oder_begruendung"]) == dokumentation
+    )
 
 
 def test_finalisierung_verlangt_alle_o_eintraege_validierung_und_bestaetigung(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -326,11 +403,11 @@ def test_geaenderte_eingaben_oder_menschliche_entscheidung_invalidieren_arbeitsf
 
 
 @pytest.mark.parametrize(
-    ("report", "excel"),
+    ("html", "pdf"),
     [(True, False), (False, True), (True, True)],
 )
-def test_report_excel_und_gemeinsame_auswahl_enthalten_alle_elf_ohne_mutation(
-    tmp_path, report, excel
+def test_html_pdf_und_gemeinsame_auswahl_enthalten_alle_elf_ohne_mutation(
+    tmp_path, html, pdf
 ) -> None:  # type: ignore[no-untyped-def]
     service, ausgaben, _, _, ableitungen = _umgebung(tmp_path)
     gespeichert = service.speichern(
@@ -344,28 +421,26 @@ def test_report_excel_und_gemeinsame_auswahl_enthalten_alle_elf_ohne_mutation(
         validierungslauf_id=gespeichert.validierungslauf_id,
         projekt_id=gespeichert.projekt_id,
         k_stern_id=gespeichert.k_stern_id,
-        report=report,
-        excel=excel,
+        html=html,
+        pdf=pdf,
     )
-    if report:
+    if html:
+        assert ergebnis.report_html is not None
+        assert ergebnis.html_dateiname is not None
+        assert ergebnis.html_dateiname.endswith(".html")
+        html_text = ergebnis.report_html.decode("utf-8")
+        assert "<style>" in html_text
+        assert "report_html.css" not in html_text
+        assert all(wert.bezeichnung in html_text for wert in MODELLBESTANDTEILE)
+    else:
+        assert ergebnis.report_html is None
+    if pdf:
         assert ergebnis.report_pdf is not None
-        assert ergebnis.report_pdf.startswith(b"%PDF-1.4")
-        report_text = ergebnis.report_pdf.decode("cp1252", errors="ignore")
-        assert all(wert.bezeichnung in report_text for wert in MODELLBESTANDTEILE)
+        assert ergebnis.pdf_dateiname is not None
+        assert ergebnis.pdf_dateiname.endswith(".pdf")
+        assert ergebnis.report_pdf.startswith(b"%PDF-")
     else:
         assert ergebnis.report_pdf is None
-    if excel:
-        assert ergebnis.excel_xlsx is not None
-        arbeitsmappe = load_workbook(__import__("io").BytesIO(ergebnis.excel_xlsx))
-        assert arbeitsmappe.sheetnames == ["Modellbestandteile", "Metadaten_Lineage"]
-        ids = {zelle.value for zelle in arbeitsmappe["Modellbestandteile"]["B"][1:]}
-        assert ids == {wert.bestandteil_id.value for wert in MODELLBESTANDTEILE}
-        assert any(
-            zelle.value == "menschliche Ergänzung/Anpassung"
-            for zelle in arbeitsmappe["Modellbestandteile"]["D"][1:]
-        )
-    else:
-        assert ergebnis.excel_xlsx is None
     assert service.laden(gespeichert.validierungslauf_id)[1] == vorher
 
 
@@ -382,14 +457,14 @@ def test_schritt_10_akzeptiert_nur_passendes_fachlich_validiertes_k_stern(tmp_pa
             validierungslauf_id=gespeichert.validierungslauf_id,
             projekt_id=gespeichert.projekt_id,
             k_stern_id=uuid4(),
-            report=True,
-            excel=False,
+            html=True,
+            pdf=False,
         )
-    with pytest.raises(Importintegritaetsfehler, match="Mindestens Report oder Excel"):
+    with pytest.raises(Importintegritaetsfehler, match="Mindestens HTML oder PDF"):
         ausgaben.erzeugen(
             validierungslauf_id=gespeichert.validierungslauf_id,
             projekt_id=gespeichert.projekt_id,
             k_stern_id=gespeichert.k_stern_id,
-            report=False,
-            excel=False,
+            html=False,
+            pdf=False,
         )
