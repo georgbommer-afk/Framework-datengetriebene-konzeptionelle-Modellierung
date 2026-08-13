@@ -5,12 +5,14 @@ from collections.abc import MutableMapping
 from dataclasses import replace
 from typing import Any, cast
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
 from framework_mvp.application.ergebnisaggregation import KPI_DEFINITIONEN
 from framework_mvp.application.loesch_service import LoeschService
 from framework_mvp.application.projekt_service import ProjektService
+from framework_mvp.application.transformations_service import TransformationsService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.kataloge import (
     ERZEUGNISSTRUKTURTYP_BEZEICHNUNGEN,
@@ -39,21 +41,18 @@ from framework_mvp.domain.models import (
     Untersuchungsauftrag,
 )
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
-from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
+from framework_mvp.ui.fortschritt import unterschritte_fuer
 from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import schritt_abschliessen_und_weiter
-from framework_mvp.ui.session_cleanup import projekt_zustand_bereinigen
+from framework_mvp.ui.session_cleanup import (
+    projekt_zustand_bereinigen,
+    zwischendatensatz_zustand_bereinigen,
+)
 
 LOGGER = logging.getLogger(__name__)
+LOKALE_ZEITZONE = ZoneInfo("Europe/Vienna")
 
-SCHRITTE = (
-    "Problem und Systemgrenze",
-    "Untersuchungszweck und Logistikziele",
-    "Systemklassifikation",
-    "Auswertungen und KPIs",
-    "Untersuchungsauftrag und Systemprofil",
-)
-SCHRITTE_KURZ = ("Problem", "Ziele", "System", "KPIs", "U und S")
+SCHRITTE = unterschritte_fuer(1)
 VORDEFINIERTE_UNTERSUCHUNGSZWECKE = (
     "System verstehen und transparent beschreiben",
     "System analysieren",
@@ -183,7 +182,145 @@ def _projekt_nach_id(projekte: list[Projekt], projekt_id: UUID | None) -> Projek
     return next((projekt for projekt in projekte if projekt.projekt_id == projekt_id), None)
 
 
-def _seitenleiste(projekte: list[Projekt]) -> Projekt | None:
+@st.dialog("Projekt löschen")
+def _projekt_loeschen_dialog(projekt: Projekt, service: LoeschService) -> None:
+    st.warning(
+        f"Das Projekt **{projekt.bezeichnung}** und alle zugehörigen Artefakte werden "
+        "dauerhaft gelöscht. Andere Projekte bleiben unverändert."
+    )
+    loeschen, abbrechen = st.columns(2)
+    if loeschen.button(
+        "Löschen",
+        type="primary",
+        width="stretch",
+        key=f"projekt_dialog_loeschen_{projekt.projekt_id}",
+    ):
+        try:
+            _projektloeschung_ausfuehren(
+                projekt,
+                service,
+                cast("MutableMapping[str, Any]", st.session_state),
+            )
+        except Domaenenfehler as fehler:
+            st.error(str(fehler))
+            return
+        except Exception:
+            LOGGER.exception("Unerwarteter Fehler beim Löschen eines Projekts.")
+            st.error("Das Projekt konnte nicht vollständig gelöscht werden.")
+            return
+        st.rerun()
+    if abbrechen.button(
+        "Abbrechen", width="stretch", key=f"projekt_dialog_abbrechen_{projekt.projekt_id}"
+    ):
+        st.rerun()
+
+
+def _datensatzbezeichnung(datensatz: Any) -> str:
+    zeitpunkt = datensatz.erstellt_am.astimezone(LOKALE_ZEITZONE)
+    return (
+        f"Zwischendatensatz vom {zeitpunkt:%d.%m.%Y, %H:%M Uhr} · "
+        f"{datensatz.zeilenanzahl:,} Zeilen · {datensatz.spaltenanzahl:,} Spalten"
+    )
+
+
+def _projektloeschung_ausfuehren(
+    projekt: Projekt,
+    service: LoeschService,
+    zustand: MutableMapping[str, Any],
+) -> None:
+    """Löscht exakt das bestätigte Projekt und bereitet die Navigation vor."""
+    service.projekt_loeschen(projekt.projekt_id)
+    projekt_zustand_bereinigen(zustand, projekt.projekt_id)
+    zustand["erfolgsmeldung"] = (
+        f"Projekt „{projekt.bezeichnung}“ wurde vollständig gelöscht."
+    )
+
+
+def _datensatzloeschung_ausfuehren(
+    projekt: Projekt,
+    datensatz: Any,
+    service: LoeschService,
+    zustand: MutableMapping[str, Any],
+) -> None:
+    """Löscht exakt das bestätigte T und bereitet die Navigation vor."""
+    service.zwischendatensatz_loeschen(
+        projekt.projekt_id, datensatz.zwischendatensatz_id
+    )
+    zwischendatensatz_zustand_bereinigen(
+        zustand,
+        projekt.projekt_id,
+        datensatz.zwischendatensatz_id,
+    )
+    zustand["etl_erfolgsmeldung"] = (
+        f"{_datensatzbezeichnung(datensatz)} wurde vollständig gelöscht."
+    )
+
+
+@st.dialog("Datensatz löschen")
+def _datensatz_loeschen_dialog(
+    projekt: Projekt,
+    datensaetze: list[Any],
+    service: LoeschService,
+) -> None:
+    aktueller_wert = st.session_state.get("aktueller_zwischendatensatz_id")
+    ids = [wert.zwischendatensatz_id for wert in datensaetze]
+    vorauswahl = next(
+        (index for index, wert in enumerate(ids) if str(wert) == str(aktueller_wert)),
+        0,
+    )
+    datensatz_id = st.selectbox(
+        "Zwischendatensatz",
+        ids,
+        index=vorauswahl,
+        format_func=lambda wert: next(
+            _datensatzbezeichnung(eintrag)
+            for eintrag in datensaetze
+            if eintrag.zwischendatensatz_id == wert
+        ),
+    )
+    if datensatz_id is None:  # pragma: no cover - die Optionsliste ist fachlich nicht leer
+        return
+    ziel = next(
+        wert for wert in datensaetze if wert.zwischendatensatz_id == datensatz_id
+    )
+    st.warning(
+        f"**{_datensatzbezeichnung(ziel)}** aus Projekt **{projekt.bezeichnung}** und "
+        "alle ausschließlich davon abhängigen Artefakte werden gelöscht. Rohimporte, "
+        "Datenquellen und andere Datensätze bleiben erhalten."
+    )
+    loeschen, abbrechen = st.columns(2)
+    if loeschen.button(
+        "Löschen",
+        type="primary",
+        width="stretch",
+        key=f"datensatz_dialog_loeschen_{datensatz_id}",
+    ):
+        try:
+            _datensatzloeschung_ausfuehren(
+                projekt,
+                ziel,
+                service,
+                cast("MutableMapping[str, Any]", st.session_state),
+            )
+        except Domaenenfehler as fehler:
+            st.error(str(fehler))
+            return
+        except Exception:
+            LOGGER.exception("Unerwarteter Fehler beim Löschen eines Zwischendatensatzes.")
+            st.error("Der Zwischendatensatz konnte nicht vollständig gelöscht werden.")
+            return
+        st.rerun()
+    if abbrechen.button(
+        "Abbrechen", width="stretch", key=f"datensatz_dialog_abbrechen_{datensatz_id}"
+    ):
+        st.rerun()
+
+
+def _seitenleiste(
+    projekte: list[Projekt],
+    transformations_service: TransformationsService | None = None,
+    loesch_service: LoeschService | None = None,
+) -> Projekt | None:
     st.sidebar.header("Projektrahmen")
     aktuelle_id = st.session_state.ausgewaehlte_projekt_id
     if aktuelle_id not in {projekt.projekt_id for projekt in projekte}:
@@ -213,15 +350,20 @@ def _seitenleiste(projekte: list[Projekt]) -> Projekt | None:
         st.session_state.wizard_schritt = 1
         st.session_state.auswahl_generation += 1
         st.rerun()
-    return _projekt_nach_id(projekte, neue_id)
-
-
-def _kopf(schritt: int) -> None:
-    zeige_kompakten_fortschritt(
-        schritt=schritt,
-        kurze_namen=SCHRITTE_KURZ,
-        lange_namen=SCHRITTE,
-    )
+    projekt = _projekt_nach_id(projekte, neue_id)
+    if projekt is not None and loesch_service is not None:
+        st.sidebar.divider()
+        datensaetze = (
+            transformations_service.datensaetze_fuer_projekt(projekt.projekt_id)
+            if transformations_service is not None
+            else []
+        )
+        links, rechts = st.sidebar.columns(2)
+        if links.button("Projekt löschen", width="stretch"):
+            _projekt_loeschen_dialog(projekt, loesch_service)
+        if datensaetze and rechts.button("Datensatz löschen", width="stretch"):
+            _datensatz_loeschen_dialog(projekt, datensaetze, loesch_service)
+    return projekt
 
 
 def _schritt_problem(daten: dict[str, Any]) -> None:
@@ -719,13 +861,14 @@ def _navigation(
 
 def zeige_projektverwaltung(
     service: ProjektService,
+    transformations_service: TransformationsService | None = None,
     loesch_service: LoeschService | None = None,
 ) -> None:
     """Zeigt ausschließlich die fünf methodisch erforderlichen Unterabschnitte."""
     _initialisieren()
     try:
         projekte = service.projekte_auflisten()
-        projekt = _seitenleiste(projekte)
+        projekt = _seitenleiste(projekte, transformations_service, loesch_service)
     except NichtUnterstuetzteSchemaversion as fehler:
         st.error(str(fehler))
         return
@@ -733,7 +876,6 @@ def zeige_projektverwaltung(
     if meldung := st.session_state.pop("erfolgsmeldung", None):
         st.success(meldung)
     schritt = st.session_state.wizard_schritt
-    _kopf(schritt)
     daten = st.session_state.wizard_entwurf
     if schritt == 1:
         _schritt_problem(daten)
@@ -746,35 +888,3 @@ def zeige_projektverwaltung(
     else:
         _schritt_auftrag(daten)
     _navigation(service, projekt, daten)
-    if projekt is not None and loesch_service is not None:
-        st.divider()
-        with st.expander("Gefahrenbereich: Projekt löschen"):
-            st.warning(
-                f"Projekt **{projekt.bezeichnung}** und alle zugehörigen Artefakte werden "
-                "dauerhaft gelöscht. Andere Projekte bleiben unverändert."
-            )
-            bestaetigung = st.text_input(
-                f"Zur Bestätigung exakt „{projekt.bezeichnung}“ eingeben",
-                key=f"projekt_loeschen_bestaetigung_{projekt.projekt_id}",
-            )
-            if st.button(
-                f"Projekt {projekt.bezeichnung} dauerhaft löschen",
-                disabled=bestaetigung != projekt.bezeichnung,
-                key=f"projekt_loeschen_{projekt.projekt_id}",
-            ):
-                try:
-                    loesch_service.projekt_loeschen(projekt.projekt_id)
-                except Domaenenfehler as fehler:
-                    st.error(str(fehler))
-                except Exception:
-                    LOGGER.exception("Unerwarteter Fehler beim Löschen eines Projekts.")
-                    st.error("Das Projekt konnte nicht vollständig gelöscht werden.")
-                else:
-                    projekt_zustand_bereinigen(
-                        cast("MutableMapping[str, Any]", st.session_state),
-                        projekt.projekt_id,
-                    )
-                    st.session_state.erfolgsmeldung = (
-                        f"Projekt „{projekt.bezeichnung}“ wurde vollständig gelöscht."
-                    )
-                    st.rerun()

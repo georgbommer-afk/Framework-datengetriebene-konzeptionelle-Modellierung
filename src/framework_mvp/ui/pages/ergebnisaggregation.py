@@ -73,21 +73,11 @@ def _eingangsartefakte(basis: object) -> None:
     spalten[0].metric("Ereignisse", len(basis.event_log))
     spalten[1].metric("Fälle", basis.event_log["case_id"].nunique())
     spalten[2].metric("Aktivitäten", basis.event_log["activity"].nunique())
-    st.write(f"**Aktives Projekt:** {basis.projekt.bezeichnung} (`{basis.projekt.projekt_id}`)")
-    st.write(
-        f"**Freigabe:** `{basis.freigabe.freigabe_id}` · "
-        f"**Event Log:** `{basis.freigabe.event_log_id}`"
-    )
+    st.write(f"**Aktives Projekt:** {basis.projekt.bezeichnung}")
     von = basis.event_log["timestamp"].min()
     bis = basis.event_log["timestamp"].max()
     st.write(f"**Zeitraum:** {von} bis {bis}")
-    st.code(basis.freigabe.event_log_sha256, language=None)
-    st.write(f"**Process-Mining-Analyse:** `{basis.analyse.analyse_id}`")
-    st.write(
-        f"**Notation von P:** {basis.discovery_ergebnisse['prozessnotation']} · "
-        f"**P-Prüfsumme:** `{basis.prozessmodell_sha256}`"
-    )
-    st.write(f"**A_D-Prüfsumme:** `{basis.discovery_ergebnisse_sha256}`")
+    st.write(f"**Notation von P:** {basis.discovery_ergebnisse['prozessnotation']}")
 
 
 def _auswahl(
@@ -803,9 +793,13 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
     if vorschau.warnungen:
         for warnung in vorschau.warnungen:
             st.warning(warnung)
-    with st.expander("Vollständige Lineage der Vorschau"):
+    with st.expander("Technische Details", expanded=False):
         st.json(
             {
+                "projekt_id": str(vorschau.grundlage.projekt.projekt_id),
+                "freigabe_id": str(vorschau.grundlage.freigabe.freigabe_id),
+                "event_log_id": str(vorschau.grundlage.freigabe.event_log_id),
+                "analyse_id": str(vorschau.grundlage.analyse.analyse_id),
                 "U": vorschau.grundlage.untersuchungsauftrag_sha256,
                 "R": vorschau.grundlage.datenprofil_sha256,
                 "T": vorschau.grundlage.zwischendatensatz.sha256,
@@ -911,14 +905,9 @@ def zeige_ergebnisaggregation_seite(
             st.error(str(fehler))
     if vorschau is not None:
         _vorschau_anzeigen(vorschau)
-        bestaetigt = st.checkbox(
-            "Ich bestätige die Vorschau, alle Zuordnungen und die vollständige Lineage von A_G.",
-            key="ag_speichern_bestaetigt",
-        )
         if st.button(
             "A_G speichern und zu Schritt 8",
             type="primary",
-            disabled=not bestaetigt,
         ):
             try:
                 aggregations_id = (
@@ -930,9 +919,19 @@ def zeige_ergebnisaggregation_seite(
                     )
                 )
                 aggregation = service.speichern(
-                    aggregations_id, vorschau, menschlich_bestaetigt=bestaetigt
+                    aggregations_id, vorschau, menschlich_bestaetigt=True
                 )
                 st.session_state.aktuelle_aggregations_id = str(aggregation.aggregations_id)
+                for schluessel in (
+                    "aktuelle_modellableitungs_id",
+                    "aktuelle_k_id",
+                    "aktuelle_o_id",
+                    "aktuelle_validierungslauf_id",
+                    "aktuelle_k_stern_id",
+                    "schritt10_ausgabe",
+                    "schritt10_ausgabe_signatur",
+                ):
+                    st.session_state.pop(schluessel, None)
                 service.uebergabe_schritt8(
                     aggregation.aggregations_id, projekt_id, freigabe_id, analyse_id
                 )
@@ -944,18 +943,12 @@ def zeige_ergebnisaggregation_seite(
     if aktive_id:
         try:
             aggregation, a_g = service.laden(UUID(str(aktive_id)))
-            st.success(f"Aktives, erneut validiertes A_G: `{aggregation.aggregations_id}`")
+            st.success("A_G ist gespeichert und erneut validiert.")
             st.download_button(
                 "A_G als JSON herunterladen",
                 service.a_g_download_laden(aggregation.aggregations_id),
-                file_name=f"{aggregation.aggregations_id}.aggregation.json",
+                file_name="aggregation-a-g.json",
                 mime="application/json",
             )
-            if st.button("Weiter zu Schritt 8: Modellbestandteile ableiten", type="primary"):
-                service.uebergabe_schritt8(
-                    aggregation.aggregations_id, projekt_id, freigabe_id, analyse_id
-                )
-                st.session_state.naechster_framework_bereich = "8 Modellbestandteile ableiten"
-                st.rerun()
         except (Domaenenfehler, Importintegritaetsfehler, ValueError) as fehler:
             st.error(f"Das aktive A_G ist nicht mehr gültig: {fehler}")

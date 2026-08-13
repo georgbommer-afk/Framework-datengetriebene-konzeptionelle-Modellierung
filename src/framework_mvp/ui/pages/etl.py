@@ -2,9 +2,8 @@
 
 import logging
 import re
-from collections.abc import MutableMapping
 from dataclasses import asdict, replace
-from typing import Any, cast
+from typing import Any
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -22,7 +21,6 @@ from framework_mvp.application.importvorgang_service import (
     GeladenerImport,
     ImportvorgangService,
 )
-from framework_mvp.application.loesch_service import LoeschService
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.application.transformation import pruefe_join
 from framework_mvp.application.transformations_service import TransformationsService
@@ -52,27 +50,19 @@ from framework_mvp.infrastructure.exceptions import (
     NichtUnterstuetzteSchemaversion,
 )
 from framework_mvp.ui.components.datenprofil_visualisierung import zeige_datenprofil
-from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
 from framework_mvp.ui.components.transformation import zeige_transformationseditor
+from framework_mvp.ui.fortschritt import unterschritte_fuer
 from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import (
     framework_bereich_oeffnen,
     schritt_abschliessen_und_weiter,
 )
-from framework_mvp.ui.session_cleanup import zwischendatensatz_zustand_bereinigen
 from framework_mvp.workspace import WorkspaceKonfiguration
 
 LOGGER = logging.getLogger(__name__)
 LOKALE_ZEITZONE = ZoneInfo("Europe/Vienna")
 
-ETL_SCHRITTE = (
-    "Datenquelle und Datei",
-    "Tabelle und Vorschau",
-    "Datenprofil",
-    "Transformieren und verknüpfen",
-    "Zwischendatensatz",
-)
-ETL_KURZNAMEN = ("Quelle", "Vorschau", "Profil", "Transformation", "Ergebnis")
+ETL_SCHRITTE = unterschritte_fuer(2)
 NEUE_DATENQUELLE = "__neue_datenquelle__"
 
 
@@ -113,15 +103,6 @@ def _wizard_zustand(projekt_id: UUID) -> dict[str, Any]:
     """Liefert den projektbezogenen, rerun-stabilen ETL-Zustand."""
     zustaende = st.session_state.setdefault("etl_wizard_zustaende", {})
     return zustaende.setdefault(str(projekt_id), {"schritt": 1})
-
-
-def _zeige_etl_fortschritt(schritt: int) -> None:
-    """Zeigt den kompakten Fortschritt des fünfteiligen ETL-Ablaufs."""
-    zeige_kompakten_fortschritt(
-        schritt=schritt,
-        kurze_namen=ETL_KURZNAMEN,
-        lange_namen=ETL_SCHRITTE,
-    )
 
 
 def _importbezeichnung(importvorgang: Importvorgang, datenquellenbezeichnung: str) -> str:
@@ -456,7 +437,7 @@ def _gespeicherte_importe_fuer_quelle(
         ),
     )
     gewaehlt = next(wert for wert in importe if wert.import_id == auswahl)
-    with st.expander("Technische Importinformationen"):
+    with st.expander("Technische Details", expanded=False):
         st.write(f"Import-ID: `{gewaehlt.import_id}`")
         st.write(f"Prüfsumme: `{gewaehlt.sha256}`")
         st.write(f"Raw-Pfad: `{gewaehlt.relativer_raw_pfad}`")
@@ -635,7 +616,7 @@ def _tabelle_und_vorschau(
     )
     st.caption("Unveränderte Vorschau der ersten maximal 200 Zeilen.")
     st.dataframe(vorschau.tabelle, width="stretch")
-    with st.expander("Technische Importinformationen"):
+    with st.expander("Technische Details", expanded=False):
         st.write("Ursprüngliche Spaltennamen:", list(vorschau.spaltennamen))
         st.write("Erkannte technische Datentypen:", list(vorschau.pandas_datentypen))
         st.json(vorschau.verwendete_parameter)
@@ -856,7 +837,7 @@ def _join_konfigurieren(
                 "moegliche_zeilenvervielfachung": (pruefung.moegliche_zeilenvervielfachung),
             },
         }
-        with st.expander("Technische Transformationsdefinition"):
+        with st.expander("Technische Details", expanded=False):
             st.json(parameter)
         if st.button(
             "Verknüpfung anwenden",
@@ -1129,7 +1110,6 @@ def zeige_etl_seite(
     importvorgang_service: ImportvorgangService,
     transformations_service: TransformationsService,
     workspace: WorkspaceKonfiguration,
-    loesch_service: LoeschService | None = None,
 ) -> None:
     """Zeigt Framework-Schritt 2 als fokussierten fünfstufigen ETL-Ablauf."""
     st.header("Schritt 2: ETL durchführen")
@@ -1146,7 +1126,6 @@ def zeige_etl_seite(
         if meldung := st.session_state.pop("etl_erfolgsmeldung", None):
             st.success(meldung)
         zustand = _wizard_zustand(projekt_id)
-        _zeige_etl_fortschritt(zustand["schritt"])
         if zustand["schritt"] == 1:
             _quelle_und_datei(
                 datenquelle_service=datenquelle_service,
@@ -1175,45 +1154,6 @@ def zeige_etl_seite(
                 zustand,
             )
         _navigation(zustand)
-        if loesch_service is not None:
-            datensaetze = transformations_service.datensaetze_fuer_projekt(projekt_id)
-            if datensaetze:
-                st.divider()
-                with st.expander("Gefahrenbereich: Zwischendatensatz T löschen"):
-                    datensatz_id = st.selectbox(
-                        "Zu löschender Zwischendatensatz T",
-                        [wert.zwischendatensatz_id for wert in datensaetze],
-                        format_func=lambda wert: next(
-                            f"T {str(eintrag.zwischendatensatz_id)[:8]} · "
-                            f"{eintrag.zeilenanzahl:,} Zeilen · {eintrag.spaltenanzahl:,} Spalten"
-                            for eintrag in datensaetze
-                            if eintrag.zwischendatensatz_id == wert
-                        ),
-                    )
-                    kurz_id = str(datensatz_id)[:8]
-                    st.warning(
-                        "T und alle ausschließlich davon abhängigen Artefakte werden gelöscht. "
-                        "Rohimporte und Datenquellen bleiben erhalten."
-                    )
-                    bestaetigung = st.text_input(
-                        f"Zur Bestätigung die Kurz-ID {kurz_id} eingeben",
-                        key=f"t_loeschen_bestaetigung_{datensatz_id}",
-                    )
-                    if st.button(
-                        f"T {kurz_id} dauerhaft löschen",
-                        disabled=bestaetigung != kurz_id,
-                        key=f"t_loeschen_{datensatz_id}",
-                    ):
-                        loesch_service.zwischendatensatz_loeschen(projekt_id, datensatz_id)
-                        zwischendatensatz_zustand_bereinigen(
-                            cast("MutableMapping[str, Any]", st.session_state),
-                            projekt_id,
-                            datensatz_id,
-                        )
-                        st.session_state.etl_erfolgsmeldung = (
-                            f"Zwischendatensatz T {kurz_id} wurde vollständig gelöscht."
-                        )
-                        st.rerun()
     except (Domaenenfehler, Datenimportfehler) as fehler:
         st.error(str(fehler))
     except NichtUnterstuetzteSchemaversion as fehler:

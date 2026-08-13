@@ -20,6 +20,7 @@ from framework_mvp.bootstrap import (
     erstelle_projekt_service,
     erstelle_transformations_service,
 )
+from framework_mvp.ui.fortschritt import fortschrittsstand, zeige_gesamtfortschritt
 from framework_mvp.ui.navigation import FRAMEWORK_BEREICHE
 from framework_mvp.ui.pages.datenqualitaet import zeige_datenqualitaet_seite
 from framework_mvp.ui.pages.ergebnisaggregation import zeige_ergebnisaggregation_seite
@@ -50,10 +51,15 @@ seite = st.sidebar.radio(
     FRAMEWORK_BEREICHE,
     key="framework_bereich",
 )
+zeige_gesamtfortschritt(fortschrittsstand(seite, st.session_state))
 projekt_service = erstelle_projekt_service()
 workspace = WorkspaceKonfiguration.ermitteln()
 if seite == "Schritt 1: Projektrahmen definieren":
-    zeige_projektverwaltung(projekt_service, erstelle_loesch_service(workspace=workspace))
+    zeige_projektverwaltung(
+        projekt_service,
+        erstelle_transformations_service(workspace=workspace),
+        erstelle_loesch_service(workspace=workspace),
+    )
 elif seite == "2 ETL durchführen":
     zeige_etl_seite(
         projekt_service,
@@ -62,7 +68,6 @@ elif seite == "2 ETL durchführen":
         erstelle_importvorgang_service(workspace=workspace),
         erstelle_transformations_service(workspace=workspace),
         workspace,
-        erstelle_loesch_service(workspace=workspace),
     )
 elif seite == "3 Semantisches Mapping":
     transformations_service = erstelle_transformations_service(workspace=workspace)

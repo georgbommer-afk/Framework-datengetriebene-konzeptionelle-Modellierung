@@ -123,7 +123,7 @@ def _fachliche_details(vorschau: Modellableitungsvorschau) -> None:
 
 
 def _technische_details(vorschau: Modellableitungsvorschau) -> None:
-    with st.expander("Technische Details"):
+    with st.expander("Technische Details", expanded=False):
         st.json(
             {
                 "modellableitungs_id": str(vorschau.modellableitungs_id),
@@ -158,8 +158,6 @@ def _gespeicherte_ableitung(
         f"{ableitung.o_id}.o.json",
         "application/json",
     )
-    if st.button("Weiter zu Schritt 9: Modell ergänzen und validieren"):
-        framework_bereich_oeffnen(schritt=9, projekt_id=projekt_id)
 
 
 def zeige_modellableitung_seite(
@@ -216,6 +214,13 @@ def zeige_modellableitung_seite(
             )
             st.session_state.aktuelle_k_id = str(ableitung.k_id)
             st.session_state.aktuelle_o_id = str(ableitung.o_id)
+            for schluessel in (
+                "aktuelle_validierungslauf_id",
+                "aktuelle_k_stern_id",
+                "schritt10_ausgabe",
+                "schritt10_ausgabe_signatur",
+            ):
+                st.session_state.pop(schluessel, None)
             framework_bereich_oeffnen(schritt=9, projekt_id=projekt_id)
         except (Domaenenfehler, Importintegritaetsfehler) as fehler:
             st.error(f"K und O konnten nicht gespeichert werden: {fehler}")

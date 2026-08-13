@@ -20,6 +20,11 @@ ABHAENGIGE_ID_SCHLUESSEL = (
     "aktuelle_validierungslauf_id",
     "aktuelle_k_stern_id",
     "schritt9_arbeitsfassung_signatur",
+    "schritt9_arbeitsfassung",
+    "ag_vorschau",
+    "modellableitung_vorschau",
+    "schritt10_ausgabe",
+    "schritt10_ausgabe_signatur",
 )
 
 
@@ -46,7 +51,7 @@ def zwischendatensatz_zustand_bereinigen(
     for schluessel in tuple(zustand):
         if str(zwischendatensatz_id) in str(schluessel):
             zustand.pop(schluessel, None)
-    zustand["framework_bereich"] = "2 ETL durchführen"
+    zustand["naechster_framework_bereich"] = "2 ETL durchführen"
 
 
 def projekt_zustand_bereinigen(zustand: MutableMapping[str, Any], projekt_id: UUID) -> None:
@@ -77,4 +82,4 @@ def projekt_zustand_bereinigen(zustand: MutableMapping[str, Any], projekt_id: UU
     for schluessel in tuple(zustand):
         if str(projekt_id) in str(schluessel):
             zustand.pop(schluessel, None)
-    zustand["framework_bereich"] = "Schritt 1: Projektrahmen definieren"
+    zustand["naechster_framework_bereich"] = "Schritt 1: Projektrahmen definieren"

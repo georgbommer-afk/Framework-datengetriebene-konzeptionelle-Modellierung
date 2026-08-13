@@ -319,8 +319,15 @@ def test_service_uebergibt_identische_gemeinsame_reportdaten_an_beide_renderer(
     monkeypatch.setattr(ausgabe_modul, "render_report_html", html_renderer)
     monkeypatch.setattr(ausgabe_modul, "render_report_pdf", pdf_renderer)
     validierungen = SimpleNamespace(uebergabe_schritt10=lambda *_: k_stern)
+    projekte = SimpleNamespace(
+        projekt_laden=lambda projekt_id: SimpleNamespace(
+            projekt_id=projekt_id, bezeichnung="Fördertechnik Süd / ÄÖÜ"
+        )
+    )
     service = ModellausgabeService(
-        cast(ModellvalidierungService, validierungen), WorkspaceKonfiguration(tmp_path)
+        cast(ModellvalidierungService, validierungen),
+        cast(Any, projekte),
+        WorkspaceKonfiguration(tmp_path),
     )
 
     ergebnis = service.erzeugen(
@@ -335,6 +342,7 @@ def test_service_uebergibt_identische_gemeinsame_reportdaten_an_beide_renderer(
     assert renderer_ids == [id(aufgeloest), id(aufgeloest)]
     assert ergebnis.report_html == b"<html></html>"
     assert ergebnis.report_pdf == b"%PDF-test"
+    assert ergebnis.pdf_dateiname == "Konzeptionelles Modell Fördertechnik Süd ÄÖÜ.pdf"
 
 
 def test_service_uebersetzt_reportingfehler_in_die_anwendungsschicht(
@@ -351,6 +359,14 @@ def test_service_uebersetzt_reportingfehler_in_die_anwendungsschicht(
             ModellvalidierungService,
             SimpleNamespace(uebergabe_schritt10=lambda *_: k_stern),
         ),
+        cast(
+            Any,
+            SimpleNamespace(
+                projekt_laden=lambda projekt_id: SimpleNamespace(
+                    projekt_id=projekt_id, bezeichnung="Reporting"
+                )
+            ),
+        ),
         WorkspaceKonfiguration(tmp_path),
     )
 
@@ -358,6 +374,35 @@ def test_service_uebersetzt_reportingfehler_in_die_anwendungsschicht(
         service.erzeugen(
             validierungslauf_id=UUID(str(k_stern["validierungslauf_id"])),
             projekt_id=UUID(str(k_stern["projekt_id"])),
+            k_stern_id=UUID(str(k_stern["k_stern_id"])),
+            html=True,
+            pdf=False,
+        )
+
+
+def test_service_verwendet_keinen_projektnamen_einer_fremden_id(tmp_path: Path) -> None:
+    k_stern = _k_stern()
+    projekt_id = UUID(str(k_stern["projekt_id"]))
+    service = ModellausgabeService(
+        cast(
+            ModellvalidierungService,
+            SimpleNamespace(uebergabe_schritt10=lambda *_: k_stern),
+        ),
+        cast(
+            Any,
+            SimpleNamespace(
+                projekt_laden=lambda _: SimpleNamespace(
+                    projekt_id=uuid4(), bezeichnung="Fremdes Projekt"
+                )
+            ),
+        ),
+        WorkspaceKonfiguration(tmp_path),
+    )
+
+    with pytest.raises(Importintegritaetsfehler, match="Projektbezeichnung"):
+        service.erzeugen(
+            validierungslauf_id=UUID(str(k_stern["validierungslauf_id"])),
+            projekt_id=projekt_id,
             k_stern_id=UUID(str(k_stern["k_stern_id"])),
             html=True,
             pdf=False,

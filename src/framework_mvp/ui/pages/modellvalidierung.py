@@ -1,7 +1,5 @@
 """Framework-Schritt 9: K mit Domänenwissen ergänzen und fachlich validieren."""
 
-import hashlib
-import json
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -9,7 +7,6 @@ import streamlit as st
 
 from framework_mvp.application.modellvalidierung_service import (
     ModellvalidierungService,
-    Validierungsarbeitsfassung,
 )
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.domain.exceptions import Domaenenfehler
@@ -37,12 +34,6 @@ def _aktive_ids() -> tuple[UUID, UUID, UUID, UUID] | None:
         return None
 
 
-def _signatur(wert: Any) -> str:
-    return hashlib.sha256(
-        json.dumps(wert, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-
-
 def _bestandteile_anzeigen(k: dict[str, Any]) -> None:
     st.subheader("2. Übersicht der elf Modellbestandteile")
     st.caption(
@@ -62,10 +53,22 @@ def _bestandteile_anzeigen(k: dict[str, Any]) -> None:
                     f"**{information['herkunftsartefakt']} · `{information['strukturreferenz']}`**"
                 )
                 st.json(information["wert"], expanded=False)
-                st.caption(
-                    f"Artefakt `{information['herkunftsartefakt_id']}` · "
-                    f"SHA-256 `{information['herkunftsartefakt_sha256']}`"
-                )
+
+
+def _technische_details(basis: Any) -> None:
+    with st.expander("Technische Details", expanded=False):
+        st.json(
+            {
+                "modellableitungs_id": str(basis.ableitung.modellableitungs_id),
+                "projekt_id": str(basis.ableitung.projekt_id),
+                "k_id": str(basis.ableitung.k_id),
+                "k_sha256": basis.ableitung.k_sha256,
+                "o_id": str(basis.ableitung.o_id),
+                "o_sha256": basis.ableitung.o_sha256,
+                "eingabefingerabdruck": basis.eingabefingerabdruck,
+            },
+            expanded=False,
+        )
 
 
 def _menschliche_eingaben(
@@ -190,15 +193,41 @@ def _gespeichertes_k_stern(
     validierung, k_stern = service.laden(validierungslauf_id)
     if validierung.projekt_id != projekt_id:
         raise Domaenenfehler("Der aktive Validierungslauf gehört nicht zum aktiven Projekt.")
-    st.success(f"K* ist fachlich validiert und gespeichert: `{k_stern['k_stern_id']}`.")
+    st.success("K* ist fachlich validiert und gespeichert.")
     st.download_button(
         "Validiertes konzeptionelles Modell K* herunterladen",
         service.k_stern_download_laden(validierungslauf_id),
-        f"{validierung.k_stern_id}.k-star.json",
+        "validiertes-konzeptionelles-modell-k-stern.json",
         "application/json",
     )
-    if st.button("Weiter zu Schritt 10: Konzeptionelles Modell ausgeben", type="primary"):
-        framework_bereich_oeffnen(schritt=10, projekt_id=projekt_id)
+
+
+def _fehlende_pflichtentscheidungen(
+    k: dict[str, Any], o: dict[str, Any], roh: dict[str, Any]
+) -> list[str]:
+    """Benennt unvollständige fachliche Eingaben mit ihrem sichtbaren Feldnamen."""
+    fehlend: list[str] = []
+    offene_eintraege = o.get("offene_eintraege", [])
+    for index, (offen, behandlung) in enumerate(
+        zip(offene_eintraege, roh["behandlungen"], strict=True), 1
+    ):
+        bezug = f"Offener Punkt {index} ({offen['bestandteil_id']})"
+        if behandlung["entscheidung"] == "noch_nicht_behandelt":
+            fehlend.append(f"{bezug}: Fachliche Entscheidung")
+        if not behandlung["ergaenzung"]:
+            fehlend.append(f"{bezug}: Fachliche Ergänzung beziehungsweise Begründung")
+    bezeichnungen = {
+        wert["bestandteil_id"]: wert["bezeichnung"] for wert in k["modellbestandteile"]
+    }
+    for anpassung in roh["anpassungen"]:
+        bezeichnung = bezeichnungen.get(anpassung["bestandteil_id"], anpassung["bestandteil_id"])
+        if not anpassung["inhalt"]:
+            fehlend.append(f"{bezeichnung}: Fachlicher Inhalt")
+        if not anpassung["begruendung"]:
+            fehlend.append(f"{bezeichnung}: Begründung")
+    if roh["gesamtvalidierungsstatus"] != Gesamtvalidierungsstatus.FACHLICH_VALIDIERT.value:
+        fehlend.append("Status der fachlichen Gesamtvalidierung: fachlich validiert")
+    return fehlend
 
 
 def zeige_modellvalidierung_seite(
@@ -216,6 +245,13 @@ def zeige_modellvalidierung_seite(
     if projekt_service.projekt_laden(projekt_id) is None:
         st.error("Das aktive Projekt wurde nicht gefunden.")
         return
+    gespeicherte_id = st.session_state.get("aktuelle_validierungslauf_id")
+    if gespeicherte_id:
+        try:
+            _gespeichertes_k_stern(service, UUID(str(gespeicherte_id)), projekt_id)
+        except (ValueError, Domaenenfehler, Importintegritaetsfehler, KeyError) as fehler:
+            st.error(f"Das gespeicherte K* ist nicht mehr gültig: {fehler}")
+        return
     try:
         basis = service.grundlage_laden(
             projekt_id,
@@ -230,23 +266,27 @@ def zeige_modellvalidierung_seite(
         return
     st.subheader("1. Validierte Eingaben K und O")
     st.success(
-        f"K `{basis.ableitung.k_id}` und O `{basis.ableitung.o_id}` wurden einschließlich "
-        "Projektbindung, Versionen, Prüfsummen und gegenseitiger Referenz erneut validiert."
-    )
-    st.caption(
-        f"Modellableitung `{modellableitungs_id}` · Eingabefingerabdruck "
-        f"`{basis.eingabefingerabdruck}`"
+        "K und O wurden einschließlich Projektbindung, Versionen, Prüfsummen und "
+        "gegenseitiger Referenz erneut validiert."
     )
     _bestandteile_anzeigen(basis.k)
+    _technische_details(basis)
     behandlungen, anpassungen, status, vermerk, roh = _menschliche_eingaben(
         basis.k,
         basis.o,
         widget_praefix=f"schritt9_{projekt_id}_{modellableitungs_id}",
     )
-    aktuelle_signatur = _signatur(
-        {"eingabe": basis.eingabefingerabdruck, "menschliche_eingaben": roh}
-    )
-    if st.button("Arbeitsfassung prüfen"):
+    st.subheader("5. K* speichern und zu Schritt 10")
+    if st.button(
+        "Eingaben validieren, K* speichern und zu Schritt 10",
+        type="primary",
+    ):
+        fehlend = _fehlende_pflichtentscheidungen(basis.k, basis.o, roh)
+        if fehlend:
+            st.error("Bitte vervollständigen Sie folgende Pflichtentscheidungen:")
+            for feld in fehlend:
+                st.write(f"- {feld}")
+            return
         try:
             arbeitsfassung = service.arbeitsfassung_erstellen(
                 projekt_id=projekt_id,
@@ -258,52 +298,22 @@ def zeige_modellvalidierung_seite(
                 gesamtvalidierungsstatus=status,
                 validierungsvermerk=vermerk,
             )
-            st.session_state.schritt9_arbeitsfassung = arbeitsfassung
-            st.session_state.schritt9_arbeitsfassung_signatur = aktuelle_signatur
-        except (Domaenenfehler, Importintegritaetsfehler) as fehler:
-            st.error(f"Die Arbeitsfassung ist ungültig: {fehler}")
-    arbeitsfassung = st.session_state.get("schritt9_arbeitsfassung")
-    if isinstance(arbeitsfassung, Validierungsarbeitsfassung):
-        veraltet = st.session_state.get("schritt9_arbeitsfassung_signatur") != aktuelle_signatur
-        if veraltet:
-            st.warning(
-                "K, O oder menschliche Eingaben haben sich geändert. Die ungespeicherte "
-                "Arbeitsfassung ist ungültig und muss erneut geprüft werden."
-            )
-        st.subheader("5. Speicherung von K* und Übergabe an Schritt 10")
-        if arbeitsfassung.unbehandelte_offene_eintrag_ids:
-            st.warning(
-                f"Noch unbehandelte Einträge aus O: "
-                f"{len(arbeitsfassung.unbehandelte_offene_eintrag_ids)}"
-            )
-        elif arbeitsfassung.gesamtvalidierungsstatus is Gesamtvalidierungsstatus.ANPASSUNGSBEDARF:
-            st.warning("Es besteht Anpassungsbedarf. Eine erneute fachliche Validierung ist nötig.")
-        else:
-            st.success("Alle O-Einträge sind behandelt und die Arbeitsfassung ist finalisierbar.")
-        bestaetigt = st.checkbox(
-            "Ich bestätige die fachliche Gesamtvalidierung und die Erzeugung von K*.",
-            key="schritt9_fachlich_bestaetigt",
-        )
-        if st.button(
-            "K* speichern und zu Schritt 10",
-            disabled=veraltet or not arbeitsfassung.finalisierbar or not bestaetigt,
-            type="primary",
-        ):
-            try:
-                validierung = service.speichern(
-                    arbeitsfassung,
-                    validierungslauf_id=uuid4(),
-                    k_stern_id=uuid4(),
-                    fachlich_bestaetigt=bestaetigt,
+            if not arbeitsfassung.finalisierbar:
+                st.error(
+                    "Die Eingaben sind noch nicht finalisierbar. Prüfen Sie alle offenen "
+                    "Punkte und den Status der fachlichen Gesamtvalidierung."
                 )
-                st.session_state.aktuelle_validierungslauf_id = str(validierung.validierungslauf_id)
-                st.session_state.aktuelle_k_stern_id = str(validierung.k_stern_id)
-                framework_bereich_oeffnen(schritt=10, projekt_id=projekt_id)
-            except (Domaenenfehler, Importintegritaetsfehler) as fehler:
-                st.error(f"K* konnte nicht gespeichert werden: {fehler}")
-    gespeicherte_id = st.session_state.get("aktuelle_validierungslauf_id")
-    if gespeicherte_id:
-        try:
-            _gespeichertes_k_stern(service, UUID(str(gespeicherte_id)), projekt_id)
+                return
+            validierung = service.speichern(
+                arbeitsfassung,
+                validierungslauf_id=uuid4(),
+                k_stern_id=uuid4(),
+                fachlich_bestaetigt=True,
+            )
+            st.session_state.aktuelle_validierungslauf_id = str(validierung.validierungslauf_id)
+            st.session_state.aktuelle_k_stern_id = str(validierung.k_stern_id)
+            st.session_state.pop("schritt10_ausgabe", None)
+            st.session_state.pop("schritt10_ausgabe_signatur", None)
+            framework_bereich_oeffnen(schritt=10, projekt_id=projekt_id)
         except (ValueError, Domaenenfehler, Importintegritaetsfehler, KeyError) as fehler:
-            st.error(f"Das gespeicherte K* ist nicht mehr gültig: {fehler}")
+            st.error(f"K* konnte nicht gespeichert werden: {fehler}")

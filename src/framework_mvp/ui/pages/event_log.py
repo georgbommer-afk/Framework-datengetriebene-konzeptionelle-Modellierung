@@ -30,7 +30,7 @@ from framework_mvp.domain.models import (
     Zwischendatensatz,
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
-from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
+from framework_mvp.ui.fortschritt import unterschritte_fuer
 from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import framework_bereich_oeffnen, schritt_abschliessen_und_weiter
 from framework_mvp.ui.pages.semantisches_mapping import (
@@ -39,14 +39,7 @@ from framework_mvp.ui.pages.semantisches_mapping import (
     _projektkontext,
 )
 
-SCHRITTE = (
-    "Strukturart festlegen",
-    "Mindestbestandteile konfigurieren",
-    "Semantische Rollen und Attribute auswählen",
-    "Event Log erzeugen und prüfen",
-    "Event Log ausgeben und speichern",
-)
-KURZ = ("Struktur", "Mindestbestandteile", "Rollen & Attribute", "Erzeugen", "Ausgabe E")
+SCHRITTE = unterschritte_fuer(4)
 
 
 def _folgeergebnisse_verwerfen(zustand: dict[str, Any]) -> None:
@@ -491,12 +484,11 @@ def _ergebnis(
         if mapping is None
         else "bestätigt leer"
         if mapping.kein_mapping_erforderlich
-        else str(mapping.mapping_id)
+        else "vorhanden"
     )
     st.write("### Fallbezogener Event Log (E)")
     st.write(
         f"**Projekt:** {projektname}  \n"
-        f"**Zwischendatensatz T:** {datensatz.zwischendatensatz_id}  \n"
         f"**Mappingtabelle M:** {mappingtext}  \n"
         f"**Strukturart:** {konfiguration.mapping_modus.value}  \n"
         f"**Fallidentifikation:** "
@@ -549,9 +541,15 @@ def _ergebnis(
         width="stretch",
     )
     st.dataframe(ergebnis.ereignisse.loc[:, _fachspalten(ergebnis)].head(200), width="stretch")
-    with st.expander("Technische Herkunft und Lineage"):
-        st.json(ergebnis.herkunft_standardspalten)
-        st.json(ergebnis.attributherkunft)
+    with st.expander("Technische Details", expanded=False):
+        st.json(
+            {
+                "zwischendatensatz_id": str(datensatz.zwischendatensatz_id),
+                "mappingtabelle_id": str(mapping.mapping_id) if mapping is not None else None,
+                "herkunft_standardspalten": ergebnis.herkunft_standardspalten,
+                "herkunft_attribute": ergebnis.attributherkunft,
+            }
+        )
         technische = [
             w for w in ergebnis.ereignisse.columns if str(w).startswith("_") or w == "event_id"
         ]
@@ -607,9 +605,6 @@ def _speichern(
     artefakt = zustand.get("artefakt")
     if artefakt is not None:
         st.success("Der fallbezogene Event Log (E) wurde gespeichert.")
-        st.write(f"**CSV.GZ:** {artefakt.relativer_csv_pfad}")
-        st.write(f"**Schema:** {artefakt.relativer_schema_pfad}")
-        st.write(f"**Lineage:** {artefakt.relativer_lineage_pfad}")
     if artefakt is None and st.button(
         "Event Log E speichern und zu Schritt 5",
         type="primary",
@@ -687,9 +682,6 @@ def zeige_event_log_seite(
         _mapping_anzeigen(mapping)
         st.write("### Unveränderte Vorschau des Zwischendatensatzes T")
         st.dataframe(daten.head(100), width="stretch")
-        zeige_kompakten_fortschritt(
-            schritt=zustand["schritt"], kurze_namen=KURZ, lange_namen=SCHRITTE
-        )
         weiter = False
         if zustand["schritt"] == 1:
             weiter = _struktur(

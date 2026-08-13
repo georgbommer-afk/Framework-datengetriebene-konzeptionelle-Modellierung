@@ -70,7 +70,8 @@ def test_anwendung_startet_mit_fuenf_schritten_und_tooltips(
     assert any(
         element.value == "Schritt 1: Projektrahmen definieren" for element in anwendung.header
     )
-    assert any("Schritt 1 von 5" in element.value for element in anwendung.caption)
+    assert any("Gesamtfortschritt" in element.value for element in anwendung.caption)
+    assert len(anwendung.get("progress")) == 1
     assert {element.label for element in anwendung.text_area} == {
         "Problemstellung",
         "Systemgrenze",

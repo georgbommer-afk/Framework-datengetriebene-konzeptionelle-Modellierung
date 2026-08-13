@@ -160,11 +160,6 @@ def test_a_g_speichern_setzt_id_uebergabe_und_schritt_acht() -> None:
     app = _app()
     next(wert for wert in app.button if wert.label == "A_G vollständig neu berechnen").click().run()
     next(
-        wert
-        for wert in app.checkbox
-        if wert.label.startswith("Ich bestätige die Vorschau")
-    ).check().run()
-    next(
         wert for wert in app.button if wert.label == "A_G speichern und zu Schritt 8"
     ).click().run()
 
@@ -175,6 +170,13 @@ def test_a_g_speichern_setzt_id_uebergabe_und_schritt_acht() -> None:
     assert app.session_state["naechster_framework_bereich"] == (
         "8 Modellbestandteile ableiten"
     )
+
+
+def test_schritt_7_hat_keine_redundante_vorschau_bestaetigung() -> None:
+    app = _app()
+    next(wert for wert in app.button if wert.label == "A_G vollständig neu berechnen").click().run()
+    assert not any("Ich bestätige die Vorschau" in wert.label for wert in app.checkbox)
+    assert any(wert.label == "Technische Details" for wert in app.expander)
 
 
 def test_woped_url_iframe_und_fallback_sind_fest_und_bedingt() -> None:
