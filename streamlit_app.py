@@ -296,6 +296,23 @@ def _kursaktionen(gruppen_id: UUID | None) -> None:
         )
         st.sidebar.success("Einladungslink (wird nur jetzt vollständig angezeigt):")
         st.sidebar.code(f"?invite={token}")
+    einladungs_service = erstelle_einladungs_service(datenbankpfad)
+    einladungen = einladungs_service.auflisten(kontext, gruppen_id)
+    if einladungen:
+        with st.sidebar.expander("Einladungen", expanded=False):
+            for einladung in einladungen:
+                status = (
+                    "widerrufen"
+                    if einladung.widerrufen_am is not None
+                    else f"{einladung.anzahl_nutzungen}/{einladung.maximale_nutzungen} verwendet"
+                )
+                st.caption(f"Gültig bis {einladung.laeuft_ab_am:%d.%m.%Y %H:%M} UTC · {status}")
+                if einladung.widerrufen_am is None and st.button(
+                    "Einladung widerrufen",
+                    key=f"einladung_widerrufen_{einladung.einladungs_id}",
+                ):
+                    einladungs_service.widerrufen(kontext, gruppen_id, einladung.einladungs_id)
+                    st.rerun()
     mitgliedschaften = zugriff.gruppenmitgliedschaften_auflisten(gruppen_id)
     aktive_mitglieder = [
         wert for wert in mitgliedschaften if wert.status is Mitgliedschaftsstatus.AKTIV

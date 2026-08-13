@@ -550,15 +550,30 @@ class SQLiteZugriffsRepository:
             ).fetchone()
         return None if zeile is None else self._einladung(zeile)
 
-    def einladung_widerrufen(self, einladungs_id: UUID, *, zeitpunkt: datetime) -> None:
+    def einladungen_fuer_gruppe(self, gruppen_id: UUID) -> list[Gruppeneinladung]:
+        with self._verbindung() as verbindung:
+            zeilen = verbindung.execute(
+                """
+                SELECT * FROM gruppeneinladungen
+                WHERE gruppen_id = ?
+                ORDER BY erstellt_am_utc DESC, einladungs_id
+                """,
+                (str(gruppen_id),),
+            ).fetchall()
+        return [self._einladung(zeile) for zeile in zeilen]
+
+    def einladung_widerrufen(
+        self, gruppen_id: UUID, einladungs_id: UUID, *, zeitpunkt: datetime
+    ) -> bool:
         with self._verbindung() as verbindung, verbindung:
-            verbindung.execute(
+            ergebnis = verbindung.execute(
                 """
                 UPDATE gruppeneinladungen SET widerrufen_am_utc = ?
-                WHERE einladungs_id = ? AND widerrufen_am_utc IS NULL
+                WHERE gruppen_id = ? AND einladungs_id = ? AND widerrufen_am_utc IS NULL
                 """,
-                (zeitpunkt.isoformat(), str(einladungs_id)),
+                (zeitpunkt.isoformat(), str(gruppen_id), str(einladungs_id)),
             )
+        return ergebnis.rowcount == 1
 
     def einladung_atomar_einloesen(
         self, *, token_sha256: str, benutzer: Benutzer, zeitpunkt: datetime

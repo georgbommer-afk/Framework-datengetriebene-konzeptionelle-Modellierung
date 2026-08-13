@@ -206,11 +206,20 @@ class EinladungsService:
             token_sha256=token_hash, benutzer=benutzer, zeitpunkt=datetime.now(UTC)
         )
 
+    def auflisten(self, kontext: Zugriffskontext, gruppen_id: UUID) -> list[Gruppeneinladung]:
+        self._autorisierung.gruppen_zugriff_pruefen(
+            kontext, gruppen_id, Gruppenaktion.EINLADUNGEN_VERWALTEN
+        )
+        return self._repository.einladungen_fuer_gruppe(gruppen_id)
+
     def widerrufen(self, kontext: Zugriffskontext, gruppen_id: UUID, einladungs_id: UUID) -> None:
         self._autorisierung.gruppen_zugriff_pruefen(
             kontext, gruppen_id, Gruppenaktion.EINLADUNGEN_VERWALTEN
         )
-        self._repository.einladung_widerrufen(einladungs_id, zeitpunkt=datetime.now(UTC))
+        if not self._repository.einladung_widerrufen(
+            gruppen_id, einladungs_id, zeitpunkt=datetime.now(UTC)
+        ):
+            raise ZugriffVerweigert(NICHT_VERFUEGBAR)
 
 
 class KursgruppenLoeschService:

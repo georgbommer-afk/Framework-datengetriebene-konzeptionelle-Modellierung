@@ -122,3 +122,33 @@ def test_abgelaufene_und_widerrufene_einladung_wird_abgelehnt(tmp_path: Path) ->
     service.widerrufen(kontext, gruppe.gruppen_id, einladung2.einladungs_id)
     with pytest.raises(ZugriffVerweigert):
         service.einloesen(Zugriffskontext.angemeldet(teilnehmer.benutzer_id), token2)
+
+
+def test_gruppenleitung_kann_nur_einladungen_der_eigenen_gruppe_widerrufen(
+    tmp_path: Path,
+) -> None:
+    repository = SQLiteZugriffsRepository(tmp_path / "einladungsgrenzen.sqlite")
+    autorisierung = AutorisierungsService(repository)
+    kursgruppen = KursgruppenService(repository, autorisierung)
+    einladungen = EinladungsService(repository, autorisierung)
+    leitung_a = _benutzer(repository, "leitung-a", "a@example.org")
+    leitung_b = _benutzer(repository, "leitung-b", "b@example.org")
+    for leitung in (leitung_a, leitung_b):
+        repository.globale_rolle_setzen(
+            leitung.benutzer_id, GlobaleRolle.GRUPPENLEITUNG, vergeben_von=None
+        )
+    kontext_a = Zugriffskontext.angemeldet(leitung_a.benutzer_id)
+    kontext_b = Zugriffskontext.angemeldet(leitung_b.benutzer_id)
+    gruppe_a = kursgruppen.gruppe_anlegen(kontext_a, bezeichnung="Gruppe A")
+    gruppe_b = kursgruppen.gruppe_anlegen(kontext_b, bezeichnung="Gruppe B")
+    einladung_b, _ = einladungen.erstellen(kontext_b, gruppe_b.gruppen_id)
+
+    with pytest.raises(ZugriffVerweigert):
+        einladungen.widerrufen(kontext_a, gruppe_a.gruppen_id, einladung_b.einladungs_id)
+
+    gespeichert = repository.einladung_laden_per_hash(einladung_b.token_sha256)
+    assert gespeichert is not None
+    assert gespeichert.widerrufen_am is None
+    assert einladungen.auflisten(kontext_a, gruppe_a.gruppen_id) == []
+    with pytest.raises(ZugriffVerweigert):
+        einladungen.auflisten(kontext_a, gruppe_b.gruppen_id)
