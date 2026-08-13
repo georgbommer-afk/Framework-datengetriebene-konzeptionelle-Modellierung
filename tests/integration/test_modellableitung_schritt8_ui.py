@@ -153,9 +153,7 @@ def test_speichern_setzt_k_o_ids_und_oeffnet_schritt_neun() -> None:
     app = _app()
     next(wert for wert in app.button if wert.label == "Vorschau von K und O erzeugen").click().run()
     next(
-        wert
-        for wert in app.checkbox
-        if wert.label.startswith("Ich bestätige ausschließlich")
+        wert for wert in app.checkbox if wert.label.startswith("Ich bestätige ausschließlich")
     ).check().run()
     next(
         wert for wert in app.button if wert.label == "K und O speichern und zu Schritt 9"
@@ -164,9 +162,7 @@ def test_speichern_setzt_k_o_ids_und_oeffnet_schritt_neun() -> None:
     assert app.session_state["aktuelle_modellableitungs_id"]
     assert app.session_state["aktuelle_k_id"]
     assert app.session_state["aktuelle_o_id"]
-    assert app.session_state["naechster_framework_bereich"] == (
-        "9 Modell ergänzen und validieren"
-    )
+    assert app.session_state["naechster_framework_bereich"] == ("9 Modell ergänzen und validieren")
 
 
 def test_seite_enthaelt_fuenf_abschnitte_und_validierte_schritt_neun_uebergabe() -> None:

@@ -34,12 +34,13 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
-
 # -----------------------------------------------------------------------------
 # Feste interne Generatorparameter
 # -----------------------------------------------------------------------------
 
-AUSGABEDATEI = Path("/Users/georgbommer/MasterarbeitGithubRepo/tests/datasets/Testdatensatz_Produktion.xlsx")
+AUSGABEDATEI = Path(
+    "/Users/georgbommer/MasterarbeitGithubRepo/tests/datasets/Testdatensatz_Produktion.xlsx"
+)
 SEED = 20260811
 STARTZEITPUNKT = datetime(2026, 7, 1, 6, 0, 0)
 
@@ -80,48 +81,26 @@ AKTIVITAETEN: dict[str, Aktivitaetsdefinition] = {
     "Fräsen": Aktivitaetsdefinition(
         90, ("Fräsmaschine_01", "Fräsmaschine_02", "Fräsmaschine_03"), (10, 35)
     ),
-    "Qualitätsprüfung 1": Aktivitaetsdefinition(
-        20, ("Messplatz_01", "Messplatz_02"), (5, 20)
-    ),
+    "Qualitätsprüfung 1": Aktivitaetsdefinition(20, ("Messplatz_01", "Messplatz_02"), (5, 20)),
     "Nacharbeit mechanisch": Aktivitaetsdefinition(
         45, ("Nacharbeitsplatz_01", "Nacharbeitsplatz_02"), (10, 30)
     ),
-    "Schweißen": Aktivitaetsdefinition(
-        60, ("Schweißzelle_01", "Schweißzelle_02"), (10, 40)
-    ),
-    "Schleifen": Aktivitaetsdefinition(
-        30, ("Schleifplatz_01", "Schleifplatz_02"), (5, 20)
-    ),
-    "Vormontage": Aktivitaetsdefinition(
-        45, ("Montageplatz_01", "Montageplatz_02"), (10, 35)
-    ),
+    "Schweißen": Aktivitaetsdefinition(60, ("Schweißzelle_01", "Schweißzelle_02"), (10, 40)),
+    "Schleifen": Aktivitaetsdefinition(30, ("Schleifplatz_01", "Schleifplatz_02"), (5, 20)),
+    "Vormontage": Aktivitaetsdefinition(45, ("Montageplatz_01", "Montageplatz_02"), (10, 35)),
     "Baugruppenmontage": Aktivitaetsdefinition(
         75, ("Montageplatz_03", "Montageplatz_04"), (10, 35)
     ),
     "Elektrik montieren": Aktivitaetsdefinition(
         50, ("Elektromontage_01", "Elektromontage_02"), (10, 30)
     ),
-    "Lackiervorbereitung": Aktivitaetsdefinition(
-        30, ("Lackiervorbereitung_01",), (10, 25)
-    ),
-    "Lackieren": Aktivitaetsdefinition(
-        40, ("Lackierkabine_01",), (10, 30)
-    ),
-    "Trocknen": Aktivitaetsdefinition(
-        120, ("Trockenkammer_01",), (5, 15)
-    ),
-    "Qualitätsprüfung 2": Aktivitaetsdefinition(
-        25, ("Prüfplatz_Oberfläche_01",), (5, 20)
-    ),
-    "Nacharbeit Lack": Aktivitaetsdefinition(
-        35, ("Lackiernacharbeit_01",), (10, 25)
-    ),
-    "Endmontage": Aktivitaetsdefinition(
-        60, ("Endmontage_01", "Endmontage_02"), (10, 35)
-    ),
-    "Verpacken": Aktivitaetsdefinition(
-        20, ("Verpackung_01", "Verpackung_02"), (5, 20)
-    ),
+    "Lackiervorbereitung": Aktivitaetsdefinition(30, ("Lackiervorbereitung_01",), (10, 25)),
+    "Lackieren": Aktivitaetsdefinition(40, ("Lackierkabine_01",), (10, 30)),
+    "Trocknen": Aktivitaetsdefinition(120, ("Trockenkammer_01",), (5, 15)),
+    "Qualitätsprüfung 2": Aktivitaetsdefinition(25, ("Prüfplatz_Oberfläche_01",), (5, 20)),
+    "Nacharbeit Lack": Aktivitaetsdefinition(35, ("Lackiernacharbeit_01",), (10, 25)),
+    "Endmontage": Aktivitaetsdefinition(60, ("Endmontage_01", "Endmontage_02"), (10, 35)),
+    "Verpacken": Aktivitaetsdefinition(20, ("Verpackung_01", "Verpackung_02"), (5, 20)),
     "Auftrag abgeschlossen": Aktivitaetsdefinition(5, ("ERP",), (2, 10)),
 }
 
@@ -133,7 +112,9 @@ AKTIVITAETEN: dict[str, Aktivitaetsdefinition] = {
 
 def argumente_lesen() -> GeneratorKonfiguration:
     parser = argparse.ArgumentParser(
-        description="Erzeugt produktionsnahe Event-Log-Testdaten mit exakt definierter Zeilenanzahl."
+        description=(
+            "Erzeugt produktionsnahe Event-Log-Testdaten mit exakt definierter Zeilenanzahl."
+        )
     )
     parser.add_argument(
         "--zeilen",
@@ -167,9 +148,7 @@ def argumente_lesen() -> GeneratorKonfiguration:
 
     maximale_platzhalter = args.zeilen * len(SPALTEN)
     if not 0 <= args.platzhalter <= maximale_platzhalter:
-        parser.error(
-            f"--platzhalter muss zwischen 0 und {maximale_platzhalter} liegen."
-        )
+        parser.error(f"--platzhalter muss zwischen 0 und {maximale_platzhalter} liegen.")
 
     return GeneratorKonfiguration(
         zeilen=args.zeilen,
@@ -255,7 +234,8 @@ def zusatzlaengen_planen(zeilenanzahl: int) -> list[int]:
         return [zeilenanzahl - 15]
     if zeilenanzahl < 30:
         raise ValueError(
-            "Die gewünschte Zeilenanzahl kann nicht aus vollständigen Prozessfällen gebildet werden."
+            "Die gewünschte Zeilenanzahl kann nicht aus vollständigen "
+            "Prozessfällen gebildet werden."
         )
 
     # Zielverteilung der Prozessvarianten:
@@ -339,9 +319,7 @@ def grunddaten_erzeugen(
     traces = [trace_fuer_zusatzlaenge(z) for z in zusatzlaengen]
 
     # Ausreißer werden auf Ereignisebene festgelegt.
-    ausreisser_anzahl = round(
-        konfiguration.zeilen * konfiguration.ausreisseranteil / 100.0
-    )
+    ausreisser_anzahl = round(konfiguration.zeilen * konfiguration.ausreisseranteil / 100.0)
     ausreisser_indices = set(
         random.sample(range(konfiguration.zeilen), min(ausreisser_anzahl, konfiguration.zeilen))
     )
@@ -456,9 +434,7 @@ def platzhalter_einbauen(
             ziele_je_spalte[index] = zeilenanzahl
 
     while ueberhang > 0:
-        kandidaten = [
-            i for i, ziel in enumerate(ziele_je_spalte) if ziel < zeilenanzahl
-        ]
+        kandidaten = [i for i, ziel in enumerate(ziele_je_spalte) if ziel < zeilenanzahl]
         index = random.choice(kandidaten)
         ziele_je_spalte[index] += 1
         ueberhang -= 1
@@ -645,9 +621,7 @@ def main() -> None:
         platzhalter_gesetzt=platzhalter_gesetzt,
     )
 
-    ausreisser_anzahl = round(
-        konfiguration.zeilen * konfiguration.ausreisseranteil / 100.0
-    )
+    ausreisser_anzahl = round(konfiguration.zeilen * konfiguration.ausreisseranteil / 100.0)
 
     print(f"Datei erstellt: {AUSGABEDATEI.resolve()}")
     print(f"Datenzeilen: {konfiguration.zeilen:,}".replace(",", "."))

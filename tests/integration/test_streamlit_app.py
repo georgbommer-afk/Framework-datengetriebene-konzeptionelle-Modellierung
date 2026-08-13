@@ -118,25 +118,27 @@ def test_projektwechsel_vermischt_keine_widgetwerte(
         wert for wert in anwendung.selectbox if wert.label == "Vorhandenes Projekt auswählen"
     )
     projektauswahl.select_index(projektauswahl.options.index("Projekt A")).run()
-    next(
-        wert for wert in anwendung.text_area if wert.label == "Problemstellung"
-    ).set_value("Ungespeicherte Änderung A").run()
+    next(wert for wert in anwendung.text_area if wert.label == "Problemstellung").set_value(
+        "Ungespeicherte Änderung A"
+    ).run()
 
     projektauswahl = next(
         wert for wert in anwendung.selectbox if wert.label == "Vorhandenes Projekt auswählen"
     )
     projektauswahl.select_index(projektauswahl.options.index("Projekt B")).run()
-    assert next(
-        wert for wert in anwendung.text_area if wert.label == "Problemstellung"
-    ).value == "Problem B"
+    assert (
+        next(wert for wert in anwendung.text_area if wert.label == "Problemstellung").value
+        == "Problem B"
+    )
 
     projektauswahl = next(
         wert for wert in anwendung.selectbox if wert.label == "Vorhandenes Projekt auswählen"
     )
     projektauswahl.select_index(projektauswahl.options.index("Projekt A")).run()
-    assert next(
-        wert for wert in anwendung.text_area if wert.label == "Problemstellung"
-    ).value == "Problem A"
+    assert (
+        next(wert for wert in anwendung.text_area if wert.label == "Problemstellung").value
+        == "Problem A"
+    )
 
 
 def test_untersuchungszwecke_und_logistikziele_sind_kompakt(
@@ -289,9 +291,10 @@ def test_handlingvorgaenge_bleiben_beim_erweitern_gemeinsam_ausgewaehlt(
     handling = next(wert for wert in anwendung.multiselect if wert.label == "Handlingvorgänge")
     handling.set_value(["Kommissionierung", "Sortierung"]).run()
 
-    assert set(
-        anwendung.session_state["wizard_entwurf"]["intralogistik"]["handlingvorgaenge"]
-    ) == {"Kommissionierung", "Sortierung"}
+    assert set(anwendung.session_state["wizard_entwurf"]["intralogistik"]["handlingvorgaenge"]) == {
+        "Kommissionierung",
+        "Sortierung",
+    }
     assert set(
         next(wert for wert in anwendung.multiselect if wert.label == "Handlingvorgänge").value
     ) == {"Kommissionierung", "Sortierung"}
@@ -385,8 +388,7 @@ def test_vorhandene_datenquelle_ist_von_schritt_1_entkoppelt(
     assert not any("ERP-Export" in element.value for element in anwendung.markdown)
     assert not anwendung.date_input
     assert any(
-        element.label == "Projektrahmen speichern und zu Schritt 2"
-        for element in anwendung.button
+        element.label == "Projektrahmen speichern und zu Schritt 2" for element in anwendung.button
     )
 
 

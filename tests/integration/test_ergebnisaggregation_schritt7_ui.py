@@ -122,21 +122,15 @@ def test_a_g_speichern_setzt_id_uebergabe_und_schritt_acht() -> None:
     app = _app()
     next(wert for wert in app.button if wert.label == "A_G vollständig neu berechnen").click().run()
     next(
-        wert
-        for wert in app.checkbox
-        if wert.label.startswith("Ich bestätige die Vorschau")
+        wert for wert in app.checkbox if wert.label.startswith("Ich bestätige die Vorschau")
     ).check().run()
     next(
         wert for wert in app.button if wert.label == "A_G speichern und zu Schritt 8"
     ).click().run()
 
-    assert app.session_state["aktuelle_aggregations_id"] == (
-        "66666666-6666-6666-6666-666666666666"
-    )
+    assert app.session_state["aktuelle_aggregations_id"] == ("66666666-6666-6666-6666-666666666666")
     assert app.session_state["test_uebergabe_schritt8"] is True
-    assert app.session_state["naechster_framework_bereich"] == (
-        "8 Modellbestandteile ableiten"
-    )
+    assert app.session_state["naechster_framework_bereich"] == ("8 Modellbestandteile ableiten")
 
 
 def test_woped_url_iframe_und_fallback_sind_fest_und_bedingt() -> None:

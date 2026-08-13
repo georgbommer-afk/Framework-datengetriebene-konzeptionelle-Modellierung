@@ -189,17 +189,13 @@ def test_zurueck_aus_dem_letzten_abschnitt_bewahrt_vorschau_und_konfiguration() 
     app.radio[0].set_value("BPMN")
     _button(app, "Modell berechnen").click().run()
     _button(app, "Weiter").click().run()
-    zustand = app.session_state["process_mining_zustaende"][
-        "11111111-1111-1111-1111-111111111111"
-    ]
+    zustand = app.session_state["process_mining_zustaende"]["11111111-1111-1111-1111-111111111111"]
     signatur = zustand["vorschau_signatur"]
     analyse_id = zustand["analyse_id"]
 
     [wert for wert in app.button if wert.label == "Zurück"][-1].click().run()
 
-    zustand = app.session_state["process_mining_zustaende"][
-        "11111111-1111-1111-1111-111111111111"
-    ]
+    zustand = app.session_state["process_mining_zustaende"]["11111111-1111-1111-1111-111111111111"]
     assert zustand["schritt"] == 2
     assert zustand["vorschau_signatur"] == signatur
     assert zustand["analyse_id"] == analyse_id

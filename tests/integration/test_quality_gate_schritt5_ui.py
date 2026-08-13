@@ -215,9 +215,7 @@ def test_erfolgreiche_freigabe_setzt_e_stern_kontext_und_erlaubt_schritt_sechs()
     assert app.session_state["naechster_framework_bereich"] == "6 Process Mining durchführen"
 
     _button(app, "Zurück").click().run()
-    zustand = app.session_state["quality_gate_zustaende"][
-        "11111111-1111-1111-1111-111111111111"
-    ]
+    zustand = app.session_state["quality_gate_zustaende"]["11111111-1111-1111-1111-111111111111"]
     assert zustand["schritt"] == 3
     assert str(zustand["freigabe_id"]) == "55555555-5555-5555-5555-555555555555"
     assert len(zustand["entscheidungen"]) == 2

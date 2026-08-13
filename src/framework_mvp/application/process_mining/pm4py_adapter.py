@@ -98,12 +98,8 @@ class Pm4pyAdapter:
         for spalte in ("case_id", "activity"):
             serie = cast("pd.Series", kopie[spalte])
 
-            if bool(serie.isna().any()) or bool(
-                serie.astype("string").str.strip().eq("").any()
-            ):
-                raise Domaenenfehler(
-                    f"Die Pflichtspalte {spalte} enthält leere Werte."
-                )
+            if bool(serie.isna().any()) or bool(serie.astype("string").str.strip().eq("").any()):
+                raise Domaenenfehler(f"Die Pflichtspalte {spalte} enthält leere Werte.")
 
             kopie[spalte] = serie.astype("string")
 
@@ -114,9 +110,7 @@ class Pm4pyAdapter:
         )
 
         if bool(cast("pd.Series", kopie["timestamp"]).isna().any()):
-            raise Domaenenfehler(
-                "Die Pflichtspalte timestamp enthält ungültige Zeitwerte."
-            )
+            raise Domaenenfehler("Die Pflichtspalte timestamp enthält ungültige Zeitwerte.")
 
         return kopie.rename(
             columns={
@@ -124,7 +118,7 @@ class Pm4pyAdapter:
                 "activity": "concept:name",
                 "timestamp": "time:timestamp",
             }
-    )
+        )
 
     def entdecken(
         self, daten: pd.DataFrame, konfiguration: DiscoveryKonfiguration
