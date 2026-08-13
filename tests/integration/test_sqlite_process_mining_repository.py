@@ -24,6 +24,8 @@ def test_analyse_speichern_laden_und_projektbezogen_auflisten(tmp_path: Path) ->
     quality_id = uuid4()
     with sqlite3.connect(db) as verbindung:
         initialisiere_schema(verbindung)
+        # Der Repositorytest setzt nachfolgend bewusst minimale Fremdartefakte ein.
+        verbindung.execute("PRAGMA foreign_keys = OFF")
         verbindung.execute(
             "INSERT INTO projekte VALUES (?, 'P', '[]', 'entwurf', ?, ?, '{}')",
             (str(projekt_id), datetime.now(UTC).isoformat(), datetime.now(UTC).isoformat()),

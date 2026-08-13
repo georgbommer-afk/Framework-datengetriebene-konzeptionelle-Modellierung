@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path, PurePosixPath
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from framework_mvp.application.autorisierung import (
     NICHT_VERFUEGBAR,
@@ -29,6 +29,7 @@ from framework_mvp.application.ports.zugriffs_repository import ZugriffsReposito
 from framework_mvp.domain.exceptions import ArchivKonflikt, ArchivUngueltig, ZugriffVerweigert
 from framework_mvp.domain.models.zugriff import (
     Gruppenaktion,
+    Gruppenrolle,
     Projektaktion,
     Zugriffskontext,
 )
@@ -81,11 +82,12 @@ _ARTEFAKT_ENDUNGEN = {
 class ArchivGrenzen:
     """Harte Ressourcenlimits gegen ZIP-Bomben und Speicherüberlastung."""
 
-    maximale_archivgroesse_bytes: int = 100 * 1024 * 1024
-    maximale_dateien: int = 2_000
-    maximale_einzeldatei_bytes: int = 50 * 1024 * 1024
-    maximale_entpackte_groesse_bytes: int = 500 * 1024 * 1024
+    maximale_archivgroesse_bytes: int = 250 * 1024 * 1024
+    maximale_dateien: int = 5_000
+    maximale_einzeldatei_bytes: int = 250 * 1024 * 1024
+    maximale_entpackte_groesse_bytes: int = 1024 * 1024 * 1024
     maximales_kompressionsverhaeltnis: float = 100.0
+    maximale_pfadlaenge: int = 512
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,9 +152,30 @@ class ProjektArchivService:
             zuordnung_nachher = self._zugriff.projektzugehoerigkeit_laden(projekt_id)
             if zuordnung_nachher is None or zuordnung_nachher.revision != zuordnung_vorher.revision:
                 raise ArchivKonflikt("Das Projekt wurde während des Exports verändert.")
+            erster_fingerabdruck = self._payload_fingerabdruck(payload)
+            if self._vorhandener_fingerabdruck(projekt_id) != erster_fingerabdruck:
+                raise ArchivKonflikt("Das Projekt wurde während des Exports verändert.")
             archiv = self._zip_erstellen(projekt_id, projektzeile, payload, datenbankdaten)
-            self._archiv_pruefen(archiv)
+            _, manifest = self._archiv_pruefen(archiv)
+            self._zugriff.archiv_metadaten_speichern(
+                archiv_id=uuid4(),
+                projekt_id=projekt_id,
+                gruppen_id=zuordnung_vorher.gruppen_id,
+                archivtyp="projekt_export",
+                archivversion=ARCHIVVERSION,
+                sha256=hashlib.sha256(archiv).hexdigest(),
+                groesse_bytes=len(archiv),
+                benutzer_id=kontext.benutzer_id,
+                status="erfolgreich",
+                details={"project_fingerprint": manifest["project_fingerprint"]},
+                zeitpunkt=datetime.now(UTC),
+            )
             return archiv
+
+    def validieren(self, archiv: bytes) -> dict[str, Any]:
+        """Validiert ein Projektarchiv ohne Schreibzugriff und liefert sein Manifest."""
+        _, manifest = self._archiv_pruefen(archiv)
+        return manifest
 
     def importieren(
         self,
@@ -182,8 +205,21 @@ class ProjektArchivService:
                         "Die Projekt-ID ist bereits mit abweichendem Inhalt vorhanden."
                     )
                 return ImportErgebnis(projekt_id, True, projektname)
-            self._importziel_pruefen(kontext, ziel_gruppen_id)
+            self._importziel_pruefen(kontext, ziel_gruppen_id, manifest=manifest)
             self._atomar_uebernehmen(kontext, projekt_id, ziel_gruppen_id, inhalt, manifest)
+            self._zugriff.archiv_metadaten_speichern(
+                archiv_id=uuid4(),
+                projekt_id=projekt_id,
+                gruppen_id=ziel_gruppen_id,
+                archivtyp="projekt_import",
+                archivversion=ARCHIVVERSION,
+                sha256=hashlib.sha256(archiv).hexdigest(),
+                groesse_bytes=len(archiv),
+                benutzer_id=kontext.benutzer_id,
+                status="erfolgreich",
+                details={"project_fingerprint": manifest["project_fingerprint"]},
+                zeitpunkt=datetime.now(UTC),
+            )
         return ImportErgebnis(projekt_id, False, projektname)
 
     def _datenbank_snapshot(self, projekt_id: UUID) -> dict[str, list[dict[str, Any]]]:
@@ -277,12 +313,7 @@ class ProjektArchivService:
         probe = self._zip_schreiben(payload, None)
         with zipfile.ZipFile(io.BytesIO(probe)) as zip_probe:
             komprimiert = sum(info.compress_size for info in zip_probe.infolist())
-        fingerprint_payload = {
-            pfad: hashlib.sha256(daten).hexdigest()
-            for pfad, daten in sorted(payload.items())
-            if pfad != "README.txt"
-        }
-        fingerabdruck = hashlib.sha256(self._json_bytes(fingerprint_payload)).hexdigest()
+        fingerabdruck = self._payload_fingerabdruck(payload)
         fortschritt = datenbankdaten.get("projektfortschritt", [])
         letzter_schritt = fortschritt[0]["framework_schritt"] if fortschritt else 1
         manifest = {
@@ -331,6 +362,8 @@ class ProjektArchivService:
             komprimiert = 0
             for info in infos:
                 pfad = self._sicherer_archivpfad(info.filename)
+                if len(pfad.encode("utf-8")) > self._grenzen.maximale_pfadlaenge:
+                    raise ArchivUngueltig("Ein Archivpfad ist zu lang.")
                 schluessel = pfad.casefold()
                 if schluessel in normalisierte:
                     raise ArchivUngueltig("Das Archiv enthält doppelte Dateipfade.")
@@ -340,6 +373,8 @@ class ProjektArchivService:
                     raise ArchivUngueltig("Symbolische Links sind im Archiv nicht zulässig.")
                 if info.flag_bits & 0x1:
                     raise ArchivUngueltig("Verschlüsselte ZIP-Einträge sind nicht zulässig.")
+                if info.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}:
+                    raise ArchivUngueltig("Die ZIP-Kompressionsmethode wird nicht unterstützt.")
                 if info.file_size > self._grenzen.maximale_einzeldatei_bytes:
                     raise ArchivUngueltig("Eine Archivdatei überschreitet die Einzelgrenze.")
                 if info.compress_size == 0 and info.file_size > 0:
@@ -382,6 +417,9 @@ class ProjektArchivService:
     def _manifest_pruefen(self, manifest: Any, inhalt: dict[str, bytes]) -> None:
         if not isinstance(manifest, dict) or manifest.get("archive_version") != ARCHIVVERSION:
             raise ArchivUngueltig("Die Archivversion wird nicht unterstützt.")
+        schema_version = manifest.get("database_schema_version")
+        if not isinstance(schema_version, int) or schema_version > SCHEMAVERSION:
+            raise ArchivUngueltig("Die Datenbankschemaversion wird nicht unterstützt.")
         dateiliste = manifest.get("files")
         if not isinstance(dateiliste, list):
             raise ArchivUngueltig("Die Dateiliste im Manifest fehlt.")
@@ -451,6 +489,15 @@ class ProjektArchivService:
             try:
                 initialisiere_schema(verbindung)
                 verbindung.execute("BEGIN IMMEDIATE")
+                for tabelle, zeilen in tabellendaten.items():
+                    erwartete_spalten = {
+                        zeile[1]
+                        for zeile in verbindung.execute(f"PRAGMA table_info({tabelle})").fetchall()
+                    }
+                    if any(set(zeile) != erwartete_spalten for zeile in zeilen):
+                        raise ArchivUngueltig(
+                            f"Die Spaltenstruktur der Tabelle {tabelle} ist ungültig."
+                        )
                 if verbindung.execute(
                     "SELECT 1 FROM projekte WHERE projekt_id = ?", (str(projekt_id),)
                 ).fetchone():
@@ -537,9 +584,38 @@ class ProjektArchivService:
         if len(ergebnis["projekte"]) != 1:
             raise ArchivUngueltig("Das Archiv muss genau ein Projekt enthalten.")
         projekt_json = json.loads(inhalt["project/project.json"])
-        if projekt_json != ergebnis["projekte"][0]:
+        if not isinstance(projekt_json, dict) or projekt_json != ergebnis["projekte"][0]:
             raise ArchivUngueltig("project.json stimmt nicht mit den Datenbankdaten überein.")
+        self._lineage_dateien_pruefen(ergebnis, inhalt, projekt_id)
         return ergebnis
+
+    @staticmethod
+    def _lineage_dateien_pruefen(
+        tabellen: dict[str, list[dict[str, Any]]],
+        inhalt: dict[str, bytes],
+        projekt_id: UUID,
+    ) -> None:
+        prefix = f"projects/{projekt_id}/"
+        for zeilen in tabellen.values():
+            for zeile in zeilen:
+                for spalte, wert in zeile.items():
+                    if not spalte.startswith("relativer_") or not spalte.endswith("_pfad"):
+                        continue
+                    if not isinstance(wert, str) or not wert:
+                        continue
+                    normalisiert = wert.replace("\\", "/")
+                    if not normalisiert.startswith(prefix):
+                        raise ArchivUngueltig("Eine Lineage-Dateireferenz verlässt das Projekt.")
+                    relativ = normalisiert.removeprefix(prefix)
+                    wurzel = (
+                        "reports"
+                        if Path(relativ).suffix.casefold() in {".pdf", ".html"}
+                        else "artifacts"
+                    )
+                    if f"{wurzel}/{relativ}" not in inhalt:
+                        raise ArchivUngueltig(
+                            "Eine in der Lineage referenzierte Projektdatei fehlt."
+                        )
 
     def _vorhandener_fingerabdruck(self, projekt_id: UUID) -> str | None:
         verbindung = sqlite3.connect(self._datenbankpfad)
@@ -554,14 +630,15 @@ class ProjektArchivService:
             return None
         daten = self._datenbank_snapshot(projekt_id)
         payload = self._payload_erstellen(projekt_id, daten, daten["projekte"][0])
-        fingerprint_payload = {
-            pfad: hashlib.sha256(inhalt).hexdigest()
-            for pfad, inhalt in sorted(payload.items())
-            if pfad != "README.txt"
-        }
-        return hashlib.sha256(self._json_bytes(fingerprint_payload)).hexdigest()
+        return self._payload_fingerabdruck(payload)
 
-    def _importziel_pruefen(self, kontext: Zugriffskontext, ziel_gruppen_id: UUID | None) -> None:
+    def _importziel_pruefen(
+        self,
+        kontext: Zugriffskontext,
+        ziel_gruppen_id: UUID | None,
+        *,
+        manifest: dict[str, Any],
+    ) -> None:
         if kontext.gast_geheimnis is not None:
             if ziel_gruppen_id is not None:
                 raise ZugriffVerweigert(NICHT_VERFUEGBAR)
@@ -571,6 +648,27 @@ class ProjektArchivService:
         self._autorisierung.gruppen_zugriff_pruefen(
             kontext, ziel_gruppen_id, Gruppenaktion.ARCHIVIEREN
         )
+        if kontext.benutzer_id is None:
+            raise ZugriffVerweigert(NICHT_VERFUEGBAR)
+        gruppe = self._zugriff.kursgruppe_laden(ziel_gruppen_id)
+        mitgliedschaft = self._zugriff.gruppenmitgliedschaft_laden(
+            ziel_gruppen_id, kontext.benutzer_id
+        )
+        if (
+            gruppe is None
+            or mitgliedschaft is None
+            or mitgliedschaft.rolle is not Gruppenrolle.GRUPPENLEITUNG
+            and gruppe.gruppenleitung_benutzer_id != kontext.benutzer_id
+        ):
+            raise ZugriffVerweigert(NICHT_VERFUEGBAR)
+        if len(self._zugriff.projekt_ids_fuer_gruppe(ziel_gruppen_id)) >= gruppe.maximale_projekte:
+            raise ArchivUngueltig("Die Kursgruppe hat ihre maximale Projektanzahl erreicht.")
+        unkomprimiert = manifest.get("uncompressed_payload_size_bytes")
+        if (
+            not isinstance(unkomprimiert, int)
+            or unkomprimiert > gruppe.speicherlimit_pro_projekt_bytes
+        ):
+            raise ArchivUngueltig("Das Projekt überschreitet das Speicherlimit der Kursgruppe.")
 
     def _payload_limits_pruefen(self, payload: dict[str, bytes]) -> None:
         if len(payload) > self._grenzen.maximale_dateien:
@@ -612,6 +710,15 @@ class ProjektArchivService:
         return json.dumps(wert, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
             "utf-8"
         )
+
+    @classmethod
+    def _payload_fingerabdruck(cls, payload: dict[str, bytes]) -> str:
+        fingerprint_payload = {
+            pfad: hashlib.sha256(inhalt).hexdigest()
+            for pfad, inhalt in sorted(payload.items())
+            if pfad != "README.txt"
+        }
+        return hashlib.sha256(cls._json_bytes(fingerprint_payload)).hexdigest()
 
     @staticmethod
     def _app_version() -> str:

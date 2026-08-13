@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 
 from framework_mvp.application.autorisierung import NICHT_VERFUEGBAR, AutorisierungsService
+from framework_mvp.application.loesch_service import LoeschService
 from framework_mvp.application.ports.zugriffs_repository import ZugriffsRepository
 from framework_mvp.domain.exceptions import Domaenenfehler, ZugriffVerweigert
 from framework_mvp.domain.models.zugriff import (
@@ -42,7 +43,8 @@ class KursgruppenService:
         beginn_am: date | None = None,
         ende_am: date | None = None,
         maximale_teilnehmende: int = 100,
-        speicherlimit_bytes: int = 1_073_741_824,
+        maximale_projekte: int = 15,
+        speicherlimit_pro_projekt_bytes: int = 200 * 1024 * 1024,
         aufbewahrung_bis: datetime | None = None,
     ) -> Kursgruppe:
         if kontext.benutzer_id is None:
@@ -64,7 +66,8 @@ class KursgruppenService:
             beginn_am=beginn_am,
             ende_am=ende_am,
             maximale_teilnehmende=maximale_teilnehmende,
-            speicherlimit_bytes=speicherlimit_bytes,
+            maximale_projekte=maximale_projekte,
+            speicherlimit_pro_projekt_bytes=speicherlimit_pro_projekt_bytes,
             aufbewahrung_bis=aufbewahrung_bis,
             status=Gruppenstatus.AKTIV,
             erstellt_am=jetzt,
@@ -208,3 +211,34 @@ class EinladungsService:
             kontext, gruppen_id, Gruppenaktion.EINLADUNGEN_VERWALTEN
         )
         self._repository.einladung_widerrufen(einladungs_id, zeitpunkt=datetime.now(UTC))
+
+
+class KursgruppenLoeschService:
+    """Löscht genau eine autorisierte Gruppe und ihre lokalen Projekte."""
+
+    def __init__(
+        self,
+        repository: ZugriffsRepository,
+        autorisierung: AutorisierungsService,
+        loesch_service: LoeschService,
+    ) -> None:
+        self._repository = repository
+        self._autorisierung = autorisierung
+        self._loeschen = loesch_service
+
+    def gruppe_loeschen(self, kontext: Zugriffskontext, gruppen_id: UUID) -> int:
+        self._autorisierung.gruppen_zugriff_pruefen(kontext, gruppen_id, Gruppenaktion.LOESCHEN)
+        projekt_ids = self._repository.projekt_ids_fuer_gruppe(gruppen_id)
+        for projekt_id in projekt_ids:
+            self._loeschen.projekt_loeschen(projekt_id)
+        jetzt = datetime.now(UTC)
+        self._repository.kursgruppe_status_setzen(gruppen_id, status="geloescht", zeitpunkt=jetzt)
+        self._repository.bereinigung_protokollieren(
+            projekt_id=None,
+            gruppen_id=gruppen_id,
+            aktion="kursgruppe_manuell_loeschen",
+            ergebnis="erfolgreich",
+            details={"projektanzahl": len(projekt_ids)},
+            zeitpunkt=jetzt,
+        )
+        return len(projekt_ids)

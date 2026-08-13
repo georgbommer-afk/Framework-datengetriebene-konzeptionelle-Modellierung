@@ -29,8 +29,8 @@ class Gruppenstatus(StrEnum):
     """Lebenszyklus einer privaten Kursgruppe."""
 
     AKTIV = "aktiv"
-    SCHREIBGESCHUETZT = "schreibgeschuetzt"
-    ARCHIVIERT = "archiviert"
+    ABGELAUFEN = "abgelaufen"
+    GESPERRT = "gesperrt"
     GELOESCHT = "geloescht"
 
 
@@ -122,7 +122,8 @@ class Kursgruppe:
     beginn_am: date | None
     ende_am: date | None
     maximale_teilnehmende: int
-    speicherlimit_bytes: int
+    maximale_projekte: int
+    speicherlimit_pro_projekt_bytes: int
     aufbewahrung_bis: datetime | None
     status: Gruppenstatus
     erstellt_am: datetime
@@ -133,7 +134,9 @@ class Kursgruppe:
             raise Domaenenfehler("Die Gruppenbezeichnung darf nicht leer sein.")
         if not 1 <= self.maximale_teilnehmende <= 10_000:
             raise Domaenenfehler("Die Teilnehmendenzahl muss zwischen 1 und 10.000 liegen.")
-        if self.speicherlimit_bytes <= 0:
+        if not 1 <= self.maximale_projekte <= 10_000:
+            raise Domaenenfehler("Die Projektanzahl muss zwischen 1 und 10.000 liegen.")
+        if self.speicherlimit_pro_projekt_bytes <= 0:
             raise Domaenenfehler("Das Speicherlimit muss positiv sein.")
         if self.beginn_am and self.ende_am and self.ende_am < self.beginn_am:
             raise Domaenenfehler("Das Gruppenende darf nicht vor dem Beginn liegen.")
@@ -203,7 +206,7 @@ class Projektfortschritt:
     fortschritt_zaehler: int
     fortschritt_nenner: int
     phase: int
-    abgeschlossen: bool
+    status: str
     gespeichert_am: datetime
     revision: int
 
@@ -214,6 +217,8 @@ class Projektfortschritt:
             raise Domaenenfehler("Die Phase passt nicht zum Framework-Schritt.")
         if not 0 <= self.fortschritt_zaehler <= self.fortschritt_nenner:
             raise Domaenenfehler("Der Fortschrittsbruch ist ungültig.")
+        if self.status not in {"in_bearbeitung", "abgeschlossen", "blockiert"}:
+            raise Domaenenfehler("Der Fortschrittsstatus ist ungültig.")
 
 
 def phase_fuer_schritt(schritt: int) -> int:

@@ -97,6 +97,13 @@ class SQLiteZugriffsRepository:
             ).fetchone()
         return None if zeile is None else self._benutzer(zeile)
 
+    def benutzer_auflisten(self) -> list[Benutzer]:
+        with self._verbindung() as verbindung:
+            zeilen = verbindung.execute(
+                "SELECT * FROM benutzer ORDER BY anzeigename, email, benutzer_id"
+            ).fetchall()
+        return [self._benutzer(zeile) for zeile in zeilen]
+
     def globale_rollen_laden(self, benutzer_id: UUID) -> frozenset[GlobaleRolle]:
         with self._verbindung() as verbindung:
             zeilen = verbindung.execute(
@@ -135,16 +142,18 @@ class SQLiteZugriffsRepository:
                 """
                 INSERT INTO kursgruppen (
                     gruppen_id, bezeichnung, beschreibung, gruppenleitung_benutzer_id,
-                    beginn_am, ende_am, maximale_teilnehmende, speicherlimit_bytes,
+                    beginn_am, ende_am, maximale_teilnehmende, maximale_projekte,
+                    speicherlimit_pro_projekt_bytes,
                     aufbewahrung_bis_utc, status, erstellt_am_utc, geaendert_am_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(gruppen_id) DO UPDATE SET
                     bezeichnung = excluded.bezeichnung,
                     beschreibung = excluded.beschreibung,
                     beginn_am = excluded.beginn_am,
                     ende_am = excluded.ende_am,
                     maximale_teilnehmende = excluded.maximale_teilnehmende,
-                    speicherlimit_bytes = excluded.speicherlimit_bytes,
+                    maximale_projekte = excluded.maximale_projekte,
+                    speicherlimit_pro_projekt_bytes = excluded.speicherlimit_pro_projekt_bytes,
                     aufbewahrung_bis_utc = excluded.aufbewahrung_bis_utc,
                     status = excluded.status,
                     geaendert_am_utc = excluded.geaendert_am_utc
@@ -157,7 +166,8 @@ class SQLiteZugriffsRepository:
                     None if gruppe.beginn_am is None else gruppe.beginn_am.isoformat(),
                     None if gruppe.ende_am is None else gruppe.ende_am.isoformat(),
                     gruppe.maximale_teilnehmende,
-                    gruppe.speicherlimit_bytes,
+                    gruppe.maximale_projekte,
+                    gruppe.speicherlimit_pro_projekt_bytes,
                     None
                     if gruppe.aufbewahrung_bis is None
                     else gruppe.aufbewahrung_bis.isoformat(),
@@ -173,6 +183,13 @@ class SQLiteZugriffsRepository:
                 "SELECT * FROM kursgruppen WHERE gruppen_id = ?", (str(gruppen_id),)
             ).fetchone()
         return None if zeile is None else self._kursgruppe(zeile)
+
+    def kursgruppen_auflisten_betrieb(self) -> list[Kursgruppe]:
+        with self._verbindung() as verbindung:
+            zeilen = verbindung.execute(
+                "SELECT * FROM kursgruppen ORDER BY status, bezeichnung, gruppen_id"
+            ).fetchall()
+        return [self._kursgruppe(zeile) for zeile in zeilen]
 
     def gruppenmitgliedschaft_speichern(self, mitgliedschaft: Gruppenmitgliedschaft) -> None:
         with self._verbindung() as verbindung, verbindung:
@@ -212,6 +229,17 @@ class SQLiteZugriffsRepository:
             ).fetchone()
         return None if zeile is None else self._mitgliedschaft(zeile)
 
+    def gruppenmitgliedschaften_auflisten(self, gruppen_id: UUID) -> list[Gruppenmitgliedschaft]:
+        with self._verbindung() as verbindung:
+            zeilen = verbindung.execute(
+                """
+                SELECT * FROM gruppenmitgliedschaften
+                WHERE gruppen_id = ? ORDER BY status, rolle, benutzer_id
+                """,
+                (str(gruppen_id),),
+            ).fetchall()
+        return [self._mitgliedschaft(zeile) for zeile in zeilen]
+
     def gruppen_fuer_benutzer(self, benutzer_id: UUID) -> list[Kursgruppe]:
         with self._verbindung() as verbindung:
             zeilen = verbindung.execute(
@@ -224,6 +252,48 @@ class SQLiteZugriffsRepository:
                 (str(benutzer_id),),
             ).fetchall()
         return [self._kursgruppe(zeile) for zeile in zeilen]
+
+    def kursgruppen_mit_abgelaufener_aufbewahrung(
+        self, *, zeitpunkt: datetime, limit: int
+    ) -> list[Kursgruppe]:
+        with self._verbindung() as verbindung:
+            zeilen = verbindung.execute(
+                """
+                SELECT * FROM kursgruppen
+                WHERE aufbewahrung_bis_utc IS NOT NULL
+                  AND aufbewahrung_bis_utc <= ?
+                  AND status IN ('abgelaufen', 'gesperrt')
+                ORDER BY aufbewahrung_bis_utc LIMIT ?
+                """,
+                (zeitpunkt.isoformat(), max(1, min(limit, 1000))),
+            ).fetchall()
+        return [self._kursgruppe(zeile) for zeile in zeilen]
+
+    def kursgruppen_mit_abgelaufenem_kursende(
+        self, *, datum: datetime, limit: int
+    ) -> list[Kursgruppe]:
+        with self._verbindung() as verbindung:
+            zeilen = verbindung.execute(
+                """
+                SELECT * FROM kursgruppen
+                WHERE ende_am IS NOT NULL AND ende_am < ? AND status = 'aktiv'
+                ORDER BY ende_am LIMIT ?
+                """,
+                (datum.date().isoformat(), max(1, min(limit, 1000))),
+            ).fetchall()
+        return [self._kursgruppe(zeile) for zeile in zeilen]
+
+    def kursgruppe_status_setzen(
+        self, gruppen_id: UUID, *, status: str, zeitpunkt: datetime
+    ) -> None:
+        with self._verbindung() as verbindung, verbindung:
+            verbindung.execute(
+                """
+                UPDATE kursgruppen SET status = ?, geaendert_am_utc = ?
+                WHERE gruppen_id = ?
+                """,
+                (status, zeitpunkt.isoformat(), str(gruppen_id)),
+            )
 
     def projektzugehoerigkeit_speichern(self, zugehoerigkeit: Projektzugehoerigkeit) -> None:
         with self._verbindung() as verbindung, verbindung:
@@ -255,9 +325,7 @@ class SQLiteZugriffsRepository:
                 ),
             )
 
-    def projektzugehoerigkeit_laden(
-        self, projekt_id: UUID
-    ) -> Projektzugehoerigkeit | None:
+    def projektzugehoerigkeit_laden(self, projekt_id: UUID) -> Projektzugehoerigkeit | None:
         with self._verbindung() as verbindung:
             zeile = verbindung.execute(
                 "SELECT * FROM projektzugehoerigkeiten WHERE projekt_id = ?",
@@ -265,9 +333,7 @@ class SQLiteZugriffsRepository:
             ).fetchone()
         return None if zeile is None else self._projektzugehoerigkeit(zeile)
 
-    def projektmitglied_speichern(
-        self, mitglied: Projektmitglied, *, zeitpunkt: datetime
-    ) -> None:
+    def projektmitglied_speichern(self, mitglied: Projektmitglied, *, zeitpunkt: datetime) -> None:
         with self._verbindung() as verbindung, verbindung:
             verbindung.execute(
                 """
@@ -287,9 +353,7 @@ class SQLiteZugriffsRepository:
                 ),
             )
 
-    def projektmitglied_laden(
-        self, projekt_id: UUID, benutzer_id: UUID
-    ) -> Projektmitglied | None:
+    def projektmitglied_laden(self, projekt_id: UUID, benutzer_id: UUID) -> Projektmitglied | None:
         with self._verbindung() as verbindung:
             zeile = verbindung.execute(
                 """
@@ -305,6 +369,26 @@ class SQLiteZugriffsRepository:
             darf_bearbeiten=bool(zeile["darf_bearbeiten"]),
             aktiv=zeile["status"] == "aktiv",
         )
+
+    def projektmitglieder_auflisten(self, projekt_id: UUID) -> list[Projektmitglied]:
+        with self._verbindung() as verbindung:
+            zeilen = verbindung.execute(
+                """
+                SELECT * FROM projektmitglieder
+                WHERE projekt_id = ? AND status = 'aktiv'
+                ORDER BY benutzer_id
+                """,
+                (str(projekt_id),),
+            ).fetchall()
+        return [
+            Projektmitglied(
+                projekt_id=UUID(zeile["projekt_id"]),
+                benutzer_id=UUID(zeile["benutzer_id"]),
+                darf_bearbeiten=bool(zeile["darf_bearbeiten"]),
+                aktiv=True,
+            )
+            for zeile in zeilen
+        ]
 
     def projekt_ids_fuer_benutzer(self, benutzer_id: UUID) -> list[UUID]:
         with self._verbindung() as verbindung:
@@ -406,7 +490,7 @@ class SQLiteZugriffsRepository:
                     fortschritt.fortschritt_zaehler,
                     fortschritt.fortschritt_nenner,
                     fortschritt.phase,
-                    "abgeschlossen" if fortschritt.abgeschlossen else "in_bearbeitung",
+                    fortschritt.status,
                     fortschritt.gespeichert_am.isoformat(),
                     fortschritt.revision,
                 ),
@@ -426,7 +510,7 @@ class SQLiteZugriffsRepository:
             fortschritt_zaehler=zeile["fortschritt_zaehler"],
             fortschritt_nenner=zeile["fortschritt_nenner"],
             phase=zeile["phase"],
-            abgeschlossen=zeile["status"] == "abgeschlossen",
+            status=zeile["status"],
             gespeichert_am=_zeit(zeile["gespeichert_am_utc"]),  # type: ignore[arg-type]
             revision=zeile["revision"],
         )
@@ -496,7 +580,9 @@ class SQLiteZugriffsRepository:
                     einladung.widerrufen_am is not None
                     or einladung.laeuft_ab_am <= zeitpunkt
                     or einladung.anzahl_nutzungen >= einladung.maximale_nutzungen
-                    or (erlaubte or domain) and email not in erlaubte and not domain_ok
+                    or (erlaubte or domain)
+                    and email not in erlaubte
+                    and not domain_ok
                 ):
                     raise ZugriffVerweigert("Die Einladung ist nicht verfügbar.")
                 gruppe = verbindung.execute(
@@ -554,6 +640,74 @@ class SQLiteZugriffsRepository:
             geaendert_am=zeitpunkt,
         )
 
+    def bereinigung_protokollieren(
+        self,
+        *,
+        projekt_id: UUID | None,
+        gruppen_id: UUID | None,
+        aktion: str,
+        ergebnis: str,
+        details: dict[str, object],
+        zeitpunkt: datetime,
+    ) -> None:
+        with self._verbindung() as verbindung, verbindung:
+            verbindung.execute(
+                """
+                INSERT INTO bereinigungsprotokoll (
+                    eintrag_id, projekt_id, gruppen_id, aktion,
+                    ergebnis, details_json, erstellt_am_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    None if projekt_id is None else str(projekt_id),
+                    None if gruppen_id is None else str(gruppen_id),
+                    aktion,
+                    ergebnis,
+                    json.dumps(details, ensure_ascii=False, sort_keys=True),
+                    zeitpunkt.isoformat(),
+                ),
+            )
+
+    def archiv_metadaten_speichern(
+        self,
+        *,
+        archiv_id: UUID,
+        projekt_id: UUID | None,
+        gruppen_id: UUID | None,
+        archivtyp: str,
+        archivversion: int,
+        sha256: str,
+        groesse_bytes: int,
+        benutzer_id: UUID | None,
+        status: str,
+        details: dict[str, object],
+        zeitpunkt: datetime,
+    ) -> None:
+        with self._verbindung() as verbindung, verbindung:
+            verbindung.execute(
+                """
+                INSERT INTO archivmetadaten (
+                    archiv_id, projekt_id, gruppen_id, archivtyp, archivversion,
+                    sha256, groesse_bytes, erstellt_von_benutzer_id,
+                    erstellt_am_utc, status, details_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(archiv_id),
+                    None if projekt_id is None else str(projekt_id),
+                    None if gruppen_id is None else str(gruppen_id),
+                    archivtyp,
+                    archivversion,
+                    sha256,
+                    groesse_bytes,
+                    None if benutzer_id is None else str(benutzer_id),
+                    zeitpunkt.isoformat(),
+                    status,
+                    json.dumps(details, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+
     @staticmethod
     def _benutzer(zeile: sqlite3.Row) -> Benutzer:
         return Benutzer(
@@ -577,7 +731,8 @@ class SQLiteZugriffsRepository:
             beginn_am=_datum(zeile["beginn_am"]),
             ende_am=_datum(zeile["ende_am"]),
             maximale_teilnehmende=zeile["maximale_teilnehmende"],
-            speicherlimit_bytes=zeile["speicherlimit_bytes"],
+            maximale_projekte=zeile["maximale_projekte"],
+            speicherlimit_pro_projekt_bytes=zeile["speicherlimit_pro_projekt_bytes"],
             aufbewahrung_bis=_zeit(zeile["aufbewahrung_bis_utc"]),
             status=Gruppenstatus(zeile["status"]),
             erstellt_am=_zeit(zeile["erstellt_am_utc"]),  # type: ignore[arg-type]

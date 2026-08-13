@@ -68,9 +68,7 @@ class AutorisierungsService:
         zeitpunkt: datetime | None = None,
     ) -> None:
         """Erlaubt eine konkrete Aktion oder meldet bewusst keinen Existenzgrund."""
-        if not self.projekt_zugriff_erlaubt(
-            kontext, projekt_id, aktion, zeitpunkt=zeitpunkt
-        ):
+        if not self.projekt_zugriff_erlaubt(kontext, projekt_id, aktion, zeitpunkt=zeitpunkt):
             raise ZugriffVerweigert(NICHT_VERFUEGBAR)
 
     def projekt_zugriff_erlaubt(
@@ -117,7 +115,7 @@ class AutorisierungsService:
             or gruppe.status is Gruppenstatus.GELOESCHT
         ):
             return False
-        if gruppe.status in {Gruppenstatus.SCHREIBGESCHUETZT, Gruppenstatus.ARCHIVIERT}:
+        if gruppe.status in {Gruppenstatus.ABGELAUFEN, Gruppenstatus.GESPERRT}:
             if aktion in _SCHREIBENDE_PROJEKTAKTIONEN:
                 return False
         team = self._repository.projektmitglied_laden(projekt_id, kontext.benutzer_id)
@@ -211,9 +209,7 @@ class AutorisierungsService:
                 and "projekte_lesen" in mitgliedschaft.berechtigungen
             ):
                 kandidaten.update(self._repository.projekt_ids_fuer_gruppe(gruppe.gruppen_id))
-        if GlobaleRolle.SYSTEMADMIN in self._repository.globale_rollen_laden(
-            kontext.benutzer_id
-        ):
+        if GlobaleRolle.SYSTEMADMIN in self._repository.globale_rollen_laden(kontext.benutzer_id):
             kandidaten.update(self._repository.legacy_projekt_ids())
         return sorted(
             projekt_id

@@ -65,6 +65,13 @@ class MandantenProjektService:
             if kontext.benutzer_id is None or gruppen_id is None:
                 raise ZugriffVerweigert(NICHT_VERFUEGBAR)
             self._autorisierung.gruppen_zugriff_pruefen(kontext, gruppen_id, Gruppenaktion.ANSEHEN)
+            gruppe = self._zugriff.kursgruppe_laden(gruppen_id)
+            if (
+                gruppe is None
+                or len(self._zugriff.projekt_ids_fuer_gruppe(gruppen_id))
+                >= gruppe.maximale_projekte
+            ):
+                raise ZugriffVerweigert(NICHT_VERFUEGBAR)
             zugriffsart = Projektzugriffsart.KURSGRUPPE
         projekt = self._projekte.projekt_anlegen(
             bezeichnung=bezeichnung,

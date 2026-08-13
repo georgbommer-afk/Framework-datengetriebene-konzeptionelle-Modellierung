@@ -11,7 +11,7 @@ import pytest
 
 from framework_mvp.application.autorisierung import AutorisierungsService, geheimnis_hash
 from framework_mvp.application.projekt_service import ProjektService
-from framework_mvp.application.projektarchiv_service import ProjektArchivService
+from framework_mvp.application.projektarchiv_service import ArchivGrenzen, ProjektArchivService
 from framework_mvp.domain.exceptions import ArchivUngueltig, ZugriffVerweigert
 from framework_mvp.domain.models import Systemtyp, Untersuchungsauftrag
 from framework_mvp.domain.models.zugriff import (
@@ -148,3 +148,106 @@ def test_manifest_hashes_stimmen_mit_payload_ueberein(tmp_path: Path) -> None:
         manifest = json.loads(zip_archiv.read("manifest.json"))
         for eintrag in manifest["files"]:
             assert hashlib.sha256(zip_archiv.read(eintrag["path"])).hexdigest() == eintrag["sha256"]
+
+
+@pytest.mark.parametrize("pfad", ["/absolut.txt", "C:/absolut.txt", "artifacts/../../x.txt"])
+def test_unsichere_absolute_und_traversierende_pfade_werden_abgelehnt(
+    tmp_path: Path, pfad: str
+) -> None:
+    _, kontext, service = _quelle(tmp_path)
+    boese = io.BytesIO()
+    with zipfile.ZipFile(boese, "w") as archiv:
+        archiv.writestr(pfad, b"x")
+        archiv.writestr("manifest.json", b"{}")
+    with pytest.raises(ArchivUngueltig):
+        service.importieren(kontext, boese.getvalue())
+
+
+def test_symbolischer_link_und_doppelter_name_werden_abgelehnt(tmp_path: Path) -> None:
+    _, kontext, service = _quelle(tmp_path)
+    link_archiv = io.BytesIO()
+    with zipfile.ZipFile(link_archiv, "w") as archiv:
+        link = zipfile.ZipInfo("artifacts/link.txt")
+        link.create_system = 3
+        link.external_attr = 0o120777 << 16
+        archiv.writestr(link, b"ziel")
+        archiv.writestr("manifest.json", b"{}")
+    with pytest.raises(ArchivUngueltig, match="Symbolische Links"):
+        service.importieren(kontext, link_archiv.getvalue())
+
+    doppelt = io.BytesIO()
+    with pytest.warns(UserWarning), zipfile.ZipFile(doppelt, "w") as archiv:
+        archiv.writestr("README.txt", b"eins")
+        archiv.writestr("README.txt", b"zwei")
+        archiv.writestr("manifest.json", b"{}")
+    with pytest.raises(ArchivUngueltig, match="doppelte"):
+        service.importieren(kontext, doppelt.getvalue())
+
+
+def test_dateianzahl_einzelgroesse_gesamtgroesse_und_ratio_sind_begrenzt(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "limits.sqlite"
+    workspace = WorkspaceKonfiguration(tmp_path / "limits-workspace")
+    repository = SQLiteZugriffsRepository(db)
+    kontext = Zugriffskontext.gast("l" * 40)
+
+    def service(grenzen: ArchivGrenzen) -> ProjektArchivService:
+        return ProjektArchivService(
+            db, workspace, repository, AutorisierungsService(repository), grenzen=grenzen
+        )
+
+    zwei_dateien = io.BytesIO()
+    with zipfile.ZipFile(zwei_dateien, "w") as archiv:
+        archiv.writestr("manifest.json", b"{}")
+        archiv.writestr("README.txt", b"x")
+    with pytest.raises(ArchivUngueltig, match="zu viele"):
+        service(ArchivGrenzen(maximale_dateien=1)).importieren(kontext, zwei_dateien.getvalue())
+
+    grosse_datei = io.BytesIO()
+    with zipfile.ZipFile(grosse_datei, "w") as archiv:
+        archiv.writestr("README.txt", b"12345")
+        archiv.writestr("manifest.json", b"{}")
+    with pytest.raises(ArchivUngueltig, match="Einzelgrenze"):
+        service(ArchivGrenzen(maximale_einzeldatei_bytes=4)).importieren(
+            kontext, grosse_datei.getvalue()
+        )
+    with pytest.raises(ArchivUngueltig, match="Gesamtgrenze"):
+        service(ArchivGrenzen(maximale_entpackte_groesse_bytes=6)).importieren(
+            kontext, grosse_datei.getvalue()
+        )
+
+    zip_bombe = io.BytesIO()
+    with zipfile.ZipFile(zip_bombe, "w", zipfile.ZIP_DEFLATED) as archiv:
+        archiv.writestr("artifacts/nullen.txt", b"0" * 20_000)
+        archiv.writestr("manifest.json", b"{}")
+    with pytest.raises(ArchivUngueltig, match="Kompressionsverhältnis"):
+        service(ArchivGrenzen(maximales_kompressionsverhaeltnis=2)).importieren(
+            kontext, zip_bombe.getvalue()
+        )
+
+
+def test_unerlaubter_dateityp_und_neuere_archivversion_werden_abgelehnt(
+    tmp_path: Path,
+) -> None:
+    projekt, kontext, service = _quelle(tmp_path)
+    original = service.exportieren(kontext, projekt.projekt_id)
+    unerlaubt = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(original)) as quelle, zipfile.ZipFile(unerlaubt, "w") as ziel:
+        for info in quelle.infolist():
+            ziel.writestr(info.filename, quelle.read(info.filename))
+        ziel.writestr("artifacts/programm.exe", b"MZ")
+    with pytest.raises(ArchivUngueltig, match="Artefakttyp"):
+        service.importieren(kontext, unerlaubt.getvalue())
+
+    neuer = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(original)) as quelle, zipfile.ZipFile(neuer, "w") as ziel:
+        for info in quelle.infolist():
+            daten = quelle.read(info.filename)
+            if info.filename == "manifest.json":
+                manifest = json.loads(daten)
+                manifest["archive_version"] = 999
+                daten = json.dumps(manifest).encode()
+            ziel.writestr(info.filename, daten)
+    with pytest.raises(ArchivUngueltig, match="Archivversion"):
+        service.importieren(kontext, neuer.getvalue())

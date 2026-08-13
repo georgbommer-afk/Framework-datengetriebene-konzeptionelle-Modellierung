@@ -114,7 +114,8 @@ def test_entfernte_mitgliedschaft_wird_bei_jedem_zugriff_neu_geprueft(tmp_path: 
         beginn_am=None,
         ende_am=None,
         maximale_teilnehmende=10,
-        speicherlimit_bytes=100_000,
+        maximale_projekte=15,
+        speicherlimit_pro_projekt_bytes=100_000,
         aufbewahrung_bis=None,
         status=Gruppenstatus.AKTIV,
         erstellt_am=jetzt,
@@ -162,9 +163,7 @@ def test_entfernte_mitgliedschaft_wird_bei_jedem_zugriff_neu_geprueft(tmp_path: 
         )
     )
     with pytest.raises(ZugriffVerweigert):
-        service.projekt_zugriff_pruefen(
-            kontext, projekt.projekt_id, Projektaktion.BEARBEITEN
-        )
+        service.projekt_zugriff_pruefen(kontext, projekt.projekt_id, Projektaktion.BEARBEITEN)
 
 
 def test_systemadmin_hat_keinen_impliziten_kursprojektzugriff(tmp_path: Path) -> None:
@@ -187,6 +186,7 @@ def test_systemadmin_hat_keinen_impliziten_kursprojektzugriff(tmp_path: Path) ->
         None,
         None,
         10,
+        15,
         100_000,
         None,
         Gruppenstatus.AKTIV,

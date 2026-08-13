@@ -363,11 +363,13 @@ CREATE TABLE IF NOT EXISTS kursgruppen (
     ende_am TEXT,
     maximale_teilnehmende INTEGER NOT NULL DEFAULT 100
         CHECK (maximale_teilnehmende BETWEEN 1 AND 10000),
-    speicherlimit_bytes INTEGER NOT NULL DEFAULT 1073741824
-        CHECK (speicherlimit_bytes > 0),
+    maximale_projekte INTEGER NOT NULL DEFAULT 15
+        CHECK (maximale_projekte BETWEEN 1 AND 10000),
+    speicherlimit_pro_projekt_bytes INTEGER NOT NULL DEFAULT 209715200
+        CHECK (speicherlimit_pro_projekt_bytes > 0),
     aufbewahrung_bis_utc TEXT,
     status TEXT NOT NULL DEFAULT 'aktiv'
-        CHECK (status IN ('aktiv', 'schreibgeschuetzt', 'archiviert', 'geloescht')),
+        CHECK (status IN ('aktiv', 'abgelaufen', 'gesperrt', 'geloescht')),
     erstellt_am_utc TEXT NOT NULL,
     geaendert_am_utc TEXT NOT NULL,
     FOREIGN KEY (gruppenleitung_benutzer_id) REFERENCES benutzer(benutzer_id)
@@ -449,7 +451,7 @@ CREATE TABLE IF NOT EXISTS projektfortschritt (
     fortschritt_nenner INTEGER NOT NULL CHECK (fortschritt_nenner > 0),
     phase INTEGER NOT NULL CHECK (phase BETWEEN 1 AND 3),
     status TEXT NOT NULL DEFAULT 'in_bearbeitung'
-        CHECK (status IN ('in_bearbeitung', 'abgeschlossen')),
+        CHECK (status IN ('in_bearbeitung', 'abgeschlossen', 'blockiert')),
     gespeichert_am_utc TEXT NOT NULL,
     revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
     FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id) ON DELETE CASCADE
@@ -602,19 +604,23 @@ def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
         for anweisung in PORTABILITAET_UND_MANDANTEN_SCHEMA_VERSION_11.split(";"):
             if anweisung.strip():
                 verbindung.execute(anweisung)
-        zeitpunkt = "1970-01-01T00:00:00+00:00"
-        verbindung.execute(
-            """
-            INSERT OR IGNORE INTO projektzugehoerigkeiten (
-                projekt_id, zugriffsart, gruppen_id, gast_geheimnis_sha256,
-                gast_ablauf_am_utc, zuletzt_aktiv_am_utc, revision, erstellt_am_utc
+        projekt_tabelle = verbindung.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'projekte'"
+        ).fetchone()
+        if projekt_tabelle is not None:
+            zeitpunkt = "1970-01-01T00:00:00+00:00"
+            verbindung.execute(
+                """
+                INSERT OR IGNORE INTO projektzugehoerigkeiten (
+                    projekt_id, zugriffsart, gruppen_id, gast_geheimnis_sha256,
+                    gast_ablauf_am_utc, zuletzt_aktiv_am_utc, revision, erstellt_am_utc
+                )
+                SELECT projekt_id, 'legacy_unassigned', NULL, NULL, NULL,
+                       COALESCE(geaendert_am_utc, ?), 1, COALESCE(erstellt_am_utc, ?)
+                FROM projekte
+                """,
+                (zeitpunkt, zeitpunkt),
             )
-            SELECT projekt_id, 'legacy_unassigned', NULL, NULL, NULL,
-                   COALESCE(geaendert_am_utc, ?), 1, COALESCE(erstellt_am_utc, ?)
-            FROM projekte
-            """,
-            (zeitpunkt, zeitpunkt),
-        )
         if version < SCHEMAVERSION:
             verbindung.execute(f"PRAGMA user_version = {SCHEMAVERSION}")
     except Exception:
