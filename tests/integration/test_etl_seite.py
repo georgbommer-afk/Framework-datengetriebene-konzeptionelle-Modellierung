@@ -195,6 +195,23 @@ def test_textbereinigungsformular_zeigt_allgemeine_begrenzer_und_sicheren_standa
 
     assert not anwendung.exception
     assert any("Werte ohne Treffer bleiben unverändert" in wert.value for wert in anwendung.caption)
+    vorschau = next(
+        wert
+        for wert in anwendung.dataframe
+        if list(wert.value.columns) == ["Originalwert", "Vorschau", "Status"]
+    ).value
+    assert vorschau.to_dict(orient="records") == [
+        {
+            "Originalwert": "RS TX (abc)",
+            "Vorschau": "abc",
+            "Status": "Transformiert",
+        },
+        {
+            "Originalwert": "ohne Treffer",
+            "Vorschau": "ohne Treffer",
+            "Status": "Unverändert (kein Treffer)",
+        },
+    ]
     assert not next(
         e for e in anwendung.button if e.label == "Transformation zum Plan hinzufügen"
     ).disabled

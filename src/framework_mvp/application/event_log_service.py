@@ -135,7 +135,12 @@ class EventLogService:
             "fachliche_spalten": [
                 wert
                 for wert in ergebnis.ereignisse.columns
-                if wert in {"case_id", "activity", "timestamp"} or wert in ergebnis.attributherkunft
+                if wert in {"case_id", "activity", "timestamp"}
+                or (
+                    konfiguration.konfigurationsversion >= 3
+                    and wert in {"start_timestamp", "end_timestamp", "lifecycle", "resource"}
+                )
+                or wert in ergebnis.attributherkunft
             ],
             "technische_metadatenspalten": [
                 wert

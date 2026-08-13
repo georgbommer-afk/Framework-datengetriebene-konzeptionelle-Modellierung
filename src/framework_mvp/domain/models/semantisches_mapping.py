@@ -7,6 +7,9 @@ from uuid import UUID
 
 from framework_mvp.domain.exceptions import Domaenenfehler
 
+AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION = 3
+UNTERSTUETZTE_EVENT_LOG_KONFIGURATIONSVERSIONEN = frozenset({1, 2, 3})
+
 
 class MappingModus(StrEnum):
     """Unterstützte strukturelle Ausgangsformen."""
@@ -217,7 +220,7 @@ class SemantischesMapping:
             raise Domaenenfehler("Zeitstempel eines Mappings müssen zeitzonenbewusst sein.")
         object.__setattr__(self, "erstellt_am", self.erstellt_am.astimezone(UTC))
         object.__setattr__(self, "geaendert_am", self.geaendert_am.astimezone(UTC))
-        if self.konfigurationsversion < 1:
+        if self.konfigurationsversion not in UNTERSTUETZTE_EVENT_LOG_KONFIGURATIONSVERSIONEN:
             raise Domaenenfehler("Die Event-Log-Konfigurationsversion ist ungültig.")
         if self.konfigurationsversion >= 2:
             self._aktuelle_fachregeln_pruefen()
@@ -228,7 +231,7 @@ class SemantischesMapping:
             raise Domaenenfehler(
                 "Neue Event-Log-Konfigurationen benötigen genau eine Fallidentifikationsspalte."
             )
-        if any(
+        if self.konfigurationsversion == 2 and any(
             (
                 self.startzeitstempelspalte,
                 self.endzeitstempelspalte,
@@ -279,18 +282,73 @@ class SemantischesMapping:
             if not self.zeitstempelzuordnungen:
                 raise Domaenenfehler("Wählen Sie mindestens eine relevante Zeitstempelspalte aus.")
             if any(
-                not wert.zeitstempelspalte
-                or not wert.aktivitaetsbezeichnung
-                or wert.ressourcenspalte
-                or wert.statusspalte
+                not wert.zeitstempelspalte or not wert.aktivitaetsbezeichnung
                 for wert in self.zeitstempelzuordnungen
             ):
                 raise Domaenenfehler(
                     "Jede Zeitstempelspalte benötigt genau eine Aktivitätsbeschreibung."
                 )
+            if self.konfigurationsversion == 2 and any(
+                wert.ressourcenspalte or wert.statusspalte for wert in self.zeitstempelzuordnungen
+            ):
+                raise Domaenenfehler(
+                    "Version 2 erlaubt in breiten Daten keine besonderen Ressourcen- oder "
+                    "Statusrollen."
+                )
             zeitspalten = [wert.zeitstempelspalte for wert in self.zeitstempelzuordnungen]
             if len(zeitspalten) != len(set(zeitspalten)):
                 raise Domaenenfehler("Eine Zeitstempelspalte darf nur einmal ausgewählt werden.")
+        if self.konfigurationsversion == 3:
+            self._rollen_der_version_drei_pruefen()
+
+    def _rollen_der_version_drei_pruefen(self) -> None:
+        """Stellt die eindeutige technische Belegung der Rollen von Version 3 sicher."""
+        rollen_nach_spalte: dict[str, str] = {}
+
+        def belegen(spalte: str, rolle: str, *, wiederholbar: bool = False) -> None:
+            if not spalte:
+                return
+            vorhandene_rolle = rollen_nach_spalte.get(spalte)
+            if vorhandene_rolle is not None and not (wiederholbar and vorhandene_rolle == rolle):
+                raise Domaenenfehler(
+                    "Eine technische Quellspalte darf nicht mehreren Standardrollen oder "
+                    "zusätzlich als allgemeines Attribut zugeordnet sein: "
+                    f"{spalte}."
+                )
+            rollen_nach_spalte[spalte] = rolle
+
+        for spalte in self.fall_id.spalten:
+            belegen(spalte, "case_id")
+        definition = self.wirksame_aktivitaetsdefinition
+        if definition is not None:
+            for spalte in definition.quellspalten:
+                belegen(spalte, "activity")
+        if self.mapping_modus is MappingModus.EREIGNISORIENTIERT:
+            belegen(self.zeitstempelspalte, "timestamp")
+            belegen(self.startzeitstempelspalte, "start_timestamp")
+            belegen(self.endzeitstempelspalte, "end_timestamp")
+            belegen(self.lifecycle_spalte, "lifecycle")
+            belegen(self.ressourcen_spalte, "resource")
+        else:
+            if any(
+                (
+                    self.startzeitstempelspalte,
+                    self.endzeitstempelspalte,
+                    self.lifecycle_spalte,
+                    self.ressourcen_spalte,
+                )
+            ):
+                raise Domaenenfehler(
+                    "Ein breiter Datensatz ordnet Ressource und Lifecycle je "
+                    "Zeitstempelzuordnung zu; Start und Ende werden nicht abgeleitet."
+                )
+            for zuordnung in self.zeitstempelzuordnungen:
+                belegen(zuordnung.zeitstempelspalte, "timestamp")
+                belegen(zuordnung.ressourcenspalte, "resource", wiederholbar=True)
+                belegen(zuordnung.statusspalte, "lifecycle", wiederholbar=True)
+        for zuordnung in self.spaltenzuordnungen:
+            if zuordnung.rolle is not Attributrolle.IGNORIERT:
+                belegen(zuordnung.spaltenname, "allgemeines Attribut")
 
     @property
     def wirksame_aktivitaetsdefinition(self) -> Aktivitaetsdefinition | None:

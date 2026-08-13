@@ -8,6 +8,7 @@ import streamlit as st
 
 from framework_mvp.application.transformation import (
     ermittle_ersatzwert_aus_profil,
+    transformiere_textwerte,
     zaehle_zu_loeschende_zeilen,
 )
 from framework_mvp.application.transformations_service import TransformationsService
@@ -272,6 +273,42 @@ def _text_bereinigen_formular(
     if not vollstaendig:
         st.info("Geben Sie die erforderlichen Begrenzer vollständig an.")
         return None
+    serie = daten[spalte].reset_index(drop=True)
+    text = serie.astype("string")
+    nichtleer = text.notna() & text.str.strip().ne("")
+    nichtleere_positionen = list(text.loc[nichtleer].index)
+    positionen = list(text.loc[nichtleer].drop_duplicates().head(8).index)
+    if len(positionen) < 5:
+        positionen.extend(
+            position for position in nichtleere_positionen if position not in positionen
+        )
+        positionen = positionen[: min(5, len(nichtleere_positionen))]
+    if len(positionen):
+        originalwerte = serie.loc[positionen].reset_index(drop=True)
+        vorschauwerte, treffermaske = transformiere_textwerte(originalwerte, parameter)
+
+        def anzeigewert(wert: object, maximale_laenge: int = 120) -> str:
+            textwert = str(wert)
+            if len(textwert) <= maximale_laenge:
+                return textwert
+            return f"{textwert[: maximale_laenge - 1]}…"
+
+        st.write("**Vorschau der Texttransformation**")
+        st.dataframe(
+            pd.DataFrame(
+                {
+                    "Originalwert": originalwerte.map(anzeigewert),
+                    "Vorschau": vorschauwerte.map(anzeigewert),
+                    "Status": treffermaske.map(
+                        {True: "Transformiert", False: "Unverändert (kein Treffer)"}
+                    ),
+                }
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+    else:
+        st.caption("Die gewählte Spalte enthält keine nichtleeren Werte für die Vorschau.")
     return (spalte,), parameter, f"Text in {spalte}: {art}"
 
 

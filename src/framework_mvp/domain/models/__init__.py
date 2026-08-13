@@ -159,6 +159,7 @@ from framework_mvp.domain.models.projekt import (
     Untersuchungsauftrag,
 )
 from framework_mvp.domain.models.semantisches_mapping import (
+    AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION,
     Aktivitaetsbildungsart,
     Aktivitaetsdefinition,
     Attributrolle,
@@ -187,6 +188,7 @@ from framework_mvp.domain.models.zwischendatensatz import Zwischendatensatz
 __all__ = [
     "AbgeleiteterModellbestandteil",
     "Aggregationsstatus",
+    "AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION",
     "FRAMEWORKKONFORME_TRANSFORMATIONSARTEN",
     "AUSWAEHLBARE_QUELLENARTEN",
     "AUSWAEHLBARE_QUELLSYSTEMTYPEN",

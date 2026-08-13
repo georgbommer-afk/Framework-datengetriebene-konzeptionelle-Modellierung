@@ -126,21 +126,26 @@ kombinierte Attribute erst in Schritt 4.
 
 Schritt 4 verwendet das zentrale Projekt, den aktiven integritätsgeprüften Zwischendatensatz T
 und optional die getrennt gespeicherte Mappingtabelle M. Die Event-Log-Konfiguration enthält
-Fallidentifikation, Aktivitätsdefinition, Zeitstempelquellen, Strukturart und die ausdrücklich
-ausgewählten zusätzlichen Attribute; diese Angaben werden nicht in M gespeichert.
+Fallidentifikation, Aktivitätsdefinition, Zeitstempelquellen, Strukturart, die optionalen
+semantischen Rollen `resource`, `start_timestamp`, `end_timestamp` und `lifecycle` sowie die
+ausdrücklich ausgewählten zusätzlichen Attribute; diese Angaben werden nicht in M gespeichert.
+Konfigurationsversion 3 führt diese Rollen ein. Version 1 und 2 bleiben mit ihrer bisherigen
+Semantik lesbar und reproduzierbar.
 
 Bei ereignisorientierten Daten entsteht aus jeder Zeile von T genau ein Ereignis. Die Aktivität
 kann aus einer vorhandenen Spalte oder aus mindestens zwei geordneten Attributen mit optionalem
 Verknüpfungselement gebildet werden. Bei breiten Zeitstempeldaten entsteht für jeden vorhandenen
 Wert einer ausgewählten Zeitstempelspalte ein Ereignis mit der dafür festgelegten
-Aktivitätsbeschreibung. Nicht ausgewählte Attribute werden nicht nach E übernommen.
+Aktivitätsbeschreibung. Ressource und Lifecycle können dort je Zeitstempelzuordnung festgelegt
+werden; eine Start-/Endpaarung wird nicht abgeleitet. Nicht ausgewählte Attribute werden nicht
+nach E übernommen.
 
 Spalten- und typisierte Wertzuordnungen aus M werden ausschließlich beim Erzeugen von E
 angewandt; T und M bleiben unverändert. E besitzt mindestens `case_id`, `activity` und
-`timestamp`, wird fallweise chronologisch und bei Gleichständen stabil geordnet und als CSV.GZ
-mit Schema- und Lineage-JSON gespeichert. Strukturelle Konfigurationsfehler blockieren Schritt 4;
-fehlende oder nicht interpretierbare Ereigniswerte bleiben für das Quality-Gate in Schritt 5
-erhalten.
+`timestamp` sowie die konfigurierten optionalen kanonischen Spalten, wird fallweise chronologisch
+und bei Gleichständen stabil geordnet und als CSV.GZ mit Schema- und Lineage-JSON gespeichert.
+Strukturelle Konfigurationsfehler blockieren Schritt 4; fehlende oder nicht interpretierbare
+Ereigniswerte bleiben für das Quality-Gate in Schritt 5 erhalten.
 
 ### Datenqualität und Freigabe
 

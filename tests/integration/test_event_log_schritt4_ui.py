@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from streamlit.testing.v1 import AppTest
 
-from framework_mvp.domain.models import MappingModus
+from framework_mvp.domain.models import MappingModus, ZeitstempelZuordnung
 
 APP = r"""
 from dataclasses import replace
@@ -28,7 +28,7 @@ DATENSATZ = Zwischendatensatz(
     T, P, UUID("33333333-3333-3333-3333-333333333333"),
     (UUID("44444444-4444-4444-4444-444444444444"),),
     "T.csv.gz", "T.schema.json", "T.transformation.json", "a" * 64,
-    2, 6, datetime.now(UTC),
+    2, 7, datetime.now(UTC),
 )
 DATEN = pd.DataFrame({
     "auftrag": ["A", "A"],
@@ -37,6 +37,7 @@ DATEN = pd.DataFrame({
     "startzeit": ["2025-01-01", None],
     "endzeit": ["2025-01-02", "2025-01-03"],
     "ressource": ["R1", "R2"],
+    "status": ["started", "complete"],
 })
 MAPPING = replace(
     Mappingtabelle.neu(P, T),
@@ -154,6 +155,100 @@ def test_breite_oberflaeche_erfasst_beschreibung_je_zeitstempelspalte() -> None:
     labels = {wert.label for wert in app.text_input}
     assert any("startzeit" in wert for wert in labels)
     assert any("endzeit" in wert for wert in labels)
+
+
+def test_rollenschritt_zeigt_optionale_rollen_und_kanonische_vorschau() -> None:
+    app = AppTest.from_string(APP)
+    projekt_id = UUID("11111111-1111-1111-1111-111111111111")
+    datensatz_id = UUID("22222222-2222-2222-2222-222222222222")
+    app.session_state["aktuelles_projekt_id"] = str(projekt_id)
+    app.session_state["aktueller_zwischendatensatz_id"] = str(datensatz_id)
+    app.session_state["event_log_zustaende"] = {
+        str(projekt_id): {
+            "schritt": 3,
+            "datensatz_id": str(datensatz_id),
+            "konfigurations_id": uuid4(),
+            "erstellt_am": datetime.now(UTC),
+            "mapping_modus": MappingModus.EREIGNISORIENTIERT,
+            "fall_id": "auftrag",
+            "aktivitaetsquellen": ("aktion",),
+            "zeitstempelspalte": "zeit",
+            "zeitstempelzuordnungen": (),
+            "zusaetzliche_attribute": (),
+        }
+    }
+    app = app.run()
+
+    labels = {wert.label for wert in app.selectbox}
+    assert {
+        "Ressourcenspalte → resource",
+        "Startzeitstempel → start_timestamp",
+        "Endzeitstempel → end_timestamp",
+        "Lifecycle-/Statusspalte → lifecycle",
+    } <= labels
+    next(w for w in app.selectbox if w.label == "Ressourcenspalte → resource").set_value(
+        "ressource"
+    ).run()
+    next(w for w in app.selectbox if w.label == "Startzeitstempel → start_timestamp").set_value(
+        "startzeit"
+    ).run()
+    next(w for w in app.selectbox if w.label == "Endzeitstempel → end_timestamp").set_value(
+        "endzeit"
+    ).run()
+    next(w for w in app.selectbox if w.label == "Lifecycle-/Statusspalte → lifecycle").set_value(
+        "status"
+    ).run()
+    zusatzattribute = next(
+        w for w in app.multiselect if w.label == "Weitere Attribute in E übernehmen"
+    )
+    assert "ressource" not in zusatzattribute.options
+
+    _button(app, "Weiter").click().run()
+
+    assert not app.exception
+    herkunft = next(
+        wert
+        for wert in app.dataframe
+        if list(wert.value.columns) == ["Spalte in E", "Rolle", "Quellspalte(n) in T"]
+    ).value
+    assert {"resource", "start_timestamp", "end_timestamp", "lifecycle"} <= set(
+        herkunft["Spalte in E"]
+    )
+    assert (
+        herkunft.loc[herkunft["Spalte in E"] == "resource", "Quellspalte(n) in T"].iloc[0]
+        == "ressource"
+    )
+
+
+def test_breiter_rollenschritt_bietet_ressource_und_status_je_zeitzuordnung() -> None:
+    app = AppTest.from_string(APP)
+    projekt_id = UUID("11111111-1111-1111-1111-111111111111")
+    datensatz_id = UUID("22222222-2222-2222-2222-222222222222")
+    app.session_state["aktuelles_projekt_id"] = str(projekt_id)
+    app.session_state["aktueller_zwischendatensatz_id"] = str(datensatz_id)
+    app.session_state["event_log_zustaende"] = {
+        str(projekt_id): {
+            "schritt": 3,
+            "datensatz_id": str(datensatz_id),
+            "konfigurations_id": uuid4(),
+            "erstellt_am": datetime.now(UTC),
+            "mapping_modus": MappingModus.BREITER_ZEITSTEMPELDATENSATZ,
+            "fall_id": "auftrag",
+            "aktivitaetsquellen": (),
+            "zeitstempelspalte": "",
+            "zeitstempelzuordnungen": (
+                ZeitstempelZuordnung("startzeit", "Start"),
+                ZeitstempelZuordnung("endzeit", "Ende"),
+            ),
+            "zusaetzliche_attribute": (),
+        }
+    }
+    app = app.run()
+
+    assert sum(w.label == "Ressourcenspalte → resource" for w in app.selectbox) == 2
+    assert sum(w.label == "Lifecycle-/Statusspalte → lifecycle" for w in app.selectbox) == 2
+    assert not any("Startzeitstempel →" in w.label for w in app.selectbox)
+    assert not any("Endzeitstempel →" in w.label for w in app.selectbox)
 
 
 def test_ereignisorientierter_ablauf_speichert_e_und_setzt_aktiven_kontext() -> None:
