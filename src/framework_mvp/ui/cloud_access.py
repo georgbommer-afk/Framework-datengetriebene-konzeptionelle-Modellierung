@@ -36,6 +36,7 @@ class GebundenerProjektService(ProjektService):
         ziel_gruppen_id: UUID | None,
         gast_projekt_id: UUID | None,
         globale_rollen: frozenset[GlobaleRolle] = frozenset(),
+        legacy_erstellung_erlaubt: bool = False,
     ) -> None:
         self._kontext = kontext
         self._roh = rohservice
@@ -44,6 +45,7 @@ class GebundenerProjektService(ProjektService):
         self._ziel_gruppen_id = ziel_gruppen_id
         self._gast_projekt_id = gast_projekt_id
         self._globale_rollen = globale_rollen
+        self._legacy_erstellung_erlaubt = legacy_erstellung_erlaubt
 
     def projekte_auflisten(self) -> list[Projekt]:
         if self._kontext.gast_geheimnis is not None:
@@ -69,7 +71,8 @@ class GebundenerProjektService(ProjektService):
         beteiligte_personen: tuple[BeteiligtePerson, ...] = (),
     ) -> Projekt:
         if (
-            GlobaleRolle.SYSTEMADMIN in self._globale_rollen
+            self._legacy_erstellung_erlaubt
+            and GlobaleRolle.SYSTEMADMIN in self._globale_rollen
             and self._ziel_gruppen_id is None
             and self._kontext.gast_geheimnis is None
         ):

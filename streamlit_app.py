@@ -583,9 +583,12 @@ def _systemadmin_bereich() -> None:
             for datei in workspace.basisverzeichnis.rglob("*")
             if datei.is_file() and not datei.is_symlink()
         )
+        projektanzahl = sum(
+            len(zugriff.projekt_ids_fuer_gruppe(gruppe.gruppen_id)) for gruppe in gruppen
+        )
         st.caption(
             f"Betrieb: {len(gruppen)} Kursgruppen · "
-            f"{sum(len(zugriff.projekt_ids_fuer_gruppe(g.gruppen_id)) for g in gruppen)} Projekte · "
+            f"{projektanzahl} Projekte · "
             f"{workspace_bytes / 1024 / 1024:.1f} MB lokaler Speicher"
         )
         if gruppen:
@@ -610,9 +613,16 @@ def _systemadmin_bereich() -> None:
 
 _systemadmin_bereich()
 
-if ist_angemeldet and not aktive_gruppen_id and GlobaleRolle.SYSTEMADMIN not in globale_rollen:
+if ist_angemeldet and not aktive_gruppen_id and not auth_konfiguration.lokaler_testmodus:
     st.header("Private Kursgruppen")
-    st.info("Sie sind noch keiner Kursgruppe zugeordnet.")
+    if GlobaleRolle.SYSTEMADMIN in globale_rollen:
+        st.info(
+            "Für die fachliche Projektarbeit ist auch für Systemadministratoren eine "
+            "Kursgruppe erforderlich. Legen Sie in der Seitenleiste eine Gruppe an oder "
+            "treten Sie über eine Einladung bei."
+        )
+    else:
+        st.info("Sie sind noch keiner Kursgruppe zugeordnet.")
     st.stop()
 
 if naechster_bereich := st.session_state.pop("naechster_framework_bereich", None):
@@ -634,6 +644,7 @@ gebundene_projekte = GebundenerProjektService(
         UUID(st.session_state.gast_projekt_id) if st.session_state.get("gast_projekt_id") else None
     ),
     globale_rollen=globale_rollen,
+    legacy_erstellung_erlaubt=auth_konfiguration.lokaler_testmodus,
 )
 gebundenes_loeschen = GebundenerLoeschService(kontext, roh_loeschen, autorisierung)
 
