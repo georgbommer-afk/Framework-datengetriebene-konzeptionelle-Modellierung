@@ -242,8 +242,10 @@ def zaehle_zu_loeschende_zeilen(daten: pd.DataFrame, spalte: str, parameter: dic
     return int(_filtermaske(daten[spalte], parameter).fillna(False).sum())
 
 
-def _text_bereinigen(spalte: pd.Series, parameter: dict[str, Any]) -> tuple[pd.Series, int]:
-    """Wendet eine allgemeine Textoperation an und bewahrt Nichttreffer standardmäßig."""
+def transformiere_textwerte(
+    spalte: pd.Series, parameter: dict[str, Any]
+) -> tuple[pd.Series, pd.Series]:
+    """Transformiert Textwerte rein und liefert zusätzlich die zeilenbezogene Treffermaske."""
     art = str(parameter["art"])
     nichttreffer = str(parameter.get("nichttreffer", "Originalwert beibehalten"))
     if nichttreffer not in {"Originalwert beibehalten", "Fehlwert setzen"}:
@@ -292,7 +294,7 @@ def _text_bereinigen(spalte: pd.Series, parameter: dict[str, Any]) -> tuple[pd.S
     ergebnis = transformiert.where(
         treffer, text if nichttreffer == "Originalwert beibehalten" else pd.NA
     )
-    return ergebnis.astype("string"), int(treffer.sum())
+    return ergebnis.astype("string"), treffer.fillna(False).astype(bool)
 
 
 def _abgeleitet(daten: pd.DataFrame, parameter: dict[str, Any]) -> None:
@@ -476,8 +478,8 @@ def _wende_schritt_an(
         return daten.loc[~maske].copy(), f"{geloescht} Zeilen gelöscht"
     if schritt.typ is Transformationsart.TEXT_BEREINIGEN:
         name = schritt.betroffene_spalten[0]
-        daten[name], treffer = _text_bereinigen(daten[name], parameter)
-        return daten, f"{treffer} Textwerte transformiert"
+        daten[name], treffermaske = transformiere_textwerte(daten[name], parameter)
+        return daten, f"{int(treffermaske.sum())} Textwerte transformiert"
     if schritt.typ is Transformationsart.ABGELEITETE_SPALTE:
         _abgeleitet(daten, parameter)
         return daten, f"Spalte {parameter['zielspalte']} erzeugt"

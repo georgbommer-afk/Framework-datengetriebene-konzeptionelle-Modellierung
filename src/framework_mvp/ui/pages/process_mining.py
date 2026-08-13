@@ -23,17 +23,12 @@ from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import DiscoveryKonfiguration, Prozessnotation
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
-from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
+from framework_mvp.ui.fortschritt import unterschritte_fuer
 from framework_mvp.ui.navigation import framework_bereich_oeffnen, schritt_abschliessen_und_weiter
 from framework_mvp.ui.pages.semantisches_mapping import _projektkontext
 
 LOGGER = logging.getLogger(__name__)
-SCHRITTE = (
-    "Freigegebenen Event Log übernehmen",
-    "Schwellwert und Prozessnotation festlegen",
-    "P und Discovery-Ergebnisse speichern",
-)
-KURZ = ("E*", "k und Notation", "P und A_D")
+SCHRITTE = unterschritte_fuer(6)
 
 
 def _zustand(projekt_id: UUID, freigabe_id: UUID) -> dict[str, Any]:
@@ -176,7 +171,7 @@ def _prozessmodell(vorschau: ProcessMiningVorschau) -> None:
 
 def _technik(service: ProcessMiningService, vorschau: ProcessMiningVorschau) -> None:
     status = service.graphviz_status()
-    with st.expander("Technische Reproduzierbarkeitsinformationen"):
+    with st.expander("Technische Details", expanded=False):
         st.write(f"PM4Py-Version: {vorschau.pm4py_version}")
         st.write(f"Miner-Variante: {vorschau.konfiguration.miner_variante.value}")
         st.write(f"Graphviz verfügbar: {'Ja' if status.verfuegbar else 'Nein'}")
@@ -228,17 +223,9 @@ def zeige_process_mining_seite(
     zustand = _zustand(projekt_id, freigabe_id)
     try:
         freigabe, daten = process_mining_service.grundlage_laden(freigabe_id, projekt_id)
-        zeige_kompakten_fortschritt(
-            schritt=zustand["schritt"], kurze_namen=KURZ, lange_namen=SCHRITTE
-        )
         if zustand["schritt"] == 1:
             st.write("### Aktive, erneut validierte Grundlage")
-            st.write(
-                f"**Projekt:** {projektname}  \n"
-                f"**Freigabe-ID:** {freigabe.freigabe_id}  \n"
-                f"**Event-Log-ID:** {freigabe.event_log_id}  \n"
-                f"**Prüfsumme von E:** `{freigabe.event_log_sha256}`"
-            )
+            st.write(f"**Projekt:** {projektname}")
             zeit = pd.to_datetime(daten["timestamp"], errors="coerce")
             spalten = st.columns(4)
             spalten[0].metric("Ereignisse", len(daten))
@@ -252,12 +239,27 @@ def zeige_process_mining_seite(
                 "PM4Py erhält ausschließlich eine tiefe interne Arbeitskopie. E*, seine ID, "
                 "Prüfsumme, Reihenfolge, Werte, Spalten und Datentypen bleiben unverändert."
             )
+            with st.expander("Technische Details", expanded=False):
+                st.json(
+                    {
+                        "freigabe_id": str(freigabe.freigabe_id),
+                        "event_log_id": str(freigabe.event_log_id),
+                        "event_log_sha256": freigabe.event_log_sha256,
+                    }
+                )
             vorhandene = process_mining_service.analysen_fuer_freigabe(projekt_id, freigabe_id)
             if vorhandene:
                 with st.expander("Gespeicherte Ergebnisse für exakt dieses E* wiederaufnehmen"):
                     auswahl = st.selectbox(
                         "Gespeicherte Analyse",
                         [wert.analyse_id for wert in vorhandene],
+                        format_func=lambda wert: next(
+                            f"Analyse vom {eintrag.erstellt_am:%d.%m.%Y, %H:%M Uhr} · "
+                            f"{eintrag.ereignisanzahl_nachher:,} Ereignisse · "
+                            f"{eintrag.status.value}"
+                            for eintrag in vorhandene
+                            if eintrag.analyse_id == wert
+                        ),
                     )
                     if st.button("P und A_D wiederaufnehmen"):
                         analyse, a_d, _ = process_mining_service.uebergabe_laden(
@@ -379,16 +381,22 @@ def zeige_process_mining_seite(
         )
         _gespeichertes_ergebnis(a_d)
         st.write(
-            f"**Analyse-ID:** {analyse.analyse_id}  \n"
-            f"**Freigabe-ID:** {analyse.qualitaetspruefung_id}  \n"
             f"**Miner-Variante:** {a_d['miner_variante']}  \n"
             f"**k:** {a_d['schwellwert_k']}  \n"
-            f"**Prozessnotation:** {a_d['prozessnotation']}  \n"
-            f"**Prozessmodell P:** `{a_d['prozessmodell_p']['relativer_pfad']}`  \n"
-            f"**Discovery-Ergebnisse A_D:** `{analyse.relativer_ergebnis_pfad}`"
+            f"**Prozessnotation:** {a_d['prozessnotation']}"
         )
-        with st.expander("Gespeicherte Discovery-Ergebnisse A_D"):
-            st.json({name: wert for name, wert in a_d.items() if not name.endswith("_bytes")})
+        with st.expander("Technische Details", expanded=False):
+            st.json(
+                {
+                    "analyse_id": str(analyse.analyse_id),
+                    "freigabe_id": str(analyse.qualitaetspruefung_id),
+                    "prozessmodell_pfad": a_d["prozessmodell_p"]["relativer_pfad"],
+                    "discovery_ergebnisse_pfad": analyse.relativer_ergebnis_pfad,
+                    "discovery_ergebnisse": {
+                        name: wert for name, wert in a_d.items() if not name.endswith("_bytes")
+                    },
+                }
+            )
         if st.button("Weiter zu Schritt 7: Ergebnisse aggregieren", type="primary"):
             schritt_abschliessen_und_weiter(aktueller_schritt=6, projekt_id=projekt_id)
         _navigation(zustand, False)

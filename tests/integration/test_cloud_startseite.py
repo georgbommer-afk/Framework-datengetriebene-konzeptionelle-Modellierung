@@ -47,3 +47,18 @@ def test_gastmodus_zeigt_warnung_projektaktionen_und_genau_einen_fortschrittsbal
     assert "Demo beenden und Daten löschen" in labels
     assert len(app.get("progress")) == 1
     assert not any("Kursgruppen" in element.value for element in app.markdown)
+
+
+def test_gastprojekt_loeschung_oeffnet_den_kompakten_dialog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _oeffentlich_starten(tmp_path, monkeypatch)
+    next(button for button in app.button if button.label == "Ohne Anmeldung testen").click().run()
+
+    next(
+        button for button in app.sidebar.button if button.label == "Demo beenden und Daten löschen"
+    ).click().run()
+    assert len(app.get("dialog")) == 1
+    assert not app.exception
+    assert {button.label for button in app.button} >= {"Löschen", "Abbrechen"}
+    assert any("Andere Projekte bleiben unverändert" in warning.value for warning in app.warning)

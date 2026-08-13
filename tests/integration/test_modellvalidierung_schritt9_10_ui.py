@@ -1,5 +1,6 @@
 """Kompakte Streamlit-Verträge der Schritte 9 und 10."""
 
+import base64
 from pathlib import Path
 from typing import Any, cast
 
@@ -31,7 +32,10 @@ BESTANDTEILE = [
     for index, wert in enumerate(MODELLBESTANDTEILE)
 ]
 BASIS = SimpleNamespace(
-    ableitung=SimpleNamespace(k_id=K, o_id=O),
+    ableitung=SimpleNamespace(
+        modellableitungs_id=M, projekt_id=P, k_id=K, o_id=O,
+        k_sha256="c" * 64, o_sha256="d" * 64,
+    ),
     k={"modellbestandteile": BESTANDTEILE},
     o={"offene_eintraege": [{
         "offener_eintrag_id": "offen-1",
@@ -77,6 +81,7 @@ zeige_modellvalidierung_seite(Projekte(), Service())
 """
 
 SCHRITT_10_APP = r"""
+from types import SimpleNamespace
 from uuid import UUID
 
 from framework_mvp.application.modellableitung import MODELLBESTANDTEILE
@@ -100,7 +105,10 @@ K_STERN = {
     ],
 }
 class Projekte:
-    def projekt_laden(self, projekt_id): return object() if projekt_id == P else None
+    def projekt_laden(self, projekt_id):
+        return SimpleNamespace(
+            projekt_id=P, bezeichnung="Fördertechnik / Ost: ÄÖÜ"
+        ) if projekt_id == P else None
 class Validierungen:
     def uebergabe_schritt10(self, validierungslauf_id, projekt_id, k_stern_id):
         assert (validierungslauf_id, projekt_id, k_stern_id) == (V, P, KS)
@@ -149,9 +157,10 @@ def test_schritt_9_verlangt_aktives_k_o_paar() -> None:
 def test_schritt_9_zeigt_elf_schreibgeschuetzte_bestandteile_und_o_behandlung() -> None:
     app = _schritt_9()
     assert not app.exception
-    assert len(app.expander) == 11
+    assert len(app.expander) == 12
     assert app.expander[0].label == "1. Problemstellung"
-    assert app.expander[-1].label == "11. Darstellung der Vorgänge des Systems"
+    assert app.expander[10].label == "11. Darstellung der Vorgänge des Systems"
+    assert app.expander[-1].label == "Technische Details"
     assert any(wert.label == "Fachliche Entscheidung" for wert in app.selectbox)
     assert any(
         wert.label == "Fachliche Ergänzung beziehungsweise Begründung" for wert in app.text_area
@@ -173,14 +182,10 @@ def test_k_stern_speichern_setzt_ids_und_oeffnet_schritt_zehn() -> None:
     next(
         wert for wert in app.radio if wert.label == "Status der fachlichen Gesamtvalidierung"
     ).set_value("fachlich validiert")
-    next(wert for wert in app.button if wert.label == "Arbeitsfassung prüfen").click().run()
     next(
         wert
-        for wert in app.checkbox
-        if wert.label == "Ich bestätige die fachliche Gesamtvalidierung und die Erzeugung von K*."
-    ).check().run()
-    next(
-        wert for wert in app.button if wert.label == "K* speichern und zu Schritt 10"
+        for wert in app.button
+        if wert.label == "Eingaben validieren, K* speichern und zu Schritt 10"
     ).click().run()
 
     assert app.session_state["aktuelle_validierungslauf_id"]
@@ -188,6 +193,20 @@ def test_k_stern_speichern_setzt_ids_und_oeffnet_schritt_zehn() -> None:
     assert app.session_state["naechster_framework_bereich"] == (
         "10 Konzeptionelles Modell ausgeben"
     )
+    assert not app.checkbox
+
+
+def test_schritt_9_benennt_fehlende_pflichtfelder_konkret() -> None:
+    app = _schritt_9()
+    next(
+        wert
+        for wert in app.button
+        if wert.label == "Eingaben validieren, K* speichern und zu Schritt 10"
+    ).click().run()
+    ausgabe = "\n".join(wert.value for wert in app.markdown)
+    assert "Offener Punkt 1 (problemstellung): Fachliche Entscheidung" in ausgabe
+    assert "Fachliche Ergänzung beziehungsweise Begründung" in ausgabe
+    assert "Status der fachlichen Gesamtvalidierung" in ausgabe
 
 
 def test_schritt_10_verlangt_validiertes_k_stern_und_bietet_ruecknavigation() -> None:
@@ -202,20 +221,26 @@ def test_schritt_10_verlangt_validiertes_k_stern_und_bietet_ruecknavigation() ->
 def test_schritt_10_bietet_html_pdf_und_nur_deaktivierten_xlsx_dummy() -> None:
     app = _schritt_10()
     assert not app.exception
-    assert len(app.expander) == 11
-    auswahl = next(wert for wert in app.multiselect if wert.label == "Ausgabeformen")
-    assert auswahl.options == ["HTML", "PDF"]
+    assert len(app.expander) == 12
     dummy = next(
-        wert for wert in app.button if wert.label == "XLSX-Ausgabe – noch nicht implementiert"
+        wert for wert in app.button if wert.label.endswith(".xlsx – noch nicht implementiert")
     )
     assert dummy.disabled
-    next(wert for wert in app.button if wert.label == "Ausgewählte Dateien erzeugen").click().run()
+    assert "Fördertechnik Ost ÄÖÜ.xlsx" in dummy.label
+    next(wert for wert in app.button if wert.label == "HTML und PDF erzeugen").click().run()
     downloads = cast(list[Any], app.get("download_button"))
-    assert {wert.label for wert in downloads} == {
-        "HTML-Report herunterladen",
-        "PDF-Report herunterladen",
-    }
+    assert {wert.label for wert in downloads} == {"PDF-Report herunterladen"}
     assert not any("Excel-Ausgabe herunterladen" == wert.label for wert in downloads)
+    link = next(
+        wert.value
+        for wert in app.markdown
+        if "Konzeptionelles Modell im neuen Tab öffnen" in wert.value
+    )
+    assert 'target="_blank"' in link
+    assert 'rel="noopener noreferrer"' in link
+    assert "data:text/html;charset=utf-8;base64," in link
+    kodiert = link.split("base64,", 1)[1].split('"', 1)[0]
+    assert base64.b64decode(kodiert) == b"<!DOCTYPE html><style></style>"
     assert not app.text_input
     assert not app.text_area
 
@@ -228,7 +253,7 @@ def test_seiten_dokumentieren_die_verbindlichen_vertraege() -> None:
         "2. Übersicht der elf Modellbestandteile",
         "3. Offene oder fachlich unsichere Punkte bearbeiten",
         "4. Fachliche Gesamtvalidierung",
-        "5. Speicherung von K* und Übergabe an Schritt 10",
+        "5. K* speichern und zu Schritt 10",
     ):
         assert titel in schritt_9
     assert "Schritt 10 verändert dieses Modell nicht" in schritt_10

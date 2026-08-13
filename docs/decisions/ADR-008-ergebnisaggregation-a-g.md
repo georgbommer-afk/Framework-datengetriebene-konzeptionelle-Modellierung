@@ -49,7 +49,14 @@ blockieren. A_V enthält ausschließlich Ist minus Soll, die drei zeitlichen Kla
 Fehl-/Zuordnungsanzahlen.
 
 A_G enthält die unveränderte A_D-Referenz, KPI-Konfigurationen und -Ergebnisse sowie optionale
-Artefaktreferenzen. Eine additive Schemaversion 8 speichert nur ID, vollständige Eingabe- und
+Artefaktreferenzen. A_G-Artefaktversion 2 enthält zusätzlich die intern versionierte Sektion
+`strukturierte_ergebnisse` (Ergebnisversion 1). Darin werden die in Schritt 7 abgeschlossene
+Ressourcenentscheidung (`automatisch`, `manuell` oder begründet `nicht_moeglich`), robuste
+Übergangswartezeiten mit `Start(B) − Ende(A)` und die bestätigte zeitbezogene Datenauswahl aus
+Q/R/T/E* gespeichert. Bearbeitungszeit, Übergangswartezeit und Zwischenankunftszeit bleiben
+begrifflich und strukturell getrennt. Negative und nicht auswertbare Werte werden explizit
+ausgewiesen. A_G-Artefaktversion 1 bleibt lesbar und wird nicht migriert; neue Läufe schreiben
+Version 2. Eine additive Schemaversion 8 speichert nur ID, vollständige Eingabe- und
 Konfigurationsfingerabdrücke, Pfad, Prüfsumme, Status und Zeit. Detailartefakte werden atomar
 geschrieben; identische IDs und Fingerabdrücke sind idempotent. Änderungen an U, R, T, E*, P,
 A_D oder einer bestätigten Konfiguration invalidieren eine Vorschau beziehungsweise ein
@@ -58,7 +65,7 @@ gespeichertes A_G. Schritt 8 erhält nach erneuter Validierung ausschließlich P
 ## Konsequenzen
 
 - KPI-Berechnung, Conformance Checking und Zeitvergleich bleiben unabhängig.
-- A_G ist auch ohne A_C und A_V gültig; mindestens die A_D-Referenz ist enthalten.
+- A_G ist auch ohne A_C und A_V gültig; in v2 sind A_D-Referenz und strukturierte Ergebnisse enthalten.
 - P und P_Soll sind technisch und fachlich getrennt.
 - Externe Modellierungs- oder Netzwerkausfälle blockieren weder PNML-Upload noch Aggregation.
 - Fall- und Ereignisdetails stehen zusätzlich als CSV bereit.
@@ -67,5 +74,5 @@ gespeichertes A_G. Schritt 8 erhält nach erneuter Validierung ausschließlich P
 
 Nicht enthalten sind freie KPIs oder Formeln, semantische Automatik, erneute Datenaufbereitung,
 Process Discovery, Verwendung von P als P_Soll, Alignments, Precision, Modellreparatur,
-generische Varianten-, Ressourcen- oder Engpassanalysen, kausale Erklärungen und automatische
+generische Varianten- oder Engpassanalysen, kausale Erklärungen und automatische
 Maßnahmenempfehlungen.

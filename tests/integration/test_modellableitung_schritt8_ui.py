@@ -13,8 +13,10 @@ import pandas as pd
 import streamlit as st
 
 from framework_mvp.domain.models import (
-    Eingangsartefakt, Projekt, Projektstatus, Systemtyp, Untersuchungsauftrag,
+    AbgeleiteterModellbestandteil, Bestandteilstatus, Eingangsartefakt,
+    Projekt, Projektstatus, Systemtyp, Untersuchungsauftrag,
 )
+from framework_mvp.application.modellableitung import MODELLBESTANDTEILE
 from framework_mvp.application.modellableitung_service import Modellableitungsvorschau
 from framework_mvp.ui.pages.modellableitung import zeige_modellableitung_seite
 
@@ -59,15 +61,22 @@ class Service:
     def grundlage_laden(self, projekt_id, aggregations_id):
         assert (projekt_id, aggregations_id) == (P, AG)
         return BASIS
-    def unsicherheitsfingerabdruck(self, werte): return "d" * 64
     def vorschau(self, **kwargs):
+        st.session_state["vorschau_automatisch"] = True
         st.session_state["aufgerufene_unsicherheit"] = sorted(
             wert.value for wert in kwargs["fachlich_unsichere_bestandteile"]
+        )
+        bestandteile = tuple(
+            AbgeleiteterModellbestandteil(
+                definition.bestandteil_id, definition.bezeichnung,
+                Bestandteilstatus.VOLLSTAENDIG_ZUGEORDNET, (), (), (),
+            )
+            for definition in MODELLBESTANDTEILE
         )
         return Modellableitungsvorschau(
             BASIS,
             kwargs["modellableitungs_id"], kwargs["k_id"], kwargs["o_id"],
-            kwargs["fachlich_unsichere_bestandteile"], (), (), "d" * 64,
+            kwargs["fachlich_unsichere_bestandteile"], bestandteile, (), "d" * 64,
             {"k_id": str(kwargs["k_id"])}, {"o_id": str(kwargs["o_id"])},
             b"{}", b"{}", "e" * 64, "f" * 64,
         )
@@ -110,23 +119,23 @@ def test_fehlende_aktive_aggregation_blockiert_und_verweist_auf_schritt_sieben()
     assert any(wert.label == "Zurück zu Schritt 7: Ergebnisse aggregieren" for wert in app.button)
 
 
-def test_alle_elf_bestandteile_quellen_und_unsicherheitsmarkierungen_sind_sichtbar() -> None:
+def test_genau_eine_haupttabelle_hat_elf_bestandteile_und_vier_spalten() -> None:
     app = _app()
     assert not app.exception
-    assert len(app.expander) == 11
-    assert app.expander[0].label == "1. Problemstellung"
-    assert app.expander[-1].label == "11. Darstellung der Vorgänge des Systems"
-    assert (
-        len(
-            [
-                wert
-                for wert in app.checkbox
-                if wert.label == "Vorhandene Zuordnung als fachlich unsicher kennzeichnen"
-            ]
-        )
-        == 11
-    )
-    assert sum("teilweise offen" in wert.value for wert in app.warning) == 3
+    assert app.session_state["vorschau_automatisch"] is True
+    assert len(app.dataframe) == 1
+    assert list(app.dataframe[0].value.columns) == [
+        "Bestandteil",
+        "Übernommene Ergebnisse",
+        "Quelle/Schritt",
+        "Status",
+    ]
+    assert len(app.dataframe[0].value) == 11
+    assert len(app.expander) == 12
+    assert app.expander[0].label.startswith("1. Problemstellung")
+    assert app.expander[-2].label.startswith("11. Darstellung der Vorgänge des Systems")
+    assert app.expander[-1].label == "Technische Details"
+    assert not app.checkbox
     assert not app.text_input
     assert not app.text_area
     assert not {
@@ -137,24 +146,15 @@ def test_alle_elf_bestandteile_quellen_und_unsicherheitsmarkierungen_sind_sichtb
     } & {wert.label for wert in app.selectbox}
 
 
-def test_unsicherheit_wird_menschlich_markiert_ohne_ersatzwert() -> None:
+def test_vorschau_entsteht_ohne_vorschauknopf_oder_unsicherheitswidgets() -> None:
     app = _app()
-    aktivitaeten = next(
-        wert for wert in app.checkbox if wert.key == "modellableitung_unsicher_aktivitaeten"
-    )
-    aktivitaeten.check().run()
-    next(wert for wert in app.button if wert.label == "Vorschau von K und O erzeugen").click().run()
-    assert app.session_state["aufgerufene_unsicherheit"] == ["aktivitaeten"]
-    assert not app.text_input
-    assert not app.text_area
+    assert app.session_state["aufgerufene_unsicherheit"] == []
+    assert not any(wert.label == "Vorschau von K und O erzeugen" for wert in app.button)
+    assert not app.checkbox
 
 
 def test_speichern_setzt_k_o_ids_und_oeffnet_schritt_neun() -> None:
     app = _app()
-    next(wert for wert in app.button if wert.label == "Vorschau von K und O erzeugen").click().run()
-    next(
-        wert for wert in app.checkbox if wert.label.startswith("Ich bestätige ausschließlich")
-    ).check().run()
     next(
         wert for wert in app.button if wert.label == "K und O speichern und zu Schritt 9"
     ).click().run()
@@ -165,15 +165,14 @@ def test_speichern_setzt_k_o_ids_und_oeffnet_schritt_neun() -> None:
     assert app.session_state["naechster_framework_bereich"] == ("9 Modell ergänzen und validieren")
 
 
-def test_seite_enthaelt_fuenf_abschnitte_und_validierte_schritt_neun_uebergabe() -> None:
+def test_seite_trennt_fachliche_und_technische_details_und_uebergibt_an_schritt_neun() -> None:
     quelle = Path("src/framework_mvp/ui/pages/modellableitung.py").read_text(encoding="utf-8")
     for titel in (
-        "1. Validierte Eingangsartefakte",
-        "2. Zuordnung gemäß Tabelle 3.15",
-        "3. Vorschau des vorläufigen konzeptionellen Modells (K)",
-        "4. Offene Bestandteile (O)",
-        "5. Bestätigung, Speicherung und Übergabe an Schritt 9",
+        "Zuordnung der Ergebnisse aus Schritt 1 bis 7",
+        "Fachliche Details",
+        "Technische Details",
     ):
         assert titel in quelle
-    assert "keine fachliche Validierung von K" in quelle
+    assert "Vorhandene Zuordnung als fachlich unsicher" not in quelle
+    assert "Vorschau von K und O erzeugen" not in quelle
     assert "framework_bereich_oeffnen(schritt=9" in quelle

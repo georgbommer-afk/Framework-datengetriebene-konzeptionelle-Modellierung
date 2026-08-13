@@ -19,8 +19,10 @@ def test_t_loeschung_bereinigt_alle_abhaengigen_ids_und_projektzustaende() -> No
         "aktuelle_aggregations_id": "a",
         "aktuelle_modellableitungs_id": "k-o",
         "aktuelle_validierungslauf_id": "k-star",
+        "schritt9_arbeitsfassung": {"veraltet": True},
         "etl_wizard_zustaende": {str(projekt_id): {"schritt": 5}, "fremd": {"schritt": 2}},
         f"widget_{datensatz_id}": "veraltet",
+        "framework_bereich": "Schritt 1: Projektrahmen definieren",
     }
 
     zwischendatensatz_zustand_bereinigen(zustand, projekt_id, datensatz_id)
@@ -31,7 +33,9 @@ def test_t_loeschung_bereinigt_alle_abhaengigen_ids_und_projektzustaende() -> No
     assert "aktuelle_validierungslauf_id" not in zustand
     assert str(projekt_id) not in zustand["etl_wizard_zustaende"]
     assert zustand["etl_wizard_zustaende"]["fremd"] == {"schritt": 2}
-    assert zustand["framework_bereich"] == "2 ETL durchführen"
+    assert "schritt9_arbeitsfassung" not in zustand
+    assert zustand["framework_bereich"] == "Schritt 1: Projektrahmen definieren"
+    assert zustand["naechster_framework_bereich"] == "2 ETL durchführen"
 
 
 def test_projektloeschung_entfernt_projektkontext_und_oeffnet_schritt_eins() -> None:
@@ -43,6 +47,7 @@ def test_projektloeschung_entfernt_projektkontext_und_oeffnet_schritt_eins() -> 
         "wizard_schritt": 5,
         f"projektrahmen_{projekt_id}_feld": "Alt",
         "unabhaengig": "bleibt",
+        "framework_bereich": "7 Ergebnisse aggregieren",
     }
 
     projekt_zustand_bereinigen(zustand, projekt_id)
@@ -51,4 +56,5 @@ def test_projektloeschung_entfernt_projektkontext_und_oeffnet_schritt_eins() -> 
     assert "ausgewaehlte_projekt_id" not in zustand
     assert "wizard_entwurf" not in zustand
     assert zustand["unabhaengig"] == "bleibt"
-    assert zustand["framework_bereich"] == "Schritt 1: Projektrahmen definieren"
+    assert zustand["framework_bereich"] == "7 Ergebnisse aggregieren"
+    assert zustand["naechster_framework_bereich"] == "Schritt 1: Projektrahmen definieren"

@@ -137,9 +137,10 @@ def test_aktives_e_stern_wird_ohne_lokale_auswahl_kompakt_angezeigt() -> None:
     )
     texte = "\n".join(wert.value for wert in app.markdown)
     assert "Discovery-Projekt" in texte
-    assert "22222222-2222-2222-2222-222222222222" in texte
-    assert "33333333-3333-3333-3333-333333333333" in texte
-    assert "aaaaaaaa" in texte
+    assert "22222222-2222-2222-2222-222222222222" not in texte
+    assert "33333333-3333-3333-3333-333333333333" not in texte
+    assert "aaaaaaaa" not in texte
+    assert any(wert.label == "Technische Details" for wert in app.expander)
 
 
 def test_regulaerer_ablauf_bietet_nur_k_und_notation_und_uebergibt_p_und_a_d() -> None:

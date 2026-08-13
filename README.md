@@ -202,21 +202,26 @@ kombinierte Attribute erst in Schritt 4.
 
 Schritt 4 verwendet das zentrale Projekt, den aktiven integritätsgeprüften Zwischendatensatz T
 und optional die getrennt gespeicherte Mappingtabelle M. Die Event-Log-Konfiguration enthält
-Fallidentifikation, Aktivitätsdefinition, Zeitstempelquellen, Strukturart und die ausdrücklich
-ausgewählten zusätzlichen Attribute; diese Angaben werden nicht in M gespeichert.
+Fallidentifikation, Aktivitätsdefinition, Zeitstempelquellen, Strukturart, die optionalen
+semantischen Rollen `resource`, `start_timestamp`, `end_timestamp` und `lifecycle` sowie die
+ausdrücklich ausgewählten zusätzlichen Attribute; diese Angaben werden nicht in M gespeichert.
+Konfigurationsversion 3 führt diese Rollen ein. Version 1 und 2 bleiben mit ihrer bisherigen
+Semantik lesbar und reproduzierbar.
 
 Bei ereignisorientierten Daten entsteht aus jeder Zeile von T genau ein Ereignis. Die Aktivität
 kann aus einer vorhandenen Spalte oder aus mindestens zwei geordneten Attributen mit optionalem
 Verknüpfungselement gebildet werden. Bei breiten Zeitstempeldaten entsteht für jeden vorhandenen
 Wert einer ausgewählten Zeitstempelspalte ein Ereignis mit der dafür festgelegten
-Aktivitätsbeschreibung. Nicht ausgewählte Attribute werden nicht nach E übernommen.
+Aktivitätsbeschreibung. Ressource und Lifecycle können dort je Zeitstempelzuordnung festgelegt
+werden; eine Start-/Endpaarung wird nicht abgeleitet. Nicht ausgewählte Attribute werden nicht
+nach E übernommen.
 
 Spalten- und typisierte Wertzuordnungen aus M werden ausschließlich beim Erzeugen von E
 angewandt; T und M bleiben unverändert. E besitzt mindestens `case_id`, `activity` und
-`timestamp`, wird fallweise chronologisch und bei Gleichständen stabil geordnet und als CSV.GZ
-mit Schema- und Lineage-JSON gespeichert. Strukturelle Konfigurationsfehler blockieren Schritt 4;
-fehlende oder nicht interpretierbare Ereigniswerte bleiben für das Quality-Gate in Schritt 5
-erhalten.
+`timestamp` sowie die konfigurierten optionalen kanonischen Spalten, wird fallweise chronologisch
+und bei Gleichständen stabil geordnet und als CSV.GZ mit Schema- und Lineage-JSON gespeichert.
+Strukturelle Konfigurationsfehler blockieren Schritt 4; fehlende oder nicht interpretierbare
+Ereigniswerte bleiben für das Quality-Gate in Schritt 5 erhalten.
 
 ### Datenqualität und Freigabe
 
@@ -295,8 +300,15 @@ Zeitabweichungen und deren Klassifikation, keine kausale Erklärung oder Maßnah
 
 A_G speichert keine Kopie von A_D, sondern dessen ID, Pfad und Prüfsumme. Es enthält die
 KPI-Konfigurationen und -Ergebnisse sowie optional Referenzen auf P_Soll, Aktivitätsmapping, A_C,
-Soll-Zeitdaten und A_V. Schemaversion 8 ergänzt dafür ausschließlich eine additive
-Metadatentabelle. Ungespeicherte Vorschauen sind an sämtliche Eingaben und Entscheidungen
+Soll-Zeitdaten und A_V. A_G-Artefaktversion 2 ergänzt versionierte strukturierte Ergebnisse für
+Aktivität-Ressourcen-Zuordnungen, Übergangswartezeiten und die zeitbezogene Datenauswahl aus
+Q/R/T/E*. Vollständige kanonische Ressourcen werden automatisch, sonst manuell oder begründet
+als `nicht_moeglich` dokumentiert. Bearbeitungszeit ist `Ende(A) − Start(A)`, Übergangswartezeit
+ist `Start(B) − Ende(A)` und Zwischenankunftszeit basiert auf einem ausdrücklichen
+Ankunftszeitpunkt oder dem ersten gültigen Ereignis je Fall. Negative und nicht auswertbare
+Zeitdifferenzen werden getrennt gezählt. A_G v1 bleibt unverändert lesbar; neue Speicherungen
+schreiben v2. Schemaversion 8 ergänzt dafür ausschließlich eine additive Metadatentabelle.
+Ungespeicherte Vorschauen sind an sämtliche Eingaben und Entscheidungen
 gebunden. Beim Laden und vor der Übergabe werden Lineage, Artefaktversion, Existenz und alle
 Prüfsummen erneut geprüft. Schritt 8 erhält ausschließlich das unveränderte P aus Schritt 6 und
 das gültige A_G.
@@ -312,22 +324,29 @@ eigenständigen Quellen von Schritt 8. A_D, A_C, KPI-Ergebnisse und A_V werden a
 Die elf Bestandteile aus Abschnitt 2.3.1 werden in stabiler Reihenfolge nach der festen
 Quellenmatrix aus Tabelle 3.15 verarbeitet. Direkte Übernahmen, kontrollierte
 Metadatenzusammenfassungen und Artefaktreferenzen tragen jeweils Quell-ID, Quellprüfsumme und
-Strukturpfad. Es gibt keine semantische Automatik: Eine `case_id` wird nicht zum Entitätstyp,
-Zeitlücken werden nicht zu Warteschlangen und beliebige Attribute werden nicht zu Ressourcen
-erklärt. Aktivitäten werden unverändert aus Prozessbaum, Petrinetz oder BPMN gelesen; stille
+Strukturpfad. Es gibt in Schritt 8 keine fachliche Berechnung: Eine `case_id` wird nicht zum
+Entitätstyp und Ressourcen-, Übergangswartezeit- sowie Zeitdatenergebnisse werden ausschließlich
+aus der strukturierten A_G-Sektion übernommen. Bei A_G v1 bleiben diese Inhalte nachvollziehbar
+offen, statt aus E* nachberechnet zu werden. Aktivitäten werden unverändert aus Prozessbaum,
+Petrinetz oder BPMN gelesen; stille
 Petrinetztransitionen bleiben ausgeschlossen.
 
 Das vorläufige konzeptionelle Modell K enthält nur belegte Informationen. Fehlende, nicht
 ableitbare oder fachlich unsichere Inhalte stehen getrennt und unverändert `offen` in O. Die
 Bestandteile Ausgaben und Eingaben, Warteschlangen sowie Annahmen und Vereinfachungen behalten
-den in Tabelle 3.15 vorgesehenen Ergänzungsbedarf. Die anwendende Person kann vorhandene
-Zuordnungen als fachlich unsicher markieren, aber in Schritt 8 weder Ersatzwerte eingeben noch
-Inhalte korrigieren oder ergänzen.
+den tatsächlich nicht ableitbaren Ergänzungsbedarf. Die Vorschau wird beim Öffnen automatisch
+erzeugt und ordnet alle elf Bestandteile in einer Tabelle zu. Schritt 8 besitzt keine
+Unsicherheits- oder Bestätigungscheckbox und keine fachlichen Eingabefelder. UUIDs und
+Prüfsummen stehen nur unter den technischen Details. Der Discovery-Wert k wird als technische
+Abstraktions- und Darstellungsentscheidung, nicht als fachlicher Detaillierungsgrad ausgewiesen.
 
 K und O werden gemeinsam, projekt-, versions- und lineagegebunden gespeichert. Schemaversion 9
 ergänzt dafür ausschließlich eine additive Metadatentabelle. Identische Eingaben,
-Mappingversion und Unsicherheitsmarkierungen sind idempotent. Jede Änderung an U, S, Q, R, T,
-E*, P, A_G oder den Markierungen invalidiert eine Vorschau. Vor Download, Wiederaufnahme und
+Mappingversion und Eingabefingerabdruck sind idempotent. Die neue Quellenmatrix verwendet
+Mappingversion 2. Bestehende K/O-Artefakte mit Mappingversion 1 werden nicht umgeschrieben;
+sie müssen bei Bedarf aus dem weiterhin lesbaren A_G neu abgeleitet werden. Jede Änderung an
+U, S, Q, R, T,
+E*, P oder A_G invalidiert eine Vorschau. Vor Download, Wiederaufnahme und
 Übergabe werden beide Dateien, ihre gegenseitige Referenz, Prüfsummen, elf Bestandteile und die
 vollständige Eingangslineage erneut geprüft. Schritt 9 erhält ausschließlich K und O. K ist noch
 kein fachlich validiertes K*; Ergänzung, Konfliktauflösung und Validierung gehören zu Schritt 9.

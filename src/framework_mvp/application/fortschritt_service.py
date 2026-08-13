@@ -41,7 +41,7 @@ FACHLICHE_UNTERSCHRITTE: dict[int, tuple[str, ...]] = {
     4: (
         "Strukturart festlegen",
         "Mindestbestandteile konfigurieren",
-        "Zusätzliche Attribute auswählen",
+        "Semantische Rollen und Attribute auswählen",
         "Event Log erzeugen und prüfen",
         "Event Log ausgeben und speichern",
     ),
@@ -56,10 +56,10 @@ FACHLICHE_UNTERSCHRITTE: dict[int, tuple[str, ...]] = {
         "Schwellwert und Prozessnotation festlegen",
         "P und Discovery-Ergebnisse speichern",
     ),
-    7: ("Ergebnisse", "Sollbezug", "Aggregation speichern"),
-    8: ("Eingaben", "Ableitung", "Modellbestandteile speichern"),
-    9: ("Offene Punkte", "Ergänzen", "Validieren und speichern"),
-    10: ("Modell prüfen", "Ausgabe erzeugen"),
+    7: ("Ergebnisse fachlich aggregieren",),
+    8: ("Modellbestandteile ableiten",),
+    9: ("Modell ergänzen und validieren",),
+    10: ("Konzeptionelles Modell ausgeben",),
 }
 
 

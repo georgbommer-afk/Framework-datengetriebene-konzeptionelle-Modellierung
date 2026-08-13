@@ -5,6 +5,7 @@ import copy
 import json
 from dataclasses import replace
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -159,9 +160,16 @@ def _umgebung(tmp_path):  # type: ignore[no-untyped-def]
     artefakte = ImportartefaktSpeicher(WorkspaceKonfiguration(tmp_path / "workspace"))
     modellableitungen = _Modellableitungen(ableitung, k, o)
     service = ModellvalidierungService(repository, modellableitungen, artefakte)
+    projekte = SimpleNamespace(
+        projekt_laden=lambda angefordert: (
+            SimpleNamespace(projekt_id=projekt_id, bezeichnung="Förderanlage Süd / ÄÖÜ")
+            if angefordert == projekt_id
+            else None
+        )
+    )
     return (
         service,
-        ModellausgabeService(service, WorkspaceKonfiguration(tmp_path / "workspace")),
+        ModellausgabeService(service, projekte, WorkspaceKonfiguration(tmp_path / "workspace")),
         repository,
         artefakte,
         modellableitungen,
@@ -437,7 +445,7 @@ def test_html_pdf_und_gemeinsame_auswahl_enthalten_alle_elf_ohne_mutation(
     if pdf:
         assert ergebnis.report_pdf is not None
         assert ergebnis.pdf_dateiname is not None
-        assert ergebnis.pdf_dateiname.endswith(".pdf")
+        assert ergebnis.pdf_dateiname == "Konzeptionelles Modell Förderanlage Süd ÄÖÜ.pdf"
         assert ergebnis.report_pdf.startswith(b"%PDF-")
     else:
         assert ergebnis.report_pdf is None

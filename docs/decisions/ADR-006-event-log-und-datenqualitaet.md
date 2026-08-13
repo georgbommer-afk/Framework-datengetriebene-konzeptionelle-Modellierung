@@ -13,7 +13,12 @@ Mappingtabelle M und Event-Log-Konfiguration sind getrennte Artefakte. M enthäl
 fachliche Zuordnungen technischer Spaltenbezeichnungen und typisierter technischer Werte. Die
 Event-Log-Konfiguration aus Schritt 4 bindet sich an genau ein Projekt und T und enthält optional
 die ID von M, die Strukturart, genau eine Fallidentifikationsspalte, die Aktivitätsdefinition,
-die Zeitstempelquellen und die ausdrücklich ausgewählten zusätzlichen Attribute.
+die Zeitstempelquellen, optionale semantische Rollen und die ausdrücklich ausgewählten
+zusätzlichen Attribute. Konfigurationsversion 3 erlaubt in ereignisorientierten Daten die
+kanonischen Rollen `resource`, `start_timestamp`, `end_timestamp` und `lifecycle`. In breiten
+Daten werden Ressource und Lifecycle ausschließlich je Zeitstempelzuordnung verwendet; eine
+nicht eindeutig begründete Start-/Endpaarung wird nicht erzeugt. Version 1 und 2 behalten ihre
+bisherige Semantik.
 
 Das kanonische Event Log besitzt mindestens `case_id`, `activity`, `timestamp` und eine stabile
 technische `event_id`. Bei ereignisorientierten Daten wird jede Zeile von T zu genau einem
@@ -21,15 +26,17 @@ Ereignis. Eine Aktivität stammt entweder aus einer vorhandenen Spalte oder aus 
 geordneten Attributen mit optionalem Verknüpfungselement. Breite Zeitstempeldaten werden nur über
 ausgewählte Zeitstempelspalten unpivotiert; jeder vorhandene Wert erzeugt ein Ereignis mit der
 für diese Spalte konfigurierten Aktivitätsbeschreibung. Nur ausdrücklich ausgewählte zusätzliche
-Attribute werden übernommen.
+Attribute werden übernommen. Eine technische Quellspalte darf in Version 3 nicht mehreren
+Standardrollen oder zusätzlich einem allgemeinen Attribut zugeordnet sein.
 
 Fachliche Spalten- und Wertzuordnungen aus M werden auf einer tiefen Arbeitskopie angewandt. T und
 M werden nicht verändert. Nicht gemappte Werte bleiben erhalten, Wertzuordnungen sind an
 Quellspalte und Datentyp gebunden und gleiche fachliche Spaltennamen werden kollisionssicher
 aufgelöst. Technische Herkunftsspalten sichern Rohwerte, Quellzeile und bei breiten Datensätzen
 die ursprüngliche Zeitstempelspalte. Innerhalb eines Falls wird chronologisch sowie bei
-Gleichständen stabil nach Quellzeile und Zeitstempelspaltenreihenfolge geordnet. Zeitzonenlose
-Werte erhalten keine stillschweigende UTC-Annahme.
+Gleichständen stabil nach Quellzeile und Zeitstempelspaltenreihenfolge geordnet. Der allgemeine
+Ereigniszeitstempel erhält weiterhin keine stillschweigende UTC-Annahme; konfigurierte Start- und
+Endzeitstempel der Version 3 werden als UTC-kompatible kanonische Spalten normalisiert.
 
 CSV.GZ ist das führende Event-Log-Artefakt. Schema-JSON dokumentiert fachliche und technische
 Spalten, Typen, Zeitformat und Prüfsumme. Lineage-JSON enthält Projekt, T, optionale M-ID, die

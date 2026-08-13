@@ -433,5 +433,6 @@ def erstelle_modellausgabe_service(
     workspace_konfiguration = workspace or WorkspaceKonfiguration.ermitteln()
     return ModellausgabeService(
         erstelle_modellvalidierung_service(datenbankpfad, workspace_konfiguration),
+        erstelle_projekt_service(datenbankpfad),
         workspace_konfiguration,
     )

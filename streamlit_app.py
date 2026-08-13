@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import MutableMapping
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, cast
 from uuid import UUID
 
 import streamlit as st
 
 from framework_mvp import __version__
 from framework_mvp.application.autorisierung import AutorisierungsService
-from framework_mvp.application.fortschritt_service import FACHLICHE_UNTERSCHRITTE
 from framework_mvp.application.gast_service import GAST_HINWEIS, GastService
 from framework_mvp.application.kursdashboard_service import KursdashboardService
 from framework_mvp.application.kursgruppen_service import KursgruppenLoeschService
@@ -59,6 +56,11 @@ from framework_mvp.domain.models.zugriff import (
 from framework_mvp.infrastructure.dateiimport.datei_metadaten import bereinige_dateiname
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
 from framework_mvp.ui.cloud_access import GebundenerLoeschService, GebundenerProjektService
+from framework_mvp.ui.fortschritt import (
+    fortschrittsstand,
+    fortschrittsstand_aus_persistenz,
+    zeige_gesamtfortschritt,
+)
 from framework_mvp.ui.navigation import FRAMEWORK_BEREICHE
 from framework_mvp.ui.oidc import lokaler_test_claims, oidc_konfiguration_ermitteln
 from framework_mvp.ui.pages.datenqualitaet import zeige_datenqualitaet_seite
@@ -71,7 +73,6 @@ from framework_mvp.ui.pages.modellvalidierung import zeige_modellvalidierung_sei
 from framework_mvp.ui.pages.process_mining import zeige_process_mining_seite
 from framework_mvp.ui.pages.projektverwaltung import zeige_projektverwaltung
 from framework_mvp.ui.pages.semantisches_mapping import zeige_semantisches_mapping
-from framework_mvp.ui.session_cleanup import projekt_zustand_bereinigen
 from framework_mvp.workspace import WorkspaceKonfiguration
 
 st.set_page_config(page_title="Framework-MVP", page_icon="🏭", layout="wide")
@@ -493,34 +494,6 @@ def _projektaktionen(projekt_id: UUID | None) -> None:
             file_name=name,
             mime="application/zip",
         )
-    loesch_label = (
-        "Demo beenden und Daten löschen"
-        if kontext.gast_geheimnis is not None
-        else "Projekt löschen"
-    )
-    if st.sidebar.button(loesch_label):
-        st.session_state.cloud_loeschbestaetigung = str(projekt_id)
-    if st.session_state.get("cloud_loeschbestaetigung") == str(projekt_id):
-        st.sidebar.warning(f"„{projekt.bezeichnung}“ wird vollständig gelöscht.")
-        loeschen, abbrechen = st.sidebar.columns(2)
-        if loeschen.button("Löschen", type="primary"):
-            GebundenerLoeschService(kontext, roh_loeschen, autorisierung).projekt_loeschen(
-                projekt_id
-            )
-            projekt_zustand_bereinigen(
-                cast("MutableMapping[str, Any]", st.session_state), projekt_id
-            )
-            for schluessel in (
-                "gast_geheimnis",
-                "gast_projekt_id",
-                "projektarchiv",
-                "cloud_loeschbestaetigung",
-            ):
-                st.session_state.pop(schluessel, None)
-            st.rerun()
-        if abbrechen.button("Abbrechen"):
-            st.session_state.pop("cloud_loeschbestaetigung", None)
-            st.rerun()
 
 
 aktive_projekt_id = _projekt_id_aus_session()
@@ -646,7 +619,6 @@ if naechster_bereich := st.session_state.pop("naechster_framework_bereich", None
     st.session_state.framework_bereich = naechster_bereich
 
 seite = st.sidebar.radio("Framework-Bereich", FRAMEWORK_BEREICHE, key="framework_bereich")
-schritt = FRAMEWORK_BEREICHE.index(seite) + 1
 
 mandanten_projekte = MandantenProjektService(
     roh_projekte, zugriff, autorisierung, gast_ttl=ermittle_gast_ttl()
@@ -665,12 +637,22 @@ gebundene_projekte = GebundenerProjektService(
 )
 gebundenes_loeschen = GebundenerLoeschService(kontext, roh_loeschen, autorisierung)
 
+
+def _gastmodus_nach_projektloeschung_beenden() -> None:
+    for schluessel in ("gast_geheimnis", "gast_projekt_id", "projektarchiv"):
+        st.session_state.pop(schluessel, None)
+
+
 aktive_projekt_id = _projekt_id_aus_session()
 if aktive_projekt_id is not None:
     if not autorisierung.projekt_zugriff_erlaubt(
         kontext, aktive_projekt_id, Projektaktion.BEARBEITEN
     ):
         if autorisierung.projekt_zugriff_erlaubt(kontext, aktive_projekt_id, Projektaktion.ANSEHEN):
+            fortschritt = erstelle_fortschritt_service(datenbankpfad).laden(
+                kontext, aktive_projekt_id, dashboard=True
+            )
+            zeige_gesamtfortschritt(fortschrittsstand_aus_persistenz(fortschritt))
             st.header("Projekt schreibgeschützt")
             projekt = roh_projekte.projekt_laden(aktive_projekt_id)
             if projekt is not None:
@@ -680,14 +662,6 @@ if aktive_projekt_id is not None:
                     f"Systemtyp: {projekt.untersuchungsauftrag.systemtyp.value} · "
                     f"Status: {projekt.status.value}"
                 )
-            fortschritt = erstelle_fortschritt_service(datenbankpfad).laden(
-                kontext, aktive_projekt_id, dashboard=True
-            )
-            st.caption(
-                f"Gesamtfortschritt {fortschritt.prozent} % · Phase {fortschritt.phase} – "
-                f"{fortschritt.phasenname} · Schritt {fortschritt.schritt}"
-            )
-            st.progress(fortschritt.prozent / 100)
             st.info(
                 "Die Gruppenleitung kann dieses Projekt und seinen Fortschritt ansehen und "
                 "exportieren. Das reine Öffnen erteilt keinen Bearbeitungszugriff."
@@ -696,45 +670,37 @@ if aktive_projekt_id is not None:
             st.error("Die angeforderte Ressource ist nicht verfügbar.")
         st.stop()
 
+stand = fortschrittsstand(seite, st.session_state)
+zeige_gesamtfortschritt(stand)
+
 if aktive_projekt_id is not None and autorisierung.projekt_zugriff_erlaubt(
     kontext, aktive_projekt_id, Projektaktion.BEARBEITEN
 ):
-    unter_index = 1
-    if schritt == 1:
-        unter_index = int(st.session_state.get("wizard_schritt", 1))
-    elif schritt == 2:
-        zustand = st.session_state.get("etl_wizard_zustaende", {}).get(str(aktive_projekt_id), {})
-        unter_index = int(zustand.get("schritt", 1))
-    elif schritt in {3, 4, 5, 6}:
-        sammlung = {
-            3: "mapping_wizard_zustaende",
-            4: "event_log_zustaende",
-            5: "quality_gate_zustaende",
-            6: "process_mining_zustaende",
-        }[schritt]
-        zustand = st.session_state.get(sammlung, {}).get(str(aktive_projekt_id), {})
-        unter_index = int(zustand.get("schritt", 1))
-    unterschritte = FACHLICHE_UNTERSCHRITTE[schritt]
-    unterschritt = unterschritte[min(max(unter_index, 1), len(unterschritte)) - 1]
     try:
-        fortschritt = erstelle_fortschritt_service(datenbankpfad).aktualisieren(
+        erstelle_fortschritt_service(datenbankpfad).aktualisieren(
             kontext,
             aktive_projekt_id,
-            schritt=schritt,
-            unterschritt=unterschritt,
+            schritt=stand.framework_schritt,
+            unterschritt=stand.unterschritt_name,
         )
     except Domaenenfehler:
-        fortschritt = None
-    if fortschritt is not None:
-        st.caption(
-            f"Gesamtfortschritt {fortschritt.prozent} % · Phase {fortschritt.phase} – "
-            f"{fortschritt.phasenname} · Schritt {fortschritt.schritt} · "
-            f"{fortschritt.unterschritt}"
-        )
-        st.progress(fortschritt.prozent / 100)
+        pass
 
 if seite == "Schritt 1: Projektrahmen definieren":
-    zeige_projektverwaltung(gebundene_projekte)
+    zeige_projektverwaltung(
+        gebundene_projekte,
+        erstelle_transformations_service(datenbankpfad, workspace),
+        gebundenes_loeschen,
+        sidebar_titel_anzeigen=False,
+        projekt_loesch_label=(
+            "Demo beenden und Daten löschen"
+            if kontext.gast_geheimnis is not None
+            else "Projekt löschen"
+        ),
+        projektloeschung_nachbereiten=(
+            _gastmodus_nach_projektloeschung_beenden if kontext.gast_geheimnis is not None else None
+        ),
+    )
 elif seite == "2 ETL durchführen":
     zeige_etl_seite(
         gebundene_projekte,
@@ -743,7 +709,6 @@ elif seite == "2 ETL durchführen":
         erstelle_importvorgang_service(datenbankpfad, workspace),
         erstelle_transformations_service(datenbankpfad, workspace),
         workspace,
-        gebundenes_loeschen,
     )
 elif seite == "3 Semantisches Mapping":
     zeige_semantisches_mapping(
