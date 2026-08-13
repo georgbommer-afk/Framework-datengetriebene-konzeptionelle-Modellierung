@@ -27,3 +27,15 @@ class ProjektNichtGefunden(Domaenenfehler):
 
 class Datenimportfehler(Domaenenfehler):
     """Eine Datei oder ihre Importeinstellungen können nicht verarbeitet werden."""
+
+
+class ZugriffVerweigert(Domaenenfehler):
+    """Eine Ressource ist für den aktuellen Zugriffskontext nicht verfügbar."""
+
+
+class ArchivUngueltig(Domaenenfehler):
+    """Ein portables Archiv verletzt Format- oder Sicherheitsregeln."""
+
+
+class ArchivKonflikt(Domaenenfehler):
+    """Ein Archiv kollidiert mit einem abweichenden vorhandenen Projekt."""

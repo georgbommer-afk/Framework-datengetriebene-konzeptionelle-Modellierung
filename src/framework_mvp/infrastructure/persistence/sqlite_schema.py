@@ -6,7 +6,7 @@ from typing import Any
 
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
 
-SCHEMAVERSION = 10
+SCHEMAVERSION = 11
 
 PROJEKT_SCHEMA_VERSION_2 = """
 CREATE TABLE IF NOT EXISTS projekte (
@@ -333,6 +333,155 @@ CREATE INDEX IF NOT EXISTS idx_modellvalidierungen_modellableitungs_id
     ON modellvalidierungen(modellableitungs_id);
 """
 
+PORTABILITAET_UND_MANDANTEN_SCHEMA_VERSION_11 = """
+CREATE TABLE IF NOT EXISTS benutzer (
+    benutzer_id TEXT PRIMARY KEY NOT NULL,
+    oidc_issuer TEXT NOT NULL,
+    oidc_subject TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    anzeigename TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'aktiv' CHECK (status IN ('aktiv', 'deaktiviert')),
+    erstellt_am_utc TEXT NOT NULL,
+    zuletzt_angemeldet_am_utc TEXT NOT NULL,
+    UNIQUE (oidc_issuer, oidc_subject)
+);
+CREATE TABLE IF NOT EXISTS globale_rollen (
+    benutzer_id TEXT NOT NULL,
+    rolle TEXT NOT NULL CHECK (rolle IN ('gruppenleitung', 'systemadmin')),
+    vergeben_am_utc TEXT NOT NULL,
+    vergeben_von_benutzer_id TEXT,
+    PRIMARY KEY (benutzer_id, rolle),
+    FOREIGN KEY (benutzer_id) REFERENCES benutzer(benutzer_id),
+    FOREIGN KEY (vergeben_von_benutzer_id) REFERENCES benutzer(benutzer_id)
+);
+CREATE TABLE IF NOT EXISTS kursgruppen (
+    gruppen_id TEXT PRIMARY KEY NOT NULL,
+    bezeichnung TEXT NOT NULL CHECK (length(trim(bezeichnung)) > 0),
+    beschreibung TEXT NOT NULL DEFAULT '',
+    gruppenleitung_benutzer_id TEXT NOT NULL,
+    beginn_am TEXT,
+    ende_am TEXT,
+    maximale_teilnehmende INTEGER NOT NULL DEFAULT 100
+        CHECK (maximale_teilnehmende BETWEEN 1 AND 10000),
+    speicherlimit_bytes INTEGER NOT NULL DEFAULT 1073741824
+        CHECK (speicherlimit_bytes > 0),
+    aufbewahrung_bis_utc TEXT,
+    status TEXT NOT NULL DEFAULT 'aktiv'
+        CHECK (status IN ('aktiv', 'schreibgeschuetzt', 'archiviert', 'geloescht')),
+    erstellt_am_utc TEXT NOT NULL,
+    geaendert_am_utc TEXT NOT NULL,
+    FOREIGN KEY (gruppenleitung_benutzer_id) REFERENCES benutzer(benutzer_id)
+);
+CREATE TABLE IF NOT EXISTS gruppenmitgliedschaften (
+    gruppen_id TEXT NOT NULL,
+    benutzer_id TEXT NOT NULL,
+    rolle TEXT NOT NULL CHECK (rolle IN ('teilnehmer', 'gruppenleitung', 'gruppenassistenz')),
+    status TEXT NOT NULL DEFAULT 'aktiv'
+        CHECK (status IN ('aktiv', 'entfernt', 'gesperrt')),
+    berechtigungen_json TEXT NOT NULL DEFAULT '[]',
+    beigetreten_am_utc TEXT NOT NULL,
+    geaendert_am_utc TEXT NOT NULL,
+    PRIMARY KEY (gruppen_id, benutzer_id),
+    FOREIGN KEY (gruppen_id) REFERENCES kursgruppen(gruppen_id),
+    FOREIGN KEY (benutzer_id) REFERENCES benutzer(benutzer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_gruppenmitgliedschaften_benutzer
+    ON gruppenmitgliedschaften(benutzer_id, status);
+CREATE TABLE IF NOT EXISTS gruppeneinladungen (
+    einladungs_id TEXT PRIMARY KEY NOT NULL,
+    gruppen_id TEXT NOT NULL,
+    token_sha256 TEXT UNIQUE NOT NULL CHECK (length(token_sha256) = 64),
+    laeuft_ab_am_utc TEXT NOT NULL,
+    maximale_nutzungen INTEGER NOT NULL CHECK (maximale_nutzungen > 0),
+    anzahl_nutzungen INTEGER NOT NULL DEFAULT 0 CHECK (anzahl_nutzungen >= 0),
+    erlaubte_email_domain TEXT NOT NULL DEFAULT '',
+    erlaubte_emails_json TEXT NOT NULL DEFAULT '[]',
+    widerrufen_am_utc TEXT,
+    erstellt_von_benutzer_id TEXT NOT NULL,
+    erstellt_am_utc TEXT NOT NULL,
+    FOREIGN KEY (gruppen_id) REFERENCES kursgruppen(gruppen_id),
+    FOREIGN KEY (erstellt_von_benutzer_id) REFERENCES benutzer(benutzer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_gruppeneinladungen_gruppe
+    ON gruppeneinladungen(gruppen_id);
+CREATE TABLE IF NOT EXISTS projektzugehoerigkeiten (
+    projekt_id TEXT PRIMARY KEY NOT NULL,
+    zugriffsart TEXT NOT NULL
+        CHECK (zugriffsart IN ('gast', 'kursgruppe', 'legacy_unassigned')),
+    gruppen_id TEXT,
+    gast_geheimnis_sha256 TEXT,
+    gast_ablauf_am_utc TEXT,
+    zuletzt_aktiv_am_utc TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+    erstellt_am_utc TEXT NOT NULL,
+    CHECK (
+        (zugriffsart = 'gast' AND gruppen_id IS NULL
+            AND length(gast_geheimnis_sha256) = 64 AND gast_ablauf_am_utc IS NOT NULL)
+        OR (zugriffsart = 'kursgruppe' AND gruppen_id IS NOT NULL
+            AND gast_geheimnis_sha256 IS NULL AND gast_ablauf_am_utc IS NULL)
+        OR (zugriffsart = 'legacy_unassigned' AND gruppen_id IS NULL
+            AND gast_geheimnis_sha256 IS NULL AND gast_ablauf_am_utc IS NULL)
+    ),
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id) ON DELETE CASCADE,
+    FOREIGN KEY (gruppen_id) REFERENCES kursgruppen(gruppen_id)
+);
+CREATE INDEX IF NOT EXISTS idx_projektzugehoerigkeiten_gruppe
+    ON projektzugehoerigkeiten(gruppen_id);
+CREATE INDEX IF NOT EXISTS idx_projektzugehoerigkeiten_gast_ablauf
+    ON projektzugehoerigkeiten(gast_ablauf_am_utc);
+CREATE TABLE IF NOT EXISTS projektmitglieder (
+    projekt_id TEXT NOT NULL,
+    benutzer_id TEXT NOT NULL,
+    darf_bearbeiten INTEGER NOT NULL DEFAULT 1 CHECK (darf_bearbeiten IN (0, 1)),
+    status TEXT NOT NULL DEFAULT 'aktiv' CHECK (status IN ('aktiv', 'entfernt')),
+    zugewiesen_am_utc TEXT NOT NULL,
+    PRIMARY KEY (projekt_id, benutzer_id),
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id) ON DELETE CASCADE,
+    FOREIGN KEY (benutzer_id) REFERENCES benutzer(benutzer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_projektmitglieder_benutzer
+    ON projektmitglieder(benutzer_id, status);
+CREATE TABLE IF NOT EXISTS projektfortschritt (
+    projekt_id TEXT PRIMARY KEY NOT NULL,
+    framework_schritt INTEGER NOT NULL CHECK (framework_schritt BETWEEN 1 AND 10),
+    fachlicher_unterschritt TEXT NOT NULL DEFAULT '',
+    fortschritt_zaehler INTEGER NOT NULL CHECK (fortschritt_zaehler >= 0),
+    fortschritt_nenner INTEGER NOT NULL CHECK (fortschritt_nenner > 0),
+    phase INTEGER NOT NULL CHECK (phase BETWEEN 1 AND 3),
+    status TEXT NOT NULL DEFAULT 'in_bearbeitung'
+        CHECK (status IN ('in_bearbeitung', 'abgeschlossen')),
+    gespeichert_am_utc TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS archivmetadaten (
+    archiv_id TEXT PRIMARY KEY NOT NULL,
+    projekt_id TEXT,
+    gruppen_id TEXT,
+    archivtyp TEXT NOT NULL
+        CHECK (archivtyp IN ('projekt_export', 'projekt_import', 'kurs_export', 'kurs_import')),
+    archivversion INTEGER NOT NULL CHECK (archivversion > 0),
+    sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+    groesse_bytes INTEGER NOT NULL CHECK (groesse_bytes >= 0),
+    erstellt_von_benutzer_id TEXT,
+    erstellt_am_utc TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('erfolgreich', 'abgelehnt', 'fehlgeschlagen')),
+    details_json TEXT NOT NULL DEFAULT '{}',
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id) ON DELETE SET NULL,
+    FOREIGN KEY (gruppen_id) REFERENCES kursgruppen(gruppen_id) ON DELETE SET NULL,
+    FOREIGN KEY (erstellt_von_benutzer_id) REFERENCES benutzer(benutzer_id)
+);
+CREATE TABLE IF NOT EXISTS bereinigungsprotokoll (
+    eintrag_id TEXT PRIMARY KEY NOT NULL,
+    projekt_id TEXT,
+    gruppen_id TEXT,
+    aktion TEXT NOT NULL,
+    ergebnis TEXT NOT NULL,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    erstellt_am_utc TEXT NOT NULL
+);
+"""
+
 _PROJEKTSPALTEN_VERSION_2 = """
     projekt_id, bezeichnung, beteiligte_personen_json, status,
     erstellt_am_utc, geaendert_am_utc, untersuchungsauftrag_json
@@ -409,7 +558,10 @@ def _migriere_version_1_auf_2(verbindung: sqlite3.Connection) -> None:
 
 
 def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
-    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 10."""
+    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 11."""
+    verbindung.execute("PRAGMA foreign_keys = ON")
+    verbindung.execute("PRAGMA busy_timeout = 5000")
+    verbindung.execute("PRAGMA journal_mode = WAL")
     version = int(verbindung.execute("PRAGMA user_version").fetchone()[0])
     if version > SCHEMAVERSION:
         raise NichtUnterstuetzteSchemaversion(
@@ -447,6 +599,22 @@ def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
         for anweisung in MODELLVALIDIERUNG_SCHEMA_VERSION_10.split(";"):
             if anweisung.strip():
                 verbindung.execute(anweisung)
+        for anweisung in PORTABILITAET_UND_MANDANTEN_SCHEMA_VERSION_11.split(";"):
+            if anweisung.strip():
+                verbindung.execute(anweisung)
+        zeitpunkt = "1970-01-01T00:00:00+00:00"
+        verbindung.execute(
+            """
+            INSERT OR IGNORE INTO projektzugehoerigkeiten (
+                projekt_id, zugriffsart, gruppen_id, gast_geheimnis_sha256,
+                gast_ablauf_am_utc, zuletzt_aktiv_am_utc, revision, erstellt_am_utc
+            )
+            SELECT projekt_id, 'legacy_unassigned', NULL, NULL, NULL,
+                   COALESCE(geaendert_am_utc, ?), 1, COALESCE(erstellt_am_utc, ?)
+            FROM projekte
+            """,
+            (zeitpunkt, zeitpunkt),
+        )
         if version < SCHEMAVERSION:
             verbindung.execute(f"PRAGMA user_version = {SCHEMAVERSION}")
     except Exception:
