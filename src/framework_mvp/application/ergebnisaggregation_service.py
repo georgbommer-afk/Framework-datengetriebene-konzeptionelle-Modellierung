@@ -18,6 +18,11 @@ from framework_mvp.application.ergebnisaggregation.kpi import (
     kpi_definition,
 )
 from framework_mvp.application.ergebnisaggregation.sollprozess import token_replay
+from framework_mvp.application.ergebnisaggregation.strukturierte_ergebnisse import (
+    analysiere_ressourcen,
+    analysiere_warteschlangen,
+    analysiere_zeitbezogene_datenauswahl,
+)
 from framework_mvp.application.ergebnisaggregation.zeitvergleich import zeitvergleich_berechnen
 from framework_mvp.application.ports.ergebnisaggregation_repository import (
     ErgebnisaggregationRepository,
@@ -37,16 +42,22 @@ from framework_mvp.domain.models import (
     ProcessMiningAnalyse,
     Projekt,
     Qualitaetsfreigabe,
+    RessourcenanalyseErgebnis,
+    Ressourcenzuordnungsmodus,
     SollmodellVorschau,
     Sollzeitdaten,
+    WarteschlangenanalyseErgebnis,
+    ZeitbezogeneDatenauswahlErgebnis,
     ZeitvergleichErgebnis,
     ZeitvergleichKonfiguration,
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
 
-AG_ARTEFAKTVERSION = 1
+AG_ARTEFAKTVERSION = 2
+AG_LESBARE_ARTEFAKTVERSIONEN = frozenset({1, AG_ARTEFAKTVERSION})
 AG_ARTEFAKTART = "aggregierte_analyseergebnisse_a_g"
+STRUKTURIERTE_ERGEBNISVERSION = 1
 
 
 def _normalisieren(wert: Any) -> Any:
@@ -97,6 +108,7 @@ class Aggregationsgrundlage:
     prozessmodell_sha256: str
     discovery_ergebnisse_sha256: str
     eingabefingerabdruck: str
+    datenquellen_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +126,10 @@ class Aggregationsvorschau:
     zeitvergleich_ergebnis: ZeitvergleichErgebnis | None
     warnungen: tuple[str, ...]
     konfigurationsfingerabdruck: str
+    ressourcenanalyse: RessourcenanalyseErgebnis | None = None
+    warteschlangenanalyse: WarteschlangenanalyseErgebnis | None = None
+    zeitbezogene_datenauswahl: ZeitbezogeneDatenauswahlErgebnis | None = None
+    ankunftsspalte: str = ""
 
 
 class ErgebnisaggregationService:
@@ -181,11 +197,15 @@ class ErgebnisaggregationService:
             raise Importintegritaetsfehler("T und E* besitzen keine übereinstimmende Lineage.")
         profil_snapshot: list[dict[str, Any]] = []
         profilwerte: dict[str, float] = {}
+        datenquellen_ids: list[str] = []
         for import_id in datensatz.import_ids:
             geladen = self._transformationen.import_laden(import_id)
             if geladen is None or geladen.importvorgang.projekt_id != projekt_id:
                 raise Importintegritaetsfehler("Ein in T referenziertes Datenprofil R fehlt.")
             profil = geladen.profil
+            datenquellen_id = str(getattr(geladen.importvorgang, "datenquellen_id", ""))
+            if datenquellen_id:
+                datenquellen_ids.append(datenquellen_id)
             snapshot = {
                 "import_id": str(import_id),
                 "raw_sha256": geladen.importvorgang.sha256,
@@ -243,6 +263,7 @@ class ErgebnisaggregationService:
             p_sha256,
             a_d_sha256,
             fingerabdruck,
+            tuple(sorted(set(datenquellen_ids))),
         )
 
     @staticmethod
@@ -254,6 +275,8 @@ class ErgebnisaggregationService:
         sollzeitdaten: Sollzeitdaten | None,
         zeitvergleich_konfiguration: ZeitvergleichKonfiguration | None,
         zeitvergleich_ausfuehren: bool,
+        ressourcenanalyse: RessourcenanalyseErgebnis | None = None,
+        ankunftsspalte: str = "",
     ) -> str:
         return _sha(
             {
@@ -264,6 +287,8 @@ class ErgebnisaggregationService:
                 "sollzeitdaten": sollzeitdaten,
                 "zeitvergleich_konfiguration": zeitvergleich_konfiguration,
                 "zeitvergleich_ausfuehren": zeitvergleich_ausfuehren,
+                "ressourcenanalyse": ressourcenanalyse,
+                "ankunftsspalte": ankunftsspalte,
             }
         )
 
@@ -277,6 +302,8 @@ class ErgebnisaggregationService:
         sollzeitdaten: Sollzeitdaten | None,
         zeitvergleich_konfiguration: ZeitvergleichKonfiguration | None,
         zeitvergleich_ausfuehren: bool,
+        ressourcenanalyse: RessourcenanalyseErgebnis | None = None,
+        ankunftsspalte: str = "",
     ) -> str:
         """Erlaubt der UI, geänderte Entscheidungen vor dem Speichern zu erkennen."""
         return self._konfigurationsfingerabdruck(
@@ -287,6 +314,8 @@ class ErgebnisaggregationService:
             sollzeitdaten,
             zeitvergleich_konfiguration,
             zeitvergleich_ausfuehren,
+            ressourcenanalyse,
+            ankunftsspalte,
         )
 
     def vorschau(
@@ -303,6 +332,8 @@ class ErgebnisaggregationService:
         sollzeit_tabelle: pd.DataFrame | None = None,
         zeitvergleich_konfiguration: ZeitvergleichKonfiguration | None = None,
         zeitvergleich_ausfuehren: bool = False,
+        ressourcenanalyse: RessourcenanalyseErgebnis | None = None,
+        ankunftsspalte: str = "",
     ) -> Aggregationsvorschau:
         """Berechnet die drei unabhängigen Bestandteile auf tiefen Arbeitskopien."""
         basis = self.grundlage_laden(projekt_id, freigabe_id, analyse_id)
@@ -392,6 +423,63 @@ class ErgebnisaggregationService:
                         )
                     except Domaenenfehler as fehler:
                         warnungen.append(f"Soll-Ist-Zeitauswertung wurde nicht berechnet: {fehler}")
+        if ressourcenanalyse is None:
+            ressourcenanalyse = analysiere_ressourcen(basis.event_log)
+        elif ressourcenanalyse.modus is Ressourcenzuordnungsmodus.MANUELL:
+            ressourcenanalyse = analysiere_ressourcen(
+                basis.event_log,
+                manuelle_zuordnungen={
+                    wert.aktivitaet: wert.ressourcen for wert in ressourcenanalyse.zuordnungen
+                },
+            )
+        elif ressourcenanalyse.modus is Ressourcenzuordnungsmodus.NICHT_MOEGLICH:
+            if not ressourcenanalyse.begruendung.strip():
+                raise Domaenenfehler(
+                    "Eine nicht mögliche Ressourcenzuordnung benötigt eine Begründung."
+                )
+            ressourcenanalyse = analysiere_ressourcen(
+                basis.event_log,
+                nicht_moeglich_begruendung=ressourcenanalyse.begruendung,
+            )
+            if ressourcenanalyse.modus is Ressourcenzuordnungsmodus.AUTOMATISCH:
+                raise Domaenenfehler(
+                    "Eine vollständige kanonische Ressourcenzuordnung darf nicht als nicht "
+                    "möglich dokumentiert werden."
+                )
+        else:
+            automatisch = analysiere_ressourcen(basis.event_log)
+            if automatisch != ressourcenanalyse:
+                raise Domaenenfehler(
+                    "Die automatische Ressourcenzuordnung stimmt nicht mit E* überein."
+                )
+        warteschlangenanalyse = analysiere_warteschlangen(basis.event_log)
+        zeitbezogene_datenauswahl = analysiere_zeitbezogene_datenauswahl(
+            basis.zwischendaten,
+            basis.event_log,
+            ankunftsspalte=ankunftsspalte,
+            datenbasis_referenzen={
+                "Q": {
+                    "datenquellen_ids": list(basis.datenquellen_ids)
+                },
+                "R": {
+                    "profile": [
+                        {
+                            "import_id": wert.get("import_id"),
+                            "profil_sha256": wert.get("profil_sha256"),
+                        }
+                        for wert in basis.profilreferenzen
+                    ]
+                },
+                "T": {
+                    "id": str(basis.zwischendatensatz.zwischendatensatz_id),
+                    "sha256": basis.zwischendatensatz.sha256,
+                },
+                "E*": {
+                    "id": str(basis.freigabe.event_log_id),
+                    "sha256": basis.freigabe.event_log_sha256,
+                },
+            },
+        )
         fingerabdruck = self._konfigurationsfingerabdruck(
             kpi_konfigurationen,
             sollmodell,
@@ -400,6 +488,8 @@ class ErgebnisaggregationService:
             sollzeitdaten,
             zeitvergleich_konfiguration,
             zeitvergleich_ausfuehren,
+            ressourcenanalyse,
+            ankunftsspalte,
         )
         pd.testing.assert_frame_equal(basis.zwischendaten, t_original, check_dtype=True)
         pd.testing.assert_frame_equal(basis.event_log, e_original, check_dtype=True)
@@ -415,6 +505,10 @@ class ErgebnisaggregationService:
             zeitvergleich,
             tuple(warnungen),
             fingerabdruck,
+            ressourcenanalyse,
+            warteschlangenanalyse,
+            zeitbezogene_datenauswahl,
+            ankunftsspalte,
         )
 
     def speichern(
@@ -446,6 +540,57 @@ class ErgebnisaggregationService:
             raise Domaenenfehler(
                 "U, R, T, E*, P oder A_D wurde seit der Vorschau verändert; eine "
                 "Neuberechnung ist erforderlich."
+            )
+        if vorschau.ressourcenanalyse is None:
+            raise Domaenenfehler("Die strukturierte Ressourcenanalyse der Vorschau fehlt.")
+        if vorschau.ressourcenanalyse.modus is Ressourcenzuordnungsmodus.MANUELL:
+            erwartete_ressourcen = analysiere_ressourcen(
+                basis.event_log,
+                manuelle_zuordnungen={
+                    wert.aktivitaet: wert.ressourcen
+                    for wert in vorschau.ressourcenanalyse.zuordnungen
+                },
+            )
+        elif vorschau.ressourcenanalyse.modus is Ressourcenzuordnungsmodus.NICHT_MOEGLICH:
+            erwartete_ressourcen = analysiere_ressourcen(
+                basis.event_log,
+                nicht_moeglich_begruendung=vorschau.ressourcenanalyse.begruendung,
+            )
+        else:
+            erwartete_ressourcen = analysiere_ressourcen(basis.event_log)
+        erwartete_warteschlangen = analysiere_warteschlangen(basis.event_log)
+        erwartete_zeitdaten = analysiere_zeitbezogene_datenauswahl(
+            basis.zwischendaten,
+            basis.event_log,
+            ankunftsspalte=vorschau.ankunftsspalte,
+            datenbasis_referenzen={
+                "Q": {"datenquellen_ids": list(basis.datenquellen_ids)},
+                "R": {
+                    "profile": [
+                        {
+                            "import_id": wert.get("import_id"),
+                            "profil_sha256": wert.get("profil_sha256"),
+                        }
+                        for wert in basis.profilreferenzen
+                    ]
+                },
+                "T": {
+                    "id": str(basis.zwischendatensatz.zwischendatensatz_id),
+                    "sha256": basis.zwischendatensatz.sha256,
+                },
+                "E*": {
+                    "id": str(basis.freigabe.event_log_id),
+                    "sha256": basis.freigabe.event_log_sha256,
+                },
+            },
+        )
+        if (
+            vorschau.ressourcenanalyse != erwartete_ressourcen
+            or vorschau.warteschlangenanalyse != erwartete_warteschlangen
+            or vorschau.zeitbezogene_datenauswahl != erwartete_zeitdaten
+        ):
+            raise Domaenenfehler(
+                "Die strukturierten Schritt-7-Ergebnisse sind nicht mehr reproduzierbar."
             )
         projekt_id = basis.projekt.projekt_id
         basis_pfad = PurePosixPath("projects") / str(projekt_id) / "aggregation"
@@ -648,10 +793,28 @@ class ErgebnisaggregationService:
                 "sha256": basis.discovery_ergebnisse_sha256,
                 "bedeutung": "Unveränderte Referenz; A_D wurde weder kopiert noch verändert.",
             },
+            "prozessbelege": {
+                "ergebnisversion": 1,
+                "quelle": "A_D/P",
+                "start_und_endaktivitaeten": {
+                    "startaktivitaeten": basis.discovery_ergebnisse.get("dfg_daten", {}).get(
+                        "startaktivitaeten", []
+                    ),
+                    "endaktivitaeten": basis.discovery_ergebnisse.get("dfg_daten", {}).get(
+                        "endaktivitaeten", []
+                    ),
+                },
+            },
             "ausgewaehlte_kpi_ids": list(basis.projekt.untersuchungsauftrag.ausgewaehlte_kpi_ids),
             "kpi_definitionen_version": 1,
             "kpi_konfigurationen": vorschau.kpi_konfigurationen,
             "kpi_ergebnisse": vorschau.kpi_ergebnisse,
+            "strukturierte_ergebnisse": {
+                "ergebnisversion": STRUKTURIERTE_ERGEBNISVERSION,
+                "ressourcen": vorschau.ressourcenanalyse,
+                "warteschlangen_und_wartezeiten": vorschau.warteschlangenanalyse,
+                "zeitbezogene_datenauswahl": vorschau.zeitbezogene_datenauswahl,
+            },
             "optionale_artefakte": referenzen,
             "pm4py_version": basis.analyse.pm4py_version,
             "lineage": {
@@ -707,7 +870,7 @@ class ErgebnisaggregationService:
                 "A_G ist kein gültiges Aggregationsartefakt."
             ) from fehler
         if (
-            a_g.get("artefaktversion") != AG_ARTEFAKTVERSION
+            a_g.get("artefaktversion") not in AG_LESBARE_ARTEFAKTVERSIONEN
             or a_g.get("artefaktart") != AG_ARTEFAKTART
             or a_g.get("aggregations_id") != str(aggregation.aggregations_id)
             or a_g.get("projekt_id") != str(aggregation.projekt_id)

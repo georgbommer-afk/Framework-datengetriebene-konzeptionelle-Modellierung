@@ -1,10 +1,9 @@
 """Verträge der gemeinsamen Reporting-Pipeline für Schritt 10."""
 
 import copy
-import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -51,45 +50,67 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
         elif bestandteil_id == "warteschlangen" and neue_felder:
             informationen.append(
                 _information(
-                    "start_timestamp_end_timestamp.positive_uebergangsdifferenzen",
-                    [
-                        {
-                            "uebergang": {"von": "A", "zu": "B"},
-                            "positive_hinweise": 2,
-                            "mittlere_wartezeit_sekunden": 90.0,
-                            "mediane_wartezeit_sekunden": 90.0,
-                        }
-                    ],
+                    "strukturierte_ergebnisse.warteschlangen_und_wartezeiten",
+                    {
+                        "status": "ableitbar",
+                        "berechnungsregel": "Start(B) − Ende(A)",
+                        "uebergaenge": [
+                            {
+                                "von_aktivitaet": "A",
+                                "zu_aktivitaet": "B",
+                                "statistik": {
+                                    "anzahl": 2,
+                                    "mittelwert_sekunden": 90.0,
+                                    "median_sekunden": 90.0,
+                                },
+                            }
+                        ],
+                    },
+                    "A_G",
                 )
             )
         elif bestandteil_id == "ressourcen" and neue_felder:
             informationen.append(
                 _information(
-                    "schema.resource",
+                    "strukturierte_ergebnisse.ressourcen",
                     {
-                        "attribut": "resource",
-                        "eindeutige_werte": ["M1", "M2"],
-                        "aktivitaet_ressourcen": [{"aktivitaet": "A", "ressourcen": ["M1", "M2"]}],
+                        "modus": "manuell",
+                        "herkunft": "menschlich bestätigte Zuordnung in Schritt 7",
+                        "quellspalte": "",
+                        "zuordnungen": [
+                            {"aktivitaet": "A", "ressourcen": ["M1", "M2"]}
+                        ],
                     },
+                    "A_G",
                 )
             )
-            menschliche_eintraege.append(
-                {
-                    "eintragstyp": "behandlung_offener_eintrag",
-                    "fachliche_ergaenzung_oder_begruendung": json.dumps(
-                        {
-                            "aktivitaet_ressourcen": [
-                                {
-                                    "aktivitaet": "B",
-                                    "ressourcen": [],
-                                    "status": "bewusst_offen",
-                                    "menschliche_entscheidung": True,
-                                }
-                            ]
-                        }
-                    ),
-                    "menschliche_entscheidung": True,
-                }
+        elif bestandteil_id == "datenauswahl_und_daten" and neue_felder:
+            informationen.append(
+                _information(
+                    "strukturierte_ergebnisse.zeitbezogene_datenauswahl",
+                    {
+                        "bestaetigte_datenbasis": ["Q", "R", "T", "E*"],
+                        "ankunftsregel": (
+                            "Erster gültiger kanonischer Ereigniszeitstempel je Fall."
+                        ),
+                        "zwischenankunftszeit": {
+                            "anzahl": 2,
+                            "mittelwert_sekunden": 120.0,
+                            "median_sekunden": 120.0,
+                        },
+                        "bearbeitungszeiten": [
+                            {
+                                "aktivitaet": "A",
+                                "statistik": {
+                                    "anzahl": 2,
+                                    "mittelwert_sekunden": 60.0,
+                                    "median_sekunden": 60.0,
+                                },
+                            }
+                        ],
+                    },
+                    "A_G",
+                )
             )
         elif bestandteil_id == "darstellung_der_vorgaenge_des_systems":
             informationen.append(
@@ -146,11 +167,15 @@ def test_build_report_data_projiziert_neue_felder_ohne_k_stern_mutation() -> Non
     report = build_report_data(k_stern)
 
     assert k_stern == vorher
-    assert report["warteschlangen"]["wartestellenhinweise"][0]["positive_hinweise"] == 2
+    assert report["warteschlangen"]["wartestellenhinweise"][0]["anzahl"] == 2
     assert report["ressourcen"]["aktivitaet_ressourcen"] == [
         {"aktivitaet": "A", "ressourcen": ["M1", "M2"]}
     ]
-    assert report["ressourcen"]["manuelle_aktivitaet_ressourcen"][0]["status"] == ("bewusst_offen")
+    assert report["ressourcen"]["zuordnungsmodus"] == "manuell"
+    assert report["ressourcen"]["zuordnungsherkunft"].endswith("Schritt 7")
+    assert report["daten"]["zeitbezogene_datenauswahl"]["zwischenankunftszeit"][
+        "median_sekunden"
+    ] == 120.0
 
 
 def test_aelteres_k_stern_ohne_optionale_felder_bleibt_renderbar(tmp_path: Path) -> None:
@@ -164,6 +189,28 @@ def test_aelteres_k_stern_ohne_optionale_felder_bleibt_renderbar(tmp_path: Path)
     assert "<!DOCTYPE html>" in render_report_html(report)
     ziel = render_report_pdf(report, tmp_path / "alt.pdf")
     assert ziel.read_bytes().startswith(b"%PDF-")
+
+
+def test_automatische_und_manuelle_ressourcen_werden_gleichwertig_mit_ursprung_berichtet() -> None:
+    manuell = build_report_data(_k_stern())
+    automatisch_k = _k_stern()
+    bestandteile = cast(list[dict[str, Any]], automatisch_k["modellbestandteile"])
+    ressourcen = next(
+        wert
+        for wert in bestandteile
+        if wert["bestandteil_id"] == "ressourcen"
+    )
+    information = ressourcen["urspruenglicher_bestandteil"]["informationen"][0]
+    information["wert"]["modus"] = "automatisch"
+    information["wert"]["herkunft"] = "kanonische Ressourcenspalte in E*"
+
+    automatisch = build_report_data(automatisch_k)
+
+    assert automatisch["ressourcen"]["aktivitaet_ressourcen"] == manuell["ressourcen"][
+        "aktivitaet_ressourcen"
+    ]
+    assert automatisch["ressourcen"]["zuordnungsmodus"] == "automatisch"
+    assert automatisch["ressourcen"]["zuordnungsherkunft"].startswith("kanonische")
 
 
 def test_build_report_data_weist_unvollstaendige_struktur_kontrolliert_ab() -> None:
@@ -220,9 +267,11 @@ def test_html_renderer_bettet_die_einzige_css_quelle_und_svgs_ein(tmp_path: Path
 
     assert '<link rel="stylesheet" href="report_html.css">' not in html
     assert f"<style>\n{css}\n</style>" in html
-    assert "Positive Wartestellenhinweise" in html
-    assert "Beobachtete Aktivität-Ressourcen-Zuordnungen" in html
-    assert "bewusst offen" in html
+    assert "Übergangswartezeiten aus Schritt 7" in html
+    assert "Aktivität-Ressourcen-Zuordnungen" in html
+    assert "menschlich bestätigte Zuordnung in Schritt 7" in html
+    assert "Zwischenankunftszeit" in html
+    assert "Ende(A) − Start(A)" in html
 
 
 def test_pdf_renderer_verwendet_pdf_template_und_css(tmp_path: Path) -> None:

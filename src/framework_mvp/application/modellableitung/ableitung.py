@@ -4,9 +4,8 @@ import tempfile
 from collections.abc import Hashable, Iterable
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-import pandas as pd
 import pm4py
 from pm4py.objects.bpmn.obj import BPMN
 
@@ -26,7 +25,7 @@ from framework_mvp.domain.models import (
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 
-MAPPINGVERSION = 1
+MAPPINGVERSION = 2
 
 MODELLBESTANDTEILE = (
     ModellbestandteilDefinition(
@@ -74,10 +73,7 @@ MODELLBESTANDTEILE = (
     ModellbestandteilDefinition(
         ModellbestandteilId.WARTESCHLANGEN,
         "Warteschlangen",
-        (
-            Eingangsartefakt.EVENT_LOG_E_STERN,
-            Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
-        ),
+        (Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,),
         True,
     ),
     ModellbestandteilDefinition(
@@ -85,7 +81,6 @@ MODELLBESTANDTEILE = (
         "Ressourcen",
         (
             Eingangsartefakt.SYSTEMPROFIL_S,
-            Eingangsartefakt.EVENT_LOG_E_STERN,
             Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
         ),
     ),
@@ -106,6 +101,7 @@ MODELLBESTANDTEILE = (
             Eingangsartefakt.DATENPROFIL_R,
             Eingangsartefakt.ZWISCHENDATENSATZ_T,
             Eingangsartefakt.EVENT_LOG_E_STERN,
+            Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
         ),
     ),
     ModellbestandteilDefinition(
@@ -353,11 +349,14 @@ def _umfang(sammlung: _Sammlung, aktivitaeten: tuple[str, ...]) -> None:
         aktivitaeten,
         Uebernahmeart.METADATENZUSAMMENFASSUNG,
     )
-    dfg = sammlung.basis.discovery_ergebnisse.get("dfg_daten", {})
+    dfg = sammlung.basis.a_g.get("prozessbelege", {}).get(
+        "start_und_endaktivitaeten",
+        sammlung.basis.discovery_ergebnisse.get("dfg_daten", {}),
+    )
     sammlung.info(
         ModellbestandteilId.MODELLUMFANG_GRENZEN_DETAILLIERUNG,
         Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
-        "discovery_ergebnisse_a_d.dfg.start_und_endaktivitaeten",
+        "prozessbelege.start_und_endaktivitaeten",
         {
             "startaktivitaeten": dfg.get("startaktivitaeten", []),
             "endaktivitaeten": dfg.get("endaktivitaeten", []),
@@ -399,15 +398,17 @@ def _entitaeten_aktivitaeten(sammlung: _Sammlung, aktivitaeten: tuple[str, ...])
             "systemprofil.objekte_gueter",
             objekte,
         )
+    datenauswahl = sammlung.basis.a_g.get("strukturierte_ergebnisse", {}).get(
+        "zeitbezogene_datenauswahl", {}
+    )
+    umfang = datenauswahl.get("umfang_e_stern", {}) if isinstance(datenauswahl, dict) else {}
     sammlung.info(
         ModellbestandteilId.ENTITAETEN,
         Eingangsartefakt.EVENT_LOG_E_STERN,
         "schema.case_id",
         {
             "kanonisches_attribut": "case_id",
-            "fallanzahl": len(
-                cast("pd.Series", sammlung.basis.event_log["case_id"]).dropna().unique()
-            ),
+            "fallanzahl": umfang.get("fallanzahl"),
         },
         Uebernahmeart.METADATENZUSAMMENFASSUNG,
     )
@@ -461,75 +462,30 @@ def _warteschlangen_ressourcen(sammlung: _Sammlung) -> None:
             f"kpi_ergebnisse.wartezeit[{index}]",
             wert,
         )
-    e_stern = sammlung.basis.event_log
-    wartehinweise: list[dict[str, Any]] = []
-    if {"case_id", "activity", "start_timestamp", "end_timestamp"} <= set(e_stern.columns):
-        arbeitskopie = e_stern.copy(deep=True)
-        arbeitskopie["start_timestamp"] = pd.to_datetime(
-            arbeitskopie["start_timestamp"], errors="coerce", utc=True
+    strukturiert = sammlung.basis.a_g.get("strukturierte_ergebnisse", {})
+    warteschlangen = (
+        strukturiert.get("warteschlangen_und_wartezeiten", {})
+        if isinstance(strukturiert, dict)
+        else {}
+    )
+    if isinstance(warteschlangen, dict) and warteschlangen:
+        sammlung.info(
+            ModellbestandteilId.WARTESCHLANGEN,
+            Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
+            "strukturierte_ergebnisse.warteschlangen_und_wartezeiten",
+            warteschlangen,
+            Uebernahmeart.METADATENZUSAMMENFASSUNG,
         )
-        arbeitskopie["end_timestamp"] = pd.to_datetime(
-            arbeitskopie["end_timestamp"], errors="coerce", utc=True
-        )
-        arbeitskopie = arbeitskopie.dropna(subset=["case_id"])
-        arbeitskopie["_reihenfolge"] = range(len(arbeitskopie))
-        differenzen: list[dict[str, Any]] = []
-        for _, fall in arbeitskopie.groupby("case_id", sort=False, dropna=False):
-            sortiert = fall.sort_values(
-                ["start_timestamp", "_reihenfolge"], kind="stable", na_position="last"
-            )
-            for position in range(len(sortiert) - 1):
-                aktuell = sortiert.iloc[position]
-                folgend = sortiert.iloc[position + 1]
-                if (
-                    pd.isna(aktuell["activity"])
-                    or pd.isna(folgend["activity"])
-                    or not str(aktuell["activity"]).strip()
-                    or not str(folgend["activity"]).strip()
-                    or pd.isna(aktuell["end_timestamp"])
-                    or pd.isna(folgend["start_timestamp"])
-                ):
-                    continue
-                delta = folgend["start_timestamp"] - aktuell["end_timestamp"]
-                sekunden = float(delta.total_seconds())
-                if sekunden <= 0:
-                    continue
-                differenzen.append(
-                    {
-                        "von_aktivitaet": str(aktuell["activity"]),
-                        "zu_aktivitaet": str(folgend["activity"]),
-                        "wartezeit_sekunden": sekunden,
-                    }
-                )
-        if differenzen:
-            differenz_tabelle = pd.DataFrame(differenzen)
-            for schluessel, gruppe in differenz_tabelle.groupby(
-                ["von_aktivitaet", "zu_aktivitaet"], sort=True
-            ):
-                von, zu = cast(tuple[Hashable, Hashable], schluessel)
-                wartezeiten = cast(pd.Series, gruppe["wartezeit_sekunden"])
-                wartehinweise.append(
-                    {
-                        "uebergang": {"von": von, "zu": zu},
-                        "positive_hinweise": len(gruppe),
-                        "mittlere_wartezeit_sekunden": float(wartezeiten.mean()),
-                        "mediane_wartezeit_sekunden": float(wartezeiten.median()),
-                    }
-                )
-            sammlung.info(
-                ModellbestandteilId.WARTESCHLANGEN,
-                Eingangsartefakt.EVENT_LOG_E_STERN,
-                "start_timestamp_end_timestamp.positive_uebergangsdifferenzen",
-                tuple(wartehinweise),
-                Uebernahmeart.METADATENZUSAMMENFASSUNG,
-            )
-    if not warte_kpis and not wartehinweise:
+    if not warteschlangen or warteschlangen.get("status") != "ableitbar":
         sammlung.oeffnen(
             ModellbestandteilId.WARTESCHLANGEN,
             Offenheitskategorie.NICHT_ABLEITBAR,
-            "E* enthält keine ableitbaren positiven Übergangsdifferenzen aus ausdrücklich "
-            "vorhandenen Start-/Endzeitstempeln und A_G keine ausdrücklich dokumentierte "
-            "Warteinformation. Andere Spalten werden nicht als Warteschlange interpretiert.",
+            str(warteschlangen.get("begruendung"))
+            if isinstance(warteschlangen, dict) and warteschlangen.get("begruendung")
+            else (
+                "A_G enthält keine in Schritt 7 strukturiert ermittelte "
+                "Übergangswartezeitanalyse. Schritt 8 berechnet sie nicht erneut aus E*."
+            ),
         )
     sammlung.oeffnen(
         ModellbestandteilId.WARTESCHLANGEN,
@@ -551,31 +507,15 @@ def _warteschlangen_ressourcen(sammlung: _Sammlung) -> None:
             ressourcen,
             Uebernahmeart.METADATENZUSAMMENFASSUNG,
         )
-    if "resource" in sammlung.basis.event_log.columns:
-        ressourcendaten = sammlung.basis.event_log.loc[:, ["activity", "resource"]].copy()
-        ressourcendaten["activity"] = ressourcendaten["activity"].astype("string").str.strip()
-        ressourcendaten["resource"] = ressourcendaten["resource"].astype("string").str.strip()
-        ressourcendaten = (
-            ressourcendaten.dropna()
-            .loc[lambda tabelle: tabelle["activity"].ne("") & tabelle["resource"].ne("")]
-            .drop_duplicates()
-        )
-        gruppiert = tuple(
-            {
-                "aktivitaet": str(aktivitaet),
-                "ressourcen": tuple(sorted(gruppe["resource"].astype(str).unique())),
-            }
-            for aktivitaet, gruppe in ressourcendaten.groupby("activity", sort=True)
-        )
+    ressourcenanalyse = (
+        strukturiert.get("ressourcen", {}) if isinstance(strukturiert, dict) else {}
+    )
+    if isinstance(ressourcenanalyse, dict) and ressourcenanalyse:
         sammlung.info(
             ModellbestandteilId.RESSOURCEN,
-            Eingangsartefakt.EVENT_LOG_E_STERN,
-            "schema.resource",
-            {
-                "attribut": "resource",
-                "eindeutige_werte": tuple(sorted(ressourcendaten["resource"].astype(str).unique())),
-                "aktivitaet_ressourcen": gruppiert,
-            },
+            Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
+            "strukturierte_ergebnisse.ressourcen",
+            ressourcenanalyse,
             Uebernahmeart.METADATENZUSAMMENFASSUNG,
         )
     ressourcen_kpis = [
@@ -589,15 +529,18 @@ def _warteschlangen_ressourcen(sammlung: _Sammlung) -> None:
             ressourcen_kpis,
             Uebernahmeart.METADATENZUSAMMENFASSUNG,
         )
-    if "resource" not in sammlung.basis.event_log.columns:
+    if not ressourcenanalyse or ressourcenanalyse.get("modus") == "nicht_moeglich":
         sammlung.oeffnen(
             ModellbestandteilId.RESSOURCEN,
             Offenheitskategorie.NICHT_ABLEITBAR,
-            "E* enthält kein kanonisches Ressourcenattribut resource. Die Zuordnung jeder "
-            "Aktivität zu einer oder mehreren Ressourcen muss in Schritt 9 manuell dokumentiert "
-            "oder bewusst offen gelassen werden.",
+            str(ressourcenanalyse.get("begruendung"))
+            if isinstance(ressourcenanalyse, dict) and ressourcenanalyse.get("begruendung")
+            else (
+                "A_G enthält keine in Schritt 7 abgeschlossene Ressourcenzuordnung. "
+                "Schritt 8 und Schritt 9 erzeugen keine initiale Ersatzzuordnung."
+            ),
         )
-    else:
+    if not ressourcenanalyse or ressourcenanalyse.get("modus") != "nicht_moeglich":
         sammlung.oeffnen(
             ModellbestandteilId.RESSOURCEN,
             Offenheitskategorie.NICHT_ABLEITBAR,
@@ -638,15 +581,12 @@ def _annahmen(sammlung: _Sammlung) -> None:
                     "Seltenes Verhalten ist möglicherweise nicht in P enthalten."
                 ),
                 "unveraendert": ("vollständiger DFG", "E*"),
+                "einordnung": (
+                    "k ist eine technische Abstraktions- und Darstellungsentscheidung und "
+                    "kein fachlicher Detaillierungsgrad."
+                ),
             },
             Uebernahmeart.METADATENZUSAMMENFASSUNG,
-        )
-        sammlung.oeffnen(
-            ModellbestandteilId.ANNAHMEN_UND_VEREINFACHUNGEN,
-            Offenheitskategorie.FACHLICH_UNSICHER,
-            "Bei k > 0 kann seltenes Verhalten in P abstrahiert sein. Der vollständige DFG und "
-            "E* bleiben unberührt; die fachliche Auswirkung ist in Schritt 9 zu prüfen.",
-            ({"artefakt": "A_G", "pfad": "discovery_ergebnisse_a_d.schwellwert_k"},),
         )
     sammlung.oeffnen(
         ModellbestandteilId.ANNAHMEN_UND_VEREINFACHUNGEN,
@@ -677,6 +617,12 @@ def _daten_und_darstellung(sammlung: _Sammlung) -> None:
             sha256=str(profil["profil_sha256"]),
         )
     t = sammlung.basis.zwischendatensatz
+    strukturierte_ergebnisse = sammlung.basis.a_g.get("strukturierte_ergebnisse", {})
+    zeitdaten = (
+        strukturierte_ergebnisse.get("zeitbezogene_datenauswahl", {})
+        if isinstance(strukturierte_ergebnisse, dict)
+        else {}
+    )
     sammlung.info(
         ModellbestandteilId.DATENAUSWAHL_UND_DATEN,
         Eingangsartefakt.ZWISCHENDATENSATZ_T,
@@ -685,37 +631,43 @@ def _daten_und_darstellung(sammlung: _Sammlung) -> None:
             "zwischendatensatz_id": str(t.zwischendatensatz_id),
             "zeilenanzahl": t.zeilenanzahl,
             "spaltenanzahl": t.spaltenanzahl,
-            "schema": [
-                {"name": str(name), "datentyp": str(typ)}
-                for name, typ in sammlung.basis.zwischendaten.dtypes.items()
-            ],
+            "schema": zeitdaten.get("schema_t", [])
+            if isinstance(zeitdaten, dict)
+            else [],
             "relativer_daten_pfad": t.relativer_daten_pfad,
             "relativer_schema_pfad": t.relativer_schema_pfad,
         },
         Uebernahmeart.METADATENZUSAMMENFASSUNG,
     )
-    e = sammlung.basis.event_log
+    umfang = zeitdaten.get("umfang_e_stern", {}) if isinstance(zeitdaten, dict) else {}
     sammlung.info(
         ModellbestandteilId.DATENAUSWAHL_UND_DATEN,
         Eingangsartefakt.EVENT_LOG_E_STERN,
         "schema_umfang_zeitraum_und_referenz",
         {
             "event_log_id": str(sammlung.basis.freigabe.event_log_id),
-            "ereignisanzahl": len(e),
-            "fallanzahl": len(cast("pd.Series", e["case_id"]).dropna().unique()),
-            "aktivitaetsanzahl": len(cast("pd.Series", e["activity"]).dropna().unique()),
-            "zeitraum_von": e["timestamp"].min(),
-            "zeitraum_bis": e["timestamp"].max(),
-            "schema": [{"name": str(name), "datentyp": str(typ)} for name, typ in e.dtypes.items()],
+            **umfang,
+            "schema": zeitdaten.get("schema_e_stern", [])
+            if isinstance(zeitdaten, dict)
+            else [],
         },
         Uebernahmeart.METADATENZUSAMMENFASSUNG,
     )
-    sammlung.oeffnen(
-        ModellbestandteilId.DATENAUSWAHL_UND_DATEN,
-        Offenheitskategorie.NICHT_ABLEITBAR,
-        "Die Rollen als Kontext-, Modell- oder Validierungsdaten sind nicht ausdrücklich "
-        "festgelegt und werden nicht automatisch zugeordnet.",
-    )
+    if isinstance(zeitdaten, dict) and zeitdaten:
+        sammlung.info(
+            ModellbestandteilId.DATENAUSWAHL_UND_DATEN,
+            Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
+            "strukturierte_ergebnisse.zeitbezogene_datenauswahl",
+            zeitdaten,
+            Uebernahmeart.METADATENZUSAMMENFASSUNG,
+        )
+    else:
+        sammlung.oeffnen(
+            ModellbestandteilId.DATENAUSWAHL_UND_DATEN,
+            Offenheitskategorie.NICHT_ABLEITBAR,
+            "Das lesbare A_G v1 enthält noch keine strukturierte zeitbezogene Datenauswahl. "
+            "Schritt 8 berechnet diese nicht nachträglich.",
+        )
     sammlung.info(
         ModellbestandteilId.DARSTELLUNG_DER_VORGAENGE,
         Eingangsartefakt.PROZESSMODELL_P,

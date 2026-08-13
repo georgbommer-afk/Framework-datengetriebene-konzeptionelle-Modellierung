@@ -868,7 +868,7 @@
         %}
 
         {% if wartestellenhinweise %}
-            <h3 class="pdf-subheading">Positive Wartestellenhinweise</h3>
+            <h3 class="pdf-subheading">Übergangswartezeiten aus Schritt 7</h3>
             <div class="pdf-kpi-list">
                 {% for hinweis in wartestellenhinweise %}
                     <div class="pdf-kpi-row">
@@ -876,7 +876,7 @@
                             {{ hinweis.get("uebergang", {}).get("von", "–") }}
                             →
                             {{ hinweis.get("uebergang", {}).get("zu", "–") }}
-                            · n={{ hinweis.get("positive_hinweise", "–") }}
+                            · n={{ hinweis.get("anzahl", hinweis.get("positive_hinweise", "–")) }}
                         </div>
                         <div class="pdf-kpi-value">
                             Ø {{ hinweis.get("mittlere_wartezeit_sekunden", "–") }} s
@@ -970,8 +970,17 @@
             <div class="pdf-inner-block">
 
                 <h2>
-                    Im Event Log beobachtet
+                    In Schritt 7 zugeordnet
                 </h2>
+
+                {% if ressourcen.get("zuordnungsmodus") %}
+                    <div class="pdf-inline-meta">
+                        Modus: <strong>{{ ressourcen.get("zuordnungsmodus") }}</strong>
+                        {% if ressourcen.get("zuordnungsherkunft") %}
+                            · {{ ressourcen.get("zuordnungsherkunft") }}
+                        {% endif %}
+                    </div>
+                {% endif %}
 
                 {% set event_log_ressourcen =
                     ressourcen.get("event_log_ressourcen", [])
@@ -1005,7 +1014,7 @@
                 {% else %}
 
                     <span class="pdf-empty">
-                        Keine Ressourcen im Event Log beobachtet.
+                        Keine Ressourcenzuordnung aus Schritt 7 vorhanden.
                     </span>
 
                 {% endif %}
@@ -1367,6 +1376,49 @@
     
                 {% endfor %}
     
+            {% endif %}
+
+            {% set zeitdaten = daten.get("zeitbezogene_datenauswahl", {}) %}
+            {% if zeitdaten %}
+                <h3 class="pdf-subheading">Zeitbezogene Datenauswahl aus Schritt 7</h3>
+                <div class="pdf-kv-list">
+                    <div class="pdf-kv-row">
+                        <div class="pdf-kv-label">Ankunftsregel</div>
+                        <div class="pdf-kv-value">{{ zeitdaten.get("ankunftsregel", "–") }}</div>
+                    </div>
+                    <div class="pdf-kv-row">
+                        <div class="pdf-kv-label">Bearbeitungszeit</div>
+                        <div class="pdf-kv-value">Ende(A) − Start(A)</div>
+                    </div>
+                    <div class="pdf-kv-row">
+                        <div class="pdf-kv-label">Übergangswartezeit</div>
+                        <div class="pdf-kv-value">Start(B) − Ende(A)</div>
+                    </div>
+                    {% set zwischenankunft = zeitdaten.get("zwischenankunftszeit") %}
+                    {% if zwischenankunft %}
+                        <div class="pdf-kv-row">
+                            <div class="pdf-kv-label">Zwischenankunftszeit</div>
+                            <div class="pdf-kv-value">
+                                Median {{ zwischenankunft.get("median_sekunden", "–") }} s
+                                · Ø {{ zwischenankunft.get("mittelwert_sekunden", "–") }} s
+                            </div>
+                        </div>
+                    {% endif %}
+                </div>
+                {% if zeitdaten.get("bearbeitungszeiten") %}
+                    <div class="pdf-kpi-list">
+                        {% for wert in zeitdaten.get("bearbeitungszeiten", []) %}
+                            <div class="pdf-kpi-row">
+                                <div class="pdf-kpi-name">
+                                    Bearbeitungszeit {{ wert.get("aktivitaet", "–") }}
+                                </div>
+                                <div class="pdf-kpi-value">
+                                    Median {{ wert.get("statistik", {}).get("median_sekunden", "–") }} s
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
             {% endif %}
     
     

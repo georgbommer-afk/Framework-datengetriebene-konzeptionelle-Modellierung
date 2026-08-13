@@ -854,7 +854,10 @@
 
     {% if warteschlangen.wartestellenhinweise %}
         <div class="content-card">
-            <h2>Positive Wartestellenhinweise aus E*</h2>
+            <h2>Übergangswartezeiten aus Schritt 7</h2>
+            {% if warteschlangen.berechnungsregel %}
+                <p class="supporting-text">{{ warteschlangen.berechnungsregel }}</p>
+            {% endif %}
             <table class="data-table">
                 <thead>
                     <tr>
@@ -872,7 +875,7 @@
                                 →
                                 {{ hinweis.get("uebergang", {}).get("zu", "–") }}
                             </td>
-                            <td>{{ hinweis.get("positive_hinweise", "–") }}</td>
+                            <td>{{ hinweis.get("anzahl", hinweis.get("positive_hinweise", "–")) }}</td>
                             <td>{{ hinweis.get("mittlere_wartezeit_sekunden", "–") }}</td>
                             <td>{{ hinweis.get("mediane_wartezeit_sekunden", "–") }}</td>
                         </tr>
@@ -930,7 +933,16 @@
     {% endif %}
 
     <div class="content-card">
-        <h2>Im Event Log beobachtete Ressourcen</h2>
+        <h2>In Schritt 7 zugeordnete Ressourcen</h2>
+
+        {% if ressourcen.zuordnungsmodus %}
+            <p class="supporting-text">
+                Modus: <strong>{{ ressourcen.zuordnungsmodus }}</strong>
+                {% if ressourcen.zuordnungsherkunft %}
+                    · Ursprung: {{ ressourcen.zuordnungsherkunft }}
+                {% endif %}
+            </p>
+        {% endif %}
 
         {% if ressourcen.ressourcenattribut %}
             <p class="supporting-text">
@@ -946,7 +958,7 @@
 
     {% if ressourcen.aktivitaet_ressourcen %}
         <div class="content-card">
-            <h2>Beobachtete Aktivität-Ressourcen-Zuordnungen</h2>
+            <h2>Aktivität-Ressourcen-Zuordnungen</h2>
             <table class="data-table">
                 <thead><tr><th>Aktivität</th><th>Ressourcen</th></tr></thead>
                 <tbody>
@@ -963,7 +975,7 @@
 
     {% if ressourcen.manuelle_aktivitaet_ressourcen %}
         <div class="human-input">
-            <div class="human-input-title">Manuelle Ressourcenzuordnung aus Schritt 9</div>
+            <div class="human-input-title">Ressourcenzuordnung aus älterem K*-Artefakt</div>
             {% for zuordnung in ressourcen.manuelle_aktivitaet_ressourcen %}
                 <div class="human-input-entry">
                     <strong>{{ zuordnung.get("aktivitaet", "–") }}:</strong>
@@ -1294,6 +1306,44 @@
     {% else %}
         <div class="empty-block">
             Kein Event Log dokumentiert.
+        </div>
+    {% endif %}
+
+    {% if daten.zeitbezogene_datenauswahl %}
+        <div class="content-card">
+            <h2>Zeitbezogene Datenauswahl aus Schritt 7</h2>
+            <div class="kv-table">
+                {{ kv("Datenbasis", daten.zeitbezogene_datenauswahl.get("bestaetigte_datenbasis", []) | join(", ")) }}
+                {{ kv("Ankunftsregel", daten.zeitbezogene_datenauswahl.get("ankunftsregel")) }}
+                {{ kv("Bearbeitungszeit", "Ende(A) − Start(A)") }}
+                {{ kv("Übergangswartezeit", "Start(B) − Ende(A)") }}
+            </div>
+            {% set zwischenankunft = daten.zeitbezogene_datenauswahl.get("zwischenankunftszeit") %}
+            {% if zwischenankunft %}
+                <h3>Zwischenankunftszeit</h3>
+                <div class="kv-table">
+                    {{ kv("Anzahl", zwischenankunft.get("anzahl")) }}
+                    {{ kv("Mittelwert (s)", zwischenankunft.get("mittelwert_sekunden")) }}
+                    {{ kv("Median (s)", zwischenankunft.get("median_sekunden")) }}
+                </div>
+            {% endif %}
+            {% set bearbeitungszeiten = daten.zeitbezogene_datenauswahl.get("bearbeitungszeiten", []) %}
+            {% if bearbeitungszeiten %}
+                <h3>Bearbeitungszeiten · Ende(A) − Start(A)</h3>
+                <table class="data-table">
+                    <thead><tr><th>Aktivität</th><th>Anzahl</th><th>Mittelwert (s)</th><th>Median (s)</th></tr></thead>
+                    <tbody>
+                        {% for wert in bearbeitungszeiten %}
+                            <tr>
+                                <td>{{ wert.get("aktivitaet", "–") }}</td>
+                                <td>{{ wert.get("statistik", {}).get("anzahl", "–") }}</td>
+                                <td>{{ wert.get("statistik", {}).get("mittelwert_sekunden", "–") }}</td>
+                                <td>{{ wert.get("statistik", {}).get("median_sekunden", "–") }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% endif %}
         </div>
     {% endif %}
 

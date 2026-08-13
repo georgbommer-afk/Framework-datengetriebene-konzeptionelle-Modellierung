@@ -22,6 +22,21 @@ class KpiStatus(StrEnum):
     NICHT_BERECHENBAR = "nicht_berechenbar"
 
 
+class StrukturiertesErgebnisStatus(StrEnum):
+    """Ableitbarkeit eines in Schritt 7 strukturiert ermittelten Ergebnisses."""
+
+    ABLEITBAR = "ableitbar"
+    NICHT_MOEGLICH = "nicht_moeglich"
+
+
+class Ressourcenzuordnungsmodus(StrEnum):
+    """Dokumentierter Ursprung einer Aktivität-Ressourcen-Zuordnung."""
+
+    AUTOMATISCH = "automatisch"
+    MANUELL = "manuell"
+    NICHT_MOEGLICH = "nicht_moeglich"
+
+
 class Datenartefakt(StrEnum):
     """Zulässige Quellen einer KPI-Rechengröße."""
 
@@ -145,6 +160,86 @@ class KpiErgebnis:
     zwischensummen: dict[str, Any]
     ergebnis: float | None
     fehlende_voraussetzungen: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AktivitaetRessourcenZuordnung:
+    """Eindeutige Zuordnung einer Aktivität zu beobachteten oder bestätigten Ressourcen."""
+
+    aktivitaet: str
+    ressourcen: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RessourcenanalyseErgebnis:
+    """In Schritt 7 abgeschlossene Ressourcenentscheidung für A_G."""
+
+    modus: Ressourcenzuordnungsmodus
+    herkunft: str
+    zuordnungen: tuple[AktivitaetRessourcenZuordnung, ...]
+    begruendung: str = ""
+    quellspalte: str = ""
+    ergebnisversion: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class RobusteZeitstatistik:
+    """Robuste Zusammenfassung nichtnegativer Zeitdifferenzen in Sekunden."""
+
+    anzahl: int
+    mittelwert_sekunden: float
+    median_sekunden: float
+
+
+@dataclass(frozen=True, slots=True)
+class Uebergangswartezeit:
+    """Wartezeit zwischen zwei aufeinanderfolgenden Aktivitäten eines Falls."""
+
+    von_aktivitaet: str
+    zu_aktivitaet: str
+    statistik: RobusteZeitstatistik
+
+
+@dataclass(frozen=True, slots=True)
+class Aktivitaetsbearbeitungszeit:
+    """Bearbeitungszeit einer Aktivität aus kanonischem Start und Ende."""
+
+    aktivitaet: str
+    statistik: RobusteZeitstatistik
+
+
+@dataclass(frozen=True, slots=True)
+class WarteschlangenanalyseErgebnis:
+    """In Schritt 7 berechnete Übergangswartezeiten samt Ausschlüssen."""
+
+    status: StrukturiertesErgebnisStatus
+    berechnungsregel: str
+    uebergaenge: tuple[Uebergangswartezeit, ...]
+    ausgeschlossene_negative_werte: int
+    ausgeschlossene_nicht_auswertbare_werte: int
+    begruendung: str = ""
+    ergebnisversion: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class ZeitbezogeneDatenauswahlErgebnis:
+    """Bestätigte Datenbasis und daraus in Schritt 7 abgeleitete Zeitgrößen."""
+
+    status: StrukturiertesErgebnisStatus
+    bestaetigte_datenbasis: tuple[str, ...]
+    datenbasis_referenzen: dict[str, Any]
+    schema_t: tuple[dict[str, str], ...]
+    schema_e_stern: tuple[dict[str, str], ...]
+    umfang_e_stern: dict[str, Any]
+    bearbeitungszeiten: tuple[Aktivitaetsbearbeitungszeit, ...]
+    uebergangswartezeiten: tuple[Uebergangswartezeit, ...]
+    zwischenankunftszeit: RobusteZeitstatistik | None
+    ankunftsregel: str
+    ausgeschlossene_negative_bearbeitungszeiten: int
+    ausgeschlossene_nicht_auswertbare_bearbeitungszeiten: int
+    ausgeschlossene_nicht_auswertbare_ankuenfte: int
+    begruendung: str = ""
+    ergebnisversion: int = 1
 
 
 @dataclass(frozen=True, slots=True)

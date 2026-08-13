@@ -68,78 +68,6 @@ def _bestandteile_anzeigen(k: dict[str, Any]) -> None:
                 )
 
 
-def _sichtbare_aktivitaeten(k: dict[str, Any]) -> tuple[str, ...]:
-    for bestandteil in k.get("modellbestandteile", []):
-        if bestandteil.get("bestandteil_id") != ModellbestandteilId.AKTIVITAETEN.value:
-            continue
-        for information in bestandteil.get("informationen", []):
-            if information.get("strukturreferenz") == "sichtbare_aktivitaeten":
-                return tuple(str(wert) for wert in information.get("wert", []) if str(wert))
-    return ()
-
-
-def _hat_kanonische_ressourceninformation(k: dict[str, Any]) -> bool:
-    return any(
-        information.get("herkunftsartefakt") == "E*"
-        and information.get("strukturreferenz") == "schema.resource"
-        for bestandteil in k.get("modellbestandteile", [])
-        if bestandteil.get("bestandteil_id") == ModellbestandteilId.RESSOURCEN.value
-        for information in bestandteil.get("informationen", [])
-    )
-
-
-def _ressourcenzuordnung_eingeben(
-    k: dict[str, Any], offen: dict[str, Any], *, widget_praefix: str
-) -> tuple[BehandlungOffenerEintrag | None, dict[str, Any]]:
-    """Erfasst die bewusst menschliche Aktivität-Ressourcen-Zuordnung reproduzierbar."""
-    zuordnungen: list[dict[str, Any]] = []
-    vollstaendig = True
-    for aktivitaet in _sichtbare_aktivitaeten(k):
-        schluessel = hashlib.sha256(aktivitaet.encode()).hexdigest()[:12]
-        entscheidung = st.radio(
-            f"{aktivitaet}",
-            ["zuordnen", "offen_lassen"],
-            key=f"{widget_praefix}_ressource_status_{schluessel}",
-            format_func=lambda wert: {
-                "zuordnen": "Ressourcen zuordnen",
-                "offen_lassen": "Bewusst offen lassen",
-            }[wert],
-            horizontal=True,
-        )
-        ressourcen: list[str] = []
-        if entscheidung == "zuordnen":
-            rohwert = st.text_input(
-                f"Ressourcen für {aktivitaet} (kommagetrennt)",
-                key=f"{widget_praefix}_ressourcen_{schluessel}",
-            )
-            ressourcen = list(
-                dict.fromkeys(wert.strip() for wert in rohwert.split(",") if wert.strip())
-            )
-            vollstaendig = vollstaendig and bool(ressourcen)
-        zuordnungen.append(
-            {
-                "aktivitaet": aktivitaet,
-                "ressourcen": ressourcen,
-                "status": "zugeordnet" if ressourcen else "bewusst_offen",
-                "menschliche_entscheidung": True,
-            }
-        )
-    dokumentation = {"aktivitaet_ressourcen": zuordnungen}
-    if not zuordnungen or not vollstaendig:
-        return None, dokumentation
-    return (
-        BehandlungOffenerEintrag(
-            offen["offener_eintrag_id"],
-            ModellbestandteilId.RESSOURCEN,
-            Offenheitskategorie(offen["kategorie"]),
-            offen["begruendung"],
-            Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST,
-            json.dumps(dokumentation, ensure_ascii=False, sort_keys=True),
-        ),
-        dokumentation,
-    )
-
-
 def _menschliche_eingaben(
     k: dict[str, Any], o: dict[str, Any], *, widget_praefix: str
 ) -> tuple[
@@ -161,26 +89,6 @@ def _menschliche_eingaben(
             f"**{index}. {offen['bestandteil_id']} · {offen['kategorie']}**  \n"
             f"{offen['begruendung']}"
         )
-        if offen[
-            "bestandteil_id"
-        ] == ModellbestandteilId.RESSOURCEN.value and not _hat_kanonische_ressourceninformation(k):
-            behandlung, dokumentation = _ressourcenzuordnung_eingeben(
-                k, offen, widget_praefix=widget_praefix
-            )
-            roh_behandlungen.append(
-                {
-                    "offener_eintrag_id": offen["offener_eintrag_id"],
-                    "entscheidung": (
-                        Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST.value
-                        if behandlung
-                        else "noch_nicht_behandelt"
-                    ),
-                    "ergaenzung": json.dumps(dokumentation, ensure_ascii=False, sort_keys=True),
-                }
-            )
-            if behandlung is not None:
-                behandlungen.append(behandlung)
-            continue
         entscheidung = st.selectbox(
             "Fachliche Entscheidung",
             entscheidungsoptionen,

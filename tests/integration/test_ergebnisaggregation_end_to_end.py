@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -331,11 +332,54 @@ def test_a_g_ohne_optionale_bestandteile_ist_idempotent_und_uebergabefaehig(tmp_
     )
     assert erneut == gespeichert
     assert a_g["discovery_ergebnisse_a_d"]["sha256"]
+    assert a_g["artefaktversion"] == 2
+    assert a_g["strukturierte_ergebnisse"]["ergebnisversion"] == 1
     assert a_g["optionale_artefakte"] == {}
     assert p_uebergabe == modell
     assert a_g_uebergabe == a_g
     pd.testing.assert_frame_equal(tabelle, t_vorher)
     pd.testing.assert_frame_equal(event_log, e_vorher)
+
+
+def test_a_g_v1_bleibt_lesbar_waehrend_neue_speicherungen_v2_schreiben(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    service, repository, _, speicher, projekt, freigabe, analyse, _, _, _ = _umgebung(tmp_path)
+    vorschau = service.vorschau(
+        projekt_id=projekt.projekt_id,
+        freigabe_id=freigabe.freigabe_id,
+        analyse_id=analyse.analyse_id,
+    )
+    aggregation = service.speichern(uuid4(), vorschau, menschlich_bestaetigt=True)
+    struktur = json.loads(speicher.lesen(aggregation.relativer_aggregations_pfad))
+    struktur.pop("gesamtpruefsumme")
+    struktur["artefaktversion"] = 1
+    struktur.pop("strukturierte_ergebnisse")
+    struktur.pop("prozessbelege")
+    struktur["gesamtpruefsumme"] = hashlib.sha256(
+        json.dumps(
+            struktur,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    v1_bytes = json.dumps(
+        struktur,
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=2,
+        allow_nan=False,
+    ).encode("utf-8")
+    speicher.artefakt_ersetzen(aggregation.relativer_aggregations_pfad, v1_bytes)
+    repository.werte[aggregation.aggregations_id] = replace(
+        aggregation,
+        aggregations_sha256=hashlib.sha256(v1_bytes).hexdigest(),
+    )
+
+    _, geladen = service.laden(aggregation.aggregations_id)
+
+    assert geladen["artefaktversion"] == 1
+    assert "strukturierte_ergebnisse" not in geladen
 
 
 def test_a_g_integritaet_und_vorschauinvalidierung(tmp_path) -> None:  # type: ignore[no-untyped-def]

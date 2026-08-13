@@ -407,8 +407,12 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
 
     start_und_ende = _info_wert(
         umfang,
-        "discovery_ergebnisse_a_d.dfg.start_und_endaktivitaeten",
-        {},
+        "prozessbelege.start_und_endaktivitaeten",
+        _info_wert(
+            umfang,
+            "discovery_ergebnisse_a_d.dfg.start_und_endaktivitaeten",
+            {},
+        ),
     )
     if not isinstance(start_und_ende, Mapping):
         start_und_ende = {}
@@ -429,13 +433,56 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(event_log_ressourcen, Mapping):
         event_log_ressourcen = {}
 
-    wartestellenhinweise = _listenwert(
-        _info_wert(
-            warteschlangen,
-            "start_timestamp_end_timestamp.positive_uebergangsdifferenzen",
-            [],
-        )
+    ressourcenanalyse = _info_wert(
+        ressourcen,
+        "strukturierte_ergebnisse.ressourcen",
+        {},
     )
+    if not isinstance(ressourcenanalyse, Mapping):
+        ressourcenanalyse = {}
+    zugeordnete_ressourcen = sorted(
+        {
+            str(ressource)
+            for zuordnung in _listenwert(ressourcenanalyse.get("zuordnungen", []))
+            if isinstance(zuordnung, Mapping)
+            for ressource in _listenwert(zuordnung.get("ressourcen", []))
+            if str(ressource)
+        }
+    )
+
+    warteschlangenanalyse = _info_wert(
+        warteschlangen,
+        "strukturierte_ergebnisse.warteschlangen_und_wartezeiten",
+        {},
+    )
+    if not isinstance(warteschlangenanalyse, Mapping):
+        warteschlangenanalyse = {}
+    wartestellenhinweise = []
+    for uebergang in _listenwert(warteschlangenanalyse.get("uebergaenge", [])):
+        if not isinstance(uebergang, Mapping):
+            continue
+        statistik = uebergang.get("statistik", {})
+        if not isinstance(statistik, Mapping):
+            statistik = {}
+        wartestellenhinweise.append(
+            {
+                "uebergang": {
+                    "von": uebergang.get("von_aktivitaet"),
+                    "zu": uebergang.get("zu_aktivitaet"),
+                },
+                "anzahl": statistik.get("anzahl"),
+                "mittlere_wartezeit_sekunden": statistik.get("mittelwert_sekunden"),
+                "mediane_wartezeit_sekunden": statistik.get("median_sekunden"),
+            }
+        )
+    if not wartestellenhinweise:
+        wartestellenhinweise = _listenwert(
+            _info_wert(
+                warteschlangen,
+                "start_timestamp_end_timestamp.positive_uebergangsdifferenzen",
+                [],
+            )
+        )
 
     modellierungsentscheidungen = _info_wert(
         annahmen,
@@ -467,6 +514,14 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
     )
     if not isinstance(event_log, Mapping):
         event_log = {}
+
+    zeitbezogene_datenauswahl = _info_wert(
+        daten,
+        "strukturierte_ergebnisse.zeitbezogene_datenauswahl",
+        {},
+    )
+    if not isinstance(zeitbezogene_datenauswahl, Mapping):
+        zeitbezogene_datenauswahl = {}
 
     prozessmodell_referenz = _info_wert(
         darstellung,
@@ -603,16 +658,37 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
                 )
             ],
             "wartestellenhinweise": wartestellenhinweise,
+            "berechnungsregel": _normalisieren(
+                warteschlangenanalyse.get("berechnungsregel")
+            ),
+            "ausgeschlossene_negative_werte": _normalisieren(
+                warteschlangenanalyse.get("ausgeschlossene_negative_werte")
+            ),
+            "ausgeschlossene_nicht_auswertbare_werte": _normalisieren(
+                warteschlangenanalyse.get("ausgeschlossene_nicht_auswertbare_werte")
+            ),
         },
         "ressourcen": {
             **_abschnitt_metadaten(k_stern, ressourcen),
             "systemressourcen": _normalisieren(systemressourcen),
             "event_log_ressourcen": _normalisieren(
-                event_log_ressourcen.get("eindeutige_werte", [])
+                zugeordnete_ressourcen
+                or event_log_ressourcen.get("eindeutige_werte", [])
             ),
-            "ressourcenattribut": _normalisieren(event_log_ressourcen.get("attribut")),
+            "ressourcenattribut": _normalisieren(
+                ressourcenanalyse.get("quellspalte")
+                or event_log_ressourcen.get("attribut")
+            ),
             "aktivitaet_ressourcen": _normalisieren(
-                event_log_ressourcen.get("aktivitaet_ressourcen", [])
+                ressourcenanalyse.get(
+                    "zuordnungen",
+                    event_log_ressourcen.get("aktivitaet_ressourcen", []),
+                )
+            ),
+            "zuordnungsmodus": _normalisieren(ressourcenanalyse.get("modus")),
+            "zuordnungsherkunft": _normalisieren(ressourcenanalyse.get("herkunft")),
+            "zuordnungsbegruendung": _normalisieren(
+                ressourcenanalyse.get("begruendung")
             ),
             "manuelle_aktivitaet_ressourcen": _manuelle_ressourcenzuordnungen(ressourcen),
             "ressourcenbezogene_kpis": [
@@ -642,6 +718,7 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
             "profile": profile,
             "zwischendatensatz": _normalisieren(zwischendatensatz),
             "event_log": _normalisieren(event_log),
+            "zeitbezogene_datenauswahl": _normalisieren(zeitbezogene_datenauswahl),
         },
         "prozessdarstellung": {
             **_abschnitt_metadaten(k_stern, darstellung),
