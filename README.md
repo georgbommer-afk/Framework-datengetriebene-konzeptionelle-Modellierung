@@ -74,6 +74,82 @@ workspace/projects/<projekt-id>/
     └── validated-conceptual-model-k-star.json
 ```
 
+## Community-Cloud-Betrieb, Gastmodus und private Kursgruppen
+
+Die öffentlich erreichbare Streamlit-App trennt zwei Betriebsarten. **Ohne Anmeldung testen**
+erzeugt ein isoliertes Gastprojekt mit einem kryptografisch zufälligen, nur im Session State
+gehaltenen Besitznachweis. Es gilt der sichtbare Hinweis: „Dieses Projekt wird nur temporär
+gespeichert. Exportieren Sie es, wenn Sie später weiterarbeiten möchten.“ Die Standard-TTL
+beträgt 24 Stunden seit der letzten Aktivität und kann mit
+`FRAMEWORK_MVP_GUEST_TTL_HOURS` (1–720) verändert werden. Streamlit liefert kein verlässliches
+Browser-Tab-Schließereignis; sofortige Löschung gibt es deshalb ausschließlich über
+**Demo beenden und Daten löschen**. Zusätzlich läuft bei Appstarts eine begrenzte,
+opportunistische Bereinigung.
+
+**Anmelden / Kursgruppe öffnen** verwendet ausschließlich Streamlits native OIDC-Funktionen
+`st.login`, `st.user` und `st.logout`. Die Anwendung speichert weder Passwörter noch OIDC-Token.
+Eine fehlende OIDC-Konfiguration lässt den Gastmodus funktionsfähig, schaltet aber keine
+Kursfunktion und insbesondere keine Administration frei. Der lokale Auth-Testmodus ist mit
+`FRAMEWORK_MVP_LOCAL_AUTH_TEST_MODE=true` ausdrücklich zu aktivieren und standardmäßig aus.
+
+### Community Cloud und OIDC konfigurieren
+
+1. Die App bleibt in Community Cloud öffentlich. Beim OIDC-Provider wird als Callback exakt
+   `https://<app-name>.streamlit.app/oauth2callback` registriert. Lokal lautet er
+   `http://localhost:8501/oauth2callback`.
+2. `.streamlit/secrets.toml.example` nach `.streamlit/secrets.toml` beziehungsweise in die
+   Community-Cloud-Secrets übertragen und ausschließlich die Platzhalter ersetzen. Die echte
+   Datei und Secrets nie committen.
+3. Unter `[auth]` werden `redirect_uri`, ein zufälliges `cookie_secret`, `client_id`,
+   `client_secret` und `server_metadata_url` gesetzt. `Authlib>=1.3.2,<2.0` ist als
+   Laufzeitabhängigkeit gebunden.
+4. Der erste Systemadmin wird ausschließlich mit einem oder mehreren
+   `[[systemadmin.identities]]`-Einträgen aus exakt passendem OIDC-Issuer und Subject gebootstrapt.
+   E-Mail ist kein Identitätsschlüssel. Danach kann der Systemadmin angemeldete Personen als
+   Gruppenleitung freischalten oder die Freigabe entziehen.
+
+Gruppenleitungen verwalten private, nicht suchbare Kursgruppen, Mitgliedschaften,
+Einmal-/Mehrfach-Einladungen, Teams, Fortschritt, Aufbewahrung und Archive. Einladungstoken
+besitzen mindestens 256 Bit Entropie, werden nur einmal vollständig angezeigt und in SQLite nur
+als SHA-256 gespeichert. Teilnehmer sehen ausschließlich aktiv zugewiesene Projekte. Eine UUID
+ist nie ein Berechtigungsnachweis; jede Operation prüft den persistenten Zustand erneut.
+
+### Portable Sicherung
+
+Projektarchive verwenden ZIP-Formatversion 1 mit `manifest.json`, `project/project.json`,
+projektbezogenen JSON-Tabellen, `artifacts/`, `reports/` und `README.txt`. Manifest und jede Datei
+werden über Größen und SHA-256 geprüft. Benutzer, Rollen, Einladungen, Sessions, Tokens, Secrets,
+globale SQLite-Datei, fremde Projekte, Caches und temporäre Dateien sind ausgeschlossen.
+Projektarchive sind **nicht verschlüsselt** und können Originaldaten enthalten.
+
+Importe werden vor jedem Schreibzugriff auf ZIP-Struktur, Pfadtraversal, Symlinks,
+Verschlüsselung, Doppelpfade, CRC, erlaubte Pfade/Dateitypen, Ressourcenlimits, Manifest,
+Prüfsummen, Tabellenschema und Lineage geprüft. Es wird kein unkontrolliertes `extractall`
+verwendet. Format-v1-Konflikte werden nur identisch und nach Autorisierung wieder geöffnet;
+abweichende Inhalte werden nicht überschrieben. Kursarchive enthalten Projektarchive und
+fachliche Teamhinweise, übernehmen aber weder aktive Einladungen noch Zugriffsrechte.
+
+Die Standardgrenzen betragen 250 MB komprimiert, 1 GB entpackt, 5.000 Dateien, 250 MB je Datei,
+Kompressionsverhältnis 100 und 512 UTF-8-Bytes je Pfad. Sie sind über
+`FRAMEWORK_MVP_ARCHIVE_MAX_COMPRESSED_MB`, `FRAMEWORK_MVP_ARCHIVE_MAX_UNCOMPRESSED_MB`,
+`FRAMEWORK_MVP_ARCHIVE_MAX_FILES`, `FRAMEWORK_MVP_ARCHIVE_MAX_FILE_MB`,
+`FRAMEWORK_MVP_ARCHIVE_MAX_RATIO` und `FRAMEWORK_MVP_ARCHIVE_MAX_PATH_BYTES` konfigurierbar.
+
+### Persistenz, Migration und Skalierungsgrenze
+
+Schemaversion 11 ergänzt Benutzer, globale Rollen, Kursgruppen, Mitgliedschaften, gehashte
+Einladungen, Projektmandanten/-teams, persistierten Fortschritt, Aufbewahrung sowie
+Archiv-/Bereinigungsmetadaten. Vorhandene Projekte werden verlustfrei als
+`legacy_unassigned` markiert, niemals öffentlich aufgelistet und sind nur für einen expliziten
+Systemadmin kontrolliert übernehmbar. SQLite läuft mit Foreign Keys, WAL, fünf Sekunden
+`busy_timeout` und kurzen Transaktionen.
+
+Streamlit Community Cloud und ihr lokaler Speicher besitzen keine Persistenzgarantie. Diese
+Variante ist für MVP, Fallstudie und überschaubare Lehrveranstaltungen bestimmt. Vor Ablauf ist
+ein Projekt- oder Kursarchiv die vorgesehene portable Sicherung. Für größere Parallelität,
+größere Datenmengen oder dauerhaft produktiven Betrieb kann später ein anderer Speicheradapter
+hinter den vorhandenen Ports ergänzt werden.
+
 ## Geplante Funktionen
 ### Datenimport
 Die Anwendung importiert strukturierte historische Daten aus Dateien. Direkte Abfragen aus

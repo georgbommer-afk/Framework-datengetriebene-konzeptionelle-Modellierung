@@ -12,7 +12,6 @@ def zeige_kompakten_fortschritt(
     """Zeigt aktuellen Schritt, schmalen Balken und optional die vollständige Liste."""
     gesamt = len(kurze_namen)
     st.caption(f"Schritt {schritt} von {gesamt} — {lange_namen[schritt - 1]}")
-    st.progress(schritt / gesamt)
     elemente = []
     for nummer, name in enumerate(kurze_namen, 1):
         if nummer < schritt:
