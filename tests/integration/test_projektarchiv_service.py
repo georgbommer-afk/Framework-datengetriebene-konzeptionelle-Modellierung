@@ -3,6 +3,8 @@
 import hashlib
 import io
 import json
+import os
+import sqlite3
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,7 +14,7 @@ import pytest
 from framework_mvp.application.autorisierung import AutorisierungsService, geheimnis_hash
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.application.projektarchiv_service import ArchivGrenzen, ProjektArchivService
-from framework_mvp.domain.exceptions import ArchivUngueltig, ZugriffVerweigert
+from framework_mvp.domain.exceptions import ArchivKonflikt, ArchivUngueltig, ZugriffVerweigert
 from framework_mvp.domain.models import Systemtyp, Untersuchungsauftrag
 from framework_mvp.domain.models.zugriff import (
     Projektzugehoerigkeit,
@@ -94,13 +96,79 @@ def test_gast_importiert_in_eigenen_neuen_mandanten_und_kann_wiederoeffnen(
         AutorisierungsService(ziel_repository),
     )
     erster_import = ziel.importieren(kontext, archiv)
-    zweiter_import = ziel.importieren(kontext, archiv)
+    pruefung = ziel.import_pruefen(kontext, archiv)
+    assert pruefung.bereits_vorhanden
+    with pytest.raises(ArchivKonflikt, match="ausdrücklich"):
+        ziel.importieren(kontext, archiv)
+    zweiter_import = ziel.importieren(kontext, archiv, vorhandenes_projekt_ersetzen=True)
     assert erster_import.projekt_id == projekt.projekt_id
     assert not erster_import.bereits_vorhanden
     assert zweiter_import.bereits_vorhanden
+    assert zweiter_import.ersetzt
     assert (
         ziel_workspace.basisverzeichnis / "projects" / str(projekt.projekt_id) / "raw" / "daten.csv"
     ).read_text() == "a,b\n1,2\n"
+
+
+def test_vorhandenes_projekt_wird_nach_rueckfrage_vollstaendig_ersetzt(
+    tmp_path: Path,
+) -> None:
+    projekt, kontext, service = _quelle(tmp_path)
+    archiv = service.exportieren(kontext, projekt.projekt_id)
+    db = tmp_path / "ziel-erfolg.sqlite"
+    workspace = WorkspaceKonfiguration(tmp_path / "ziel-erfolg-workspace")
+    repository = SQLiteZugriffsRepository(db)
+    ziel = ProjektArchivService(db, workspace, repository, AutorisierungsService(repository))
+    ziel.importieren(kontext, archiv)
+    raw = workspace.basisverzeichnis / "projects" / str(projekt.projekt_id) / "raw" / "daten.csv"
+    raw.write_text("veraendert", encoding="utf-8")
+    with sqlite3.connect(db) as verbindung:
+        verbindung.execute(
+            "UPDATE projekte SET bezeichnung='Verändert' WHERE projekt_id=?",
+            (str(projekt.projekt_id),),
+        )
+
+    ergebnis = ziel.importieren(kontext, archiv, vorhandenes_projekt_ersetzen=True)
+
+    assert ergebnis.ersetzt
+    assert raw.read_text(encoding="utf-8") == "a,b\n1,2\n"
+    geladen = SQLiteProjektRepository(db).laden(projekt.projekt_id)
+    assert geladen is not None
+    assert geladen.bezeichnung == "Übungsprojekt"
+
+
+def test_fehler_beim_dateitausch_rollt_ersetzen_vollstaendig_zurueck(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    projekt, kontext, service = _quelle(tmp_path)
+    archiv = service.exportieren(kontext, projekt.projekt_id)
+    db = tmp_path / "ziel-rollback.sqlite"
+    workspace = WorkspaceKonfiguration(tmp_path / "ziel-rollback-workspace")
+    repository = SQLiteZugriffsRepository(db)
+    ziel = ProjektArchivService(db, workspace, repository, AutorisierungsService(repository))
+    ziel.importieren(kontext, archiv)
+    raw = workspace.basisverzeichnis / "projects" / str(projekt.projekt_id) / "raw" / "daten.csv"
+    raw.write_text("bisheriger Stand", encoding="utf-8")
+    original_replace = os.replace
+    aufrufe = 0
+
+    def zweiter_tausch_schlaegt_fehl(quelle, senke):  # type: ignore[no-untyped-def]
+        nonlocal aufrufe
+        aufrufe += 1
+        if aufrufe == 2:
+            raise OSError("simulierter Dateitauschfehler")
+        return original_replace(quelle, senke)
+
+    monkeypatch.setattr(
+        "framework_mvp.application.projektarchiv_service.os.replace",
+        zweiter_tausch_schlaegt_fehl,
+    )
+
+    with pytest.raises(OSError, match="simulierter Dateitauschfehler"):
+        ziel.importieren(kontext, archiv, vorhandenes_projekt_ersetzen=True)
+
+    assert raw.read_text(encoding="utf-8") == "bisheriger Stand"
+    assert SQLiteProjektRepository(db).laden(projekt.projekt_id) is not None
 
 
 def test_import_verweigert_zip_slip_vor_jedem_schreibzugriff(tmp_path: Path) -> None:
@@ -137,8 +205,11 @@ def test_import_verweigert_nicht_gelistete_und_manipulierte_datei(tmp_path: Path
 def test_bekannte_uuid_allein_erlaubt_keinen_identischen_import(tmp_path: Path) -> None:
     projekt, kontext, service = _quelle(tmp_path)
     archiv = service.exportieren(kontext, projekt.projekt_id)
+    fremder_kontext = Zugriffskontext.gast("fremd" * 10)
     with pytest.raises(ZugriffVerweigert):
-        service.importieren(Zugriffskontext.gast("fremd" * 10), archiv)
+        service.import_pruefen(fremder_kontext, archiv)
+    with pytest.raises(ZugriffVerweigert):
+        service.importieren(fremder_kontext, archiv, vorhandenes_projekt_ersetzen=True)
 
 
 def test_manifest_hashes_stimmen_mit_payload_ueberein(tmp_path: Path) -> None:

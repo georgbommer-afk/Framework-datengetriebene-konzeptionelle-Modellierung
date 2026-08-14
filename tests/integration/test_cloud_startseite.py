@@ -44,7 +44,15 @@ def test_gastmodus_zeigt_warnung_projektaktionen_und_genau_einen_fortschrittsbal
     assert any("nur temporär gespeichert" in warnung.value for warnung in app.warning)
     labels = {button.label for button in app.button}
     assert "Projekt exportieren" in labels
+    assert "Projekt importieren" in labels
     assert "Demo beenden und Daten löschen" in labels
+    archivaktionen = [
+        button
+        for button in app.sidebar.button
+        if button.label in {"Projekt importieren", "Projekt exportieren"}
+    ]
+    assert len(archivaktionen) == 2
+    assert all(button.proto.type == "primary" for button in archivaktionen)
     assert len(app.get("progress")) == 1
     assert not any("Kursgruppen" in element.value for element in app.markdown)
 
@@ -60,5 +68,34 @@ def test_gastprojekt_loeschung_oeffnet_den_kompakten_dialog(
     ).click().run()
     assert len(app.get("dialog")) == 1
     assert not app.exception
-    assert {button.label for button in app.button} >= {"Löschen", "Abbrechen"}
+    assert {button.label for button in app.button} >= {"Endgültig löschen", "Abbrechen"}
     assert any("Andere Projekte bleiben unverändert" in warning.value for warning in app.warning)
+
+
+def test_loeschaktionen_bleiben_auch_in_spaeterem_frameworkschritt_sichtbar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _oeffentlich_starten(tmp_path, monkeypatch)
+    next(button for button in app.button if button.label == "Ohne Anmeldung testen").click().run()
+
+    app.radio[0].set_value("7 Ergebnisse aggregieren").run()
+
+    assert not app.exception
+    assert any(button.label == "Demo beenden und Daten löschen" for button in app.sidebar.button)
+
+
+def test_projektimport_oeffnet_lokal_begrenzten_zip_upload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _oeffentlich_starten(tmp_path, monkeypatch)
+    next(button for button in app.button if button.label == "Ohne Anmeldung testen").click().run()
+    next(
+        button for button in app.sidebar.button if button.label == "Projekt importieren"
+    ).click().run()
+
+    assert not app.exception
+    upload = next(wert for wert in app.file_uploader if wert.label == "ZIP-Projektarchiv auswählen")
+    assert list(upload.proto.type) == [".zip"]
+    quelle = APP.read_text(encoding="utf-8")
+    assert ".st-key-projektimport_bereich" in quelle
+    assert '[data-testid="stFileUploaderDropzoneInstructions"]' in quelle

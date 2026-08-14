@@ -194,7 +194,7 @@ def _projekt_loeschen_dialog(
     )
     loeschen, abbrechen = st.columns(2)
     if loeschen.button(
-        "Löschen",
+        "Endgültig löschen",
         type="primary",
         width="stretch",
         key=f"projekt_dialog_loeschen_{projekt.projekt_id}",
@@ -290,7 +290,7 @@ def _datensatz_loeschen_dialog(
     )
     loeschen, abbrechen = st.columns(2)
     if loeschen.button(
-        "Löschen",
+        "Endgültig löschen",
         type="primary",
         width="stretch",
         key=f"datensatz_dialog_loeschen_{datensatz_id}",
@@ -314,6 +314,36 @@ def _datensatz_loeschen_dialog(
         "Abbrechen", width="stretch", key=f"datensatz_dialog_abbrechen_{datensatz_id}"
     ):
         st.rerun(scope="app")
+
+
+def zeige_loeschaktionen(
+    projekt: Projekt,
+    transformations_service: TransformationsService | None,
+    loesch_service: LoeschService,
+    *,
+    projekt_loesch_label: str = "Projekt löschen",
+    projektloeschung_nachbereiten: Callable[[], None] | None = None,
+    projekt_loeschen_erlaubt: bool = True,
+    datensatz_loeschen_erlaubt: bool = True,
+) -> None:
+    """Rendert autorisierte Löschaktionen im dauerhaft sichtbaren Projektrahmen."""
+    datensaetze = (
+        transformations_service.datensaetze_fuer_projekt(projekt.projekt_id)
+        if transformations_service is not None and datensatz_loeschen_erlaubt
+        else []
+    )
+    if not projekt_loeschen_erlaubt and not datensaetze:
+        return
+    st.sidebar.divider()
+    links, rechts = st.sidebar.columns(2)
+    if projekt_loeschen_erlaubt and links.button(projekt_loesch_label, width="stretch"):
+        _projekt_loeschen_dialog(
+            projekt,
+            loesch_service,
+            projektloeschung_nachbereiten,
+        )
+    if datensaetze and rechts.button("Datensatz löschen", width="stretch"):
+        _datensatz_loeschen_dialog(projekt, datensaetze, loesch_service)
 
 
 def _seitenleiste(
@@ -357,21 +387,13 @@ def _seitenleiste(
         st.rerun()
     projekt = _projekt_nach_id(projekte, neue_id)
     if projekt is not None and loesch_service is not None:
-        st.sidebar.divider()
-        datensaetze = (
-            transformations_service.datensaetze_fuer_projekt(projekt.projekt_id)
-            if transformations_service is not None
-            else []
+        zeige_loeschaktionen(
+            projekt,
+            transformations_service,
+            loesch_service,
+            projekt_loesch_label=projekt_loesch_label,
+            projektloeschung_nachbereiten=projektloeschung_nachbereiten,
         )
-        links, rechts = st.sidebar.columns(2)
-        if links.button(projekt_loesch_label, width="stretch"):
-            _projekt_loeschen_dialog(
-                projekt,
-                loesch_service,
-                projektloeschung_nachbereiten,
-            )
-        if datensaetze and rechts.button("Datensatz löschen", width="stretch"):
-            _datensatz_loeschen_dialog(projekt, datensaetze, loesch_service)
     return projekt
 
 

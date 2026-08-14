@@ -97,6 +97,17 @@ class ImportErgebnis:
     projekt_id: UUID
     bereits_vorhanden: bool
     projektname: str
+    ersetzt: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ArchivImportPruefung:
+    """Verständliche Metadaten eines vollständig validierten Importarchivs."""
+
+    projekt_id: UUID
+    projektname: str
+    exportiert_am: str
+    bereits_vorhanden: bool
 
 
 class ProjektSperren:
@@ -177,12 +188,44 @@ class ProjektArchivService:
         _, manifest = self._archiv_pruefen(archiv)
         return manifest
 
+    def import_pruefen(
+        self,
+        kontext: Zugriffskontext,
+        archiv: bytes,
+        *,
+        ziel_gruppen_id: UUID | None = None,
+    ) -> ArchivImportPruefung:
+        """Validiert ohne Mutation und prüft Ziel beziehungsweise Ersetzungsberechtigung."""
+        _, manifest = self._archiv_pruefen(archiv)
+        try:
+            projekt_id = UUID(str(manifest["original_project_id"]))
+        except (KeyError, TypeError, ValueError) as fehler:
+            raise ArchivUngueltig("Die ursprüngliche Projekt-ID ist ungültig.") from fehler
+        projektname = str(manifest.get("project_name", "")).strip()
+        if not projektname:
+            raise ArchivUngueltig("Der Projektname fehlt im Manifest.")
+        vorhanden = self._vorhandener_fingerabdruck(projekt_id) is not None
+        if vorhanden:
+            self._autorisierung.projekt_zugriff_pruefen(
+                kontext, projekt_id, Projektaktion.IMPORTIEREN
+            )
+            self._autorisierung.projekt_zugriff_pruefen(kontext, projekt_id, Projektaktion.LOESCHEN)
+        else:
+            self._importziel_pruefen(kontext, ziel_gruppen_id, manifest=manifest)
+        return ArchivImportPruefung(
+            projekt_id,
+            projektname,
+            str(manifest.get("exported_at_utc", "")),
+            vorhanden,
+        )
+
     def importieren(
         self,
         kontext: Zugriffskontext,
         archiv: bytes,
         *,
         ziel_gruppen_id: UUID | None = None,
+        vorhandenes_projekt_ersetzen: bool = False,
     ) -> ImportErgebnis:
         """Validiert vollständig, staged einzeln und übernimmt DB/Dateien gemeinsam."""
         inhalt, manifest = self._archiv_pruefen(archiv)
@@ -196,21 +239,39 @@ class ProjektArchivService:
         with self._sperren.sperren(projekt_id):
             vorhandener_fingerabdruck = self._vorhandener_fingerabdruck(projekt_id)
             if vorhandener_fingerabdruck is not None:
-                if not self._autorisierung.projekt_zugriff_erlaubt(
-                    kontext, projekt_id, Projektaktion.ANSEHEN
-                ):
-                    raise ZugriffVerweigert(NICHT_VERFUEGBAR)
-                if vorhandener_fingerabdruck != manifest["project_fingerprint"]:
+                self._autorisierung.projekt_zugriff_pruefen(
+                    kontext, projekt_id, Projektaktion.IMPORTIEREN
+                )
+                self._autorisierung.projekt_zugriff_pruefen(
+                    kontext, projekt_id, Projektaktion.LOESCHEN
+                )
+                if not vorhandenes_projekt_ersetzen:
                     raise ArchivKonflikt(
-                        "Die Projekt-ID ist bereits mit abweichendem Inhalt vorhanden."
+                        "Die Projekt-ID ist bereits vorhanden. Bestätigen Sie ausdrücklich, "
+                        "dass das vorhandene Projekt ersetzt werden soll."
                     )
-                return ImportErgebnis(projekt_id, True, projektname)
-            self._importziel_pruefen(kontext, ziel_gruppen_id, manifest=manifest)
-            self._atomar_uebernehmen(kontext, projekt_id, ziel_gruppen_id, inhalt, manifest)
+                zuordnung = self._zugriff.projektzugehoerigkeit_laden(projekt_id)
+                if zuordnung is None:
+                    raise ZugriffVerweigert(NICHT_VERFUEGBAR)
+                self._atomar_uebernehmen(
+                    kontext,
+                    projekt_id,
+                    zuordnung.gruppen_id,
+                    inhalt,
+                    manifest,
+                    ersetzen=True,
+                )
+                archiv_gruppen_id = zuordnung.gruppen_id
+            else:
+                self._importziel_pruefen(kontext, ziel_gruppen_id, manifest=manifest)
+                self._atomar_uebernehmen(
+                    kontext, projekt_id, ziel_gruppen_id, inhalt, manifest, ersetzen=False
+                )
+                archiv_gruppen_id = ziel_gruppen_id
             self._zugriff.archiv_metadaten_speichern(
                 archiv_id=uuid4(),
                 projekt_id=projekt_id,
-                gruppen_id=ziel_gruppen_id,
+                gruppen_id=archiv_gruppen_id,
                 archivtyp="projekt_import",
                 archivversion=ARCHIVVERSION,
                 sha256=hashlib.sha256(archiv).hexdigest(),
@@ -220,7 +281,12 @@ class ProjektArchivService:
                 details={"project_fingerprint": manifest["project_fingerprint"]},
                 zeitpunkt=datetime.now(UTC),
             )
-        return ImportErgebnis(projekt_id, False, projektname)
+        return ImportErgebnis(
+            projekt_id,
+            bereits_vorhanden=vorhandener_fingerabdruck is not None,
+            projektname=projektname,
+            ersetzt=vorhandener_fingerabdruck is not None,
+        )
 
     def _datenbank_snapshot(self, projekt_id: UUID) -> dict[str, list[dict[str, Any]]]:
         verbindung = sqlite3.connect(self._datenbankpfad, timeout=5.0)
@@ -464,6 +530,8 @@ class ProjektArchivService:
         ziel_gruppen_id: UUID | None,
         inhalt: dict[str, bytes],
         manifest: dict[str, Any],
+        *,
+        ersetzen: bool,
     ) -> None:
         basis = self._workspace.basisverzeichnis.resolve()
         basis.mkdir(parents=True, exist_ok=True)
@@ -473,7 +541,7 @@ class ProjektArchivService:
         staged_project = staging / str(projekt_id)
         staged_project.mkdir()
         ziel = basis / "projects" / str(projekt_id)
-        if ziel.exists():
+        if ziel.exists() and not ersetzen:
             shutil.rmtree(staging, ignore_errors=True)
             raise ArchivKonflikt("Zum Projekt existiert bereits ein abweichender Dateibestand.")
         try:
@@ -486,6 +554,8 @@ class ProjektArchivService:
                 datei.write_bytes(daten)
             tabellendaten = self._tabellendaten_laden(inhalt, projekt_id)
             verbindung = sqlite3.connect(self._datenbankpfad, timeout=5.0)
+            backup_project = staging / "bisheriger-dateibestand"
+            dateien_ausgetauscht = False
             try:
                 initialisiere_schema(verbindung)
                 verbindung.execute("BEGIN IMMEDIATE")
@@ -498,11 +568,26 @@ class ProjektArchivService:
                         raise ArchivUngueltig(
                             f"Die Spaltenstruktur der Tabelle {tabelle} ist ungültig."
                         )
-                if verbindung.execute(
-                    "SELECT 1 FROM projekte WHERE projekt_id = ?", (str(projekt_id),)
-                ).fetchone():
-                    raise ArchivKonflikt("Das Projekt wurde parallel importiert.")
+                projekt_vorhanden = (
+                    verbindung.execute(
+                        "SELECT 1 FROM projekte WHERE projekt_id = ?", (str(projekt_id),)
+                    ).fetchone()
+                    is not None
+                )
+                if projekt_vorhanden != ersetzen:
+                    raise ArchivKonflikt("Das Projekt wurde parallel verändert.")
+                if ersetzen:
+                    self._projektinhalt_aus_verbindung_loeschen(verbindung, projekt_id)
+                    projektzeile = tabellendaten["projekte"][0]
+                    spalten = [name for name in projektzeile if name != "projekt_id"]
+                    set_sql = ",".join(f"{name}=?" for name in spalten)
+                    verbindung.execute(
+                        f"UPDATE projekte SET {set_sql} WHERE projekt_id=?",  # noqa: S608
+                        [projektzeile[name] for name in spalten] + [str(projekt_id)],
+                    )
                 for tabelle in _TABELLEN_REIHENFOLGE:
+                    if ersetzen and tabelle == "projekte":
+                        continue
                     for zeile in tabellendaten[tabelle]:
                         spalten = list(zeile)
                         platzhalter = ",".join("?" for _ in spalten)
@@ -512,7 +597,7 @@ class ProjektArchivService:
                             [zeile[spalte] for spalte in spalten],
                         )
                 jetzt = datetime.now(UTC)
-                if kontext.gast_geheimnis is not None:
+                if not ersetzen and kontext.gast_geheimnis is not None:
                     verbindung.execute(
                         """
                         INSERT INTO projektzugehoerigkeiten (
@@ -528,7 +613,7 @@ class ProjektArchivService:
                             jetzt.isoformat(),
                         ),
                     )
-                else:
+                elif not ersetzen:
                     if kontext.benutzer_id is None or ziel_gruppen_id is None:
                         raise ZugriffVerweigert(NICHT_VERFUEGBAR)
                     verbindung.execute(
@@ -554,17 +639,50 @@ class ProjektArchivService:
                         (str(projekt_id), str(kontext.benutzer_id), jetzt.isoformat()),
                     )
                 ziel.parent.mkdir(parents=True, exist_ok=True)
+                if ziel.exists():
+                    os.replace(ziel, backup_project)
                 os.replace(staged_project, ziel)
+                dateien_ausgetauscht = True
                 verbindung.commit()
             except Exception:
                 verbindung.rollback()
-                if ziel.exists():
+                if dateien_ausgetauscht and ziel.exists():
                     shutil.rmtree(ziel, ignore_errors=True)
+                if backup_project.exists():
+                    os.replace(backup_project, ziel)
                 raise
             finally:
                 verbindung.close()
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+
+    @staticmethod
+    def _projektinhalt_aus_verbindung_loeschen(
+        verbindung: sqlite3.Connection, projekt_id: UUID
+    ) -> None:
+        """Entfernt Projektinhalte in FK-Reihenfolge, bewahrt aber Mandant und Team."""
+        projekt = str(projekt_id)
+        quality_ids = [
+            str(zeile[0])
+            for zeile in verbindung.execute(
+                "SELECT quality_run_id FROM qualitaetspruefungen WHERE projekt_id=?",
+                (projekt,),
+            )
+        ]
+        if quality_ids:
+            platzhalter = ",".join("?" for _ in quality_ids)
+            for tabelle in ("qualitaetsregeln", "qualitaetsmassnahmen"):
+                verbindung.execute(
+                    f"DELETE FROM {tabelle} WHERE quality_run_id IN ({platzhalter})",  # noqa: S608
+                    quality_ids,
+                )
+        for tabelle in reversed(_TABELLEN_REIHENFOLGE):
+            if tabelle in {"projekte", "qualitaetsregeln", "qualitaetsmassnahmen"}:
+                continue
+            verbindung.execute(
+                f"DELETE FROM {tabelle} WHERE projekt_id=?",  # noqa: S608
+                (projekt,),
+            )
 
     def _tabellendaten_laden(
         self, inhalt: dict[str, bytes], projekt_id: UUID

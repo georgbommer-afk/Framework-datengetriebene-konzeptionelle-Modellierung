@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from datetime import UTC, date, datetime, timedelta
+from typing import Any, cast
 from uuid import UUID
 
 import streamlit as st
@@ -71,8 +73,9 @@ from framework_mvp.ui.pages.modellableitung import zeige_modellableitung_seite
 from framework_mvp.ui.pages.modellausgabe import zeige_modellausgabe_seite
 from framework_mvp.ui.pages.modellvalidierung import zeige_modellvalidierung_seite
 from framework_mvp.ui.pages.process_mining import zeige_process_mining_seite
-from framework_mvp.ui.pages.projektverwaltung import zeige_projektverwaltung
+from framework_mvp.ui.pages.projektverwaltung import zeige_loeschaktionen, zeige_projektverwaltung
 from framework_mvp.ui.pages.semantisches_mapping import zeige_semantisches_mapping
+from framework_mvp.ui.session_cleanup import projekt_zustand_bereinigen
 from framework_mvp.workspace import WorkspaceKonfiguration
 
 st.set_page_config(page_title="Framework-MVP", page_icon="🏭", layout="wide")
@@ -437,6 +440,11 @@ def _projekt_id_aus_session() -> UUID | None:
         return None
 
 
+def _gastmodus_nach_projektloeschung_beenden() -> None:
+    for schluessel in ("gast_geheimnis", "gast_projekt_id", "projektarchiv"):
+        st.session_state.pop(schluessel, None)
+
+
 def _projektaktionen(projekt_id: UUID | None) -> None:
     if kontext is None:
         return
@@ -447,40 +455,128 @@ def _projektaktionen(projekt_id: UUID | None) -> None:
             kontext, aktive_gruppen_id, Gruppenaktion.ARCHIVIEREN
         )
     )
-    if import_erlaubt:
-        upload = st.sidebar.file_uploader(
-            "Projekt importieren", type=["zip"], key="cloud_projektimport"
-        )
-        if upload is not None and st.sidebar.button("Projektarchiv prüfen und importieren"):
-            try:
-                ergebnis = erstelle_projektarchiv_service(datenbankpfad, workspace).importieren(
-                    kontext,
-                    upload.getvalue(),
-                    ziel_gruppen_id=aktive_gruppen_id,
-                )
-            except Domaenenfehler as fehler:
-                st.sidebar.error(str(fehler))
-            else:
-                st.session_state.aktuelles_projekt_id = str(ergebnis.projekt_id)
-                st.session_state.ausgewaehlte_projekt_id = ergebnis.projekt_id
-                if kontext.gast_geheimnis is not None:
-                    st.session_state.gast_projekt_id = str(ergebnis.projekt_id)
-                st.rerun()
-    if projekt_id is None or not autorisierung.projekt_zugriff_erlaubt(
-        kontext, projekt_id, Projektaktion.ANSEHEN
+    projekt = (
+        roh_projekte.projekt_laden(projekt_id)
+        if projekt_id is not None
+        and autorisierung.projekt_zugriff_erlaubt(kontext, projekt_id, Projektaktion.ANSEHEN)
+        else None
+    )
+    export_erlaubt = bool(
+        projekt is not None
+        and projekt_id is not None
+        and autorisierung.projekt_zugriff_erlaubt(kontext, projekt_id, Projektaktion.EXPORTIEREN)
+    )
+    import_spalte, export_spalte = st.sidebar.columns(2)
+    if import_spalte.button(
+        "Projekt importieren",
+        type="primary",
+        width="stretch",
+        disabled=not import_erlaubt,
     ):
-        return
-    projekt = roh_projekte.projekt_laden(projekt_id)
-    if projekt is None:
-        return
-    if st.sidebar.button("Projekt exportieren"):
+        st.session_state.projektimport_offen = True
+    if export_spalte.button(
+        "Projekt exportieren",
+        type="primary",
+        width="stretch",
+        disabled=not export_erlaubt,
+    ):
+        assert projekt_id is not None
         try:
             st.session_state.projektarchiv = erstelle_projektarchiv_service(
                 datenbankpfad, workspace
             ).exportieren(kontext, projekt_id)
         except Domaenenfehler as fehler:
             st.sidebar.error(str(fehler))
+    if import_erlaubt and st.session_state.get("projektimport_offen"):
+        generation = int(st.session_state.get("projektimport_generation", 0))
+        with st.sidebar.container(key="projektimport_bereich"):
+            st.html(
+                """
+                <style>
+                .st-key-projektimport_bereich
+                [data-testid="stFileUploaderDropzoneInstructions"] small,
+                .st-key-projektimport_bereich
+                [data-testid="stFileUploaderDropzoneInstructions"] span:last-child {
+                    display: none;
+                }
+                </style>
+                """
+            )
+            upload = st.file_uploader(
+                "ZIP-Projektarchiv auswählen",
+                type=["zip"],
+                key=f"cloud_projektimport_{generation}",
+                width="stretch",
+            )
+            if upload is not None:
+                archiv_service = erstelle_projektarchiv_service(datenbankpfad, workspace)
+                try:
+                    pruefung = archiv_service.import_pruefen(
+                        kontext,
+                        upload.getvalue(),
+                        ziel_gruppen_id=aktive_gruppen_id,
+                    )
+                except Domaenenfehler as fehler:
+                    st.error(str(fehler))
+                else:
+                    st.write(f"**Projekt:** {pruefung.projektname}")
+                    st.caption(
+                        f"Projekt-ID: {pruefung.projekt_id} · "
+                        f"Exportzeitpunkt: {pruefung.exportiert_am or 'nicht angegeben'}"
+                    )
+                    abbrechen, uebernehmen = st.columns(2)
+                    if abbrechen.button("Abbrechen", width="stretch"):
+                        st.session_state.projektimport_offen = False
+                        st.session_state.projektimport_generation = generation + 1
+                        st.rerun()
+                    beschriftung = (
+                        "Vorhandenes Projekt ersetzen"
+                        if pruefung.bereits_vorhanden
+                        else "Projekt importieren"
+                    )
+                    if pruefung.bereits_vorhanden:
+                        st.warning(
+                            "Das Projekt ist bereits vorhanden. Beim Ersetzen werden seine "
+                            "fachlichen Daten und Artefakte durch den vollständig validierten "
+                            "Archivstand ersetzt; Mandant und Berechtigungen bleiben erhalten."
+                        )
+                    if uebernehmen.button(
+                        beschriftung,
+                        type="primary",
+                        width="stretch",
+                    ):
+                        try:
+                            ergebnis = archiv_service.importieren(
+                                kontext,
+                                upload.getvalue(),
+                                ziel_gruppen_id=aktive_gruppen_id,
+                                vorhandenes_projekt_ersetzen=pruefung.bereits_vorhanden,
+                            )
+                        except Domaenenfehler as fehler:
+                            st.error(str(fehler))
+                        else:
+                            projekt_zustand_bereinigen(
+                                cast(MutableMapping[str, Any], st.session_state),
+                                ergebnis.projekt_id,
+                            )
+                            st.session_state.aktuelles_projekt_id = str(ergebnis.projekt_id)
+                            st.session_state.ausgewaehlte_projekt_id = ergebnis.projekt_id
+                            st.session_state.auswahl_generation = (
+                                int(st.session_state.get("auswahl_generation", 0)) + 1
+                            )
+                            st.session_state.projektimport_offen = False
+                            st.session_state.projektimport_generation = generation + 1
+                            if kontext.gast_geheimnis is not None:
+                                st.session_state.gast_projekt_id = str(ergebnis.projekt_id)
+                            st.session_state.erfolgsmeldung = (
+                                f"Projekt „{ergebnis.projektname}“ wurde "
+                                + ("ersetzt." if ergebnis.ersetzt else "importiert.")
+                            )
+                            st.rerun()
     if archiv := st.session_state.get("projektarchiv"):
+        if projekt is None:
+            st.session_state.pop("projektarchiv", None)
+            return
         st.sidebar.caption("Exportiert wird der letzte gespeicherte fachliche Stand.")
         st.sidebar.warning(
             "Projektarchive sind nicht verschlüsselt und können Originaldaten enthalten."
@@ -493,7 +589,31 @@ def _projektaktionen(projekt_id: UUID | None) -> None:
             data=archiv,
             file_name=name,
             mime="application/zip",
+            width="stretch",
         )
+    if projekt is None or projekt_id is None:
+        return
+    projekt_loeschen_erlaubt = autorisierung.projekt_zugriff_erlaubt(
+        kontext, projekt_id, Projektaktion.LOESCHEN
+    )
+    datensatz_loeschen_erlaubt = autorisierung.projekt_zugriff_erlaubt(
+        kontext, projekt_id, Projektaktion.BEARBEITEN
+    )
+    zeige_loeschaktionen(
+        projekt,
+        erstelle_transformations_service(datenbankpfad, workspace),
+        GebundenerLoeschService(kontext, roh_loeschen, autorisierung),
+        projekt_loesch_label=(
+            "Demo beenden und Daten löschen"
+            if kontext.gast_geheimnis is not None
+            else "Projekt löschen"
+        ),
+        projektloeschung_nachbereiten=(
+            _gastmodus_nach_projektloeschung_beenden if kontext.gast_geheimnis is not None else None
+        ),
+        projekt_loeschen_erlaubt=projekt_loeschen_erlaubt,
+        datensatz_loeschen_erlaubt=datensatz_loeschen_erlaubt,
+    )
 
 
 aktive_projekt_id = _projekt_id_aus_session()
@@ -635,14 +755,6 @@ gebundene_projekte = GebundenerProjektService(
     globale_rollen=globale_rollen,
     legacy_erstellung_erlaubt=auth_konfiguration.lokaler_testmodus,
 )
-gebundenes_loeschen = GebundenerLoeschService(kontext, roh_loeschen, autorisierung)
-
-
-def _gastmodus_nach_projektloeschung_beenden() -> None:
-    for schluessel in ("gast_geheimnis", "gast_projekt_id", "projektarchiv"):
-        st.session_state.pop(schluessel, None)
-
-
 aktive_projekt_id = _projekt_id_aus_session()
 if aktive_projekt_id is not None:
     if not autorisierung.projekt_zugriff_erlaubt(
@@ -677,20 +789,28 @@ if aktive_projekt_id is not None and autorisierung.projekt_zugriff_erlaubt(
     kontext, aktive_projekt_id, Projektaktion.BEARBEITEN
 ):
     try:
-        erstelle_fortschritt_service(datenbankpfad).aktualisieren(
-            kontext,
-            aktive_projekt_id,
-            schritt=stand.framework_schritt,
-            unterschritt=stand.unterschritt_name,
-        )
+        fortschritt_service = erstelle_fortschritt_service(datenbankpfad)
+        if st.session_state.get("folgeartefakte_veraltet") == str(aktive_projekt_id):
+            fortschritt_service.auf_datenbasis_zuruecksetzen(
+                kontext,
+                aktive_projekt_id,
+                unterschritt="Transformieren und verknüpfen",
+            )
+        else:
+            fortschritt_service.aktualisieren(
+                kontext,
+                aktive_projekt_id,
+                schritt=stand.framework_schritt,
+                unterschritt=stand.unterschritt_name,
+            )
     except Domaenenfehler:
         pass
 
 if seite == "Schritt 1: Projektrahmen definieren":
     zeige_projektverwaltung(
         gebundene_projekte,
-        erstelle_transformations_service(datenbankpfad, workspace),
-        gebundenes_loeschen,
+        None,
+        None,
         sidebar_titel_anzeigen=False,
         projekt_loesch_label=(
             "Demo beenden und Daten löschen"
