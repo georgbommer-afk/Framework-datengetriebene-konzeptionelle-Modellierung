@@ -158,9 +158,8 @@ def test_transformation_startet_ohne_vorbelegten_typ() -> None:
     assert not anwendung.exception
     assert auswahl.value is None
     assert auswahl.proto.placeholder == "Choose an option"
-    assert next(
-        e for e in anwendung.button if e.label == "Transformation zum Plan hinzufügen"
-    ).disabled
+    assert next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
+    assert not any(e.label == "Transformationsvorschau berechnen" for e in anwendung.button)
 
 
 def test_zeilen_loeschen_formular_zeigt_bedingung_und_vorschau() -> None:
@@ -178,9 +177,11 @@ def test_zeilen_loeschen_formular_zeigt_bedingung_und_vorschau() -> None:
 
     assert not anwendung.exception
     assert any("1 von 2 Zeilen werden gelöscht" in wert.value for wert in anwendung.info)
-    assert not next(
-        e for e in anwendung.button if e.label == "Transformation zum Plan hinzufügen"
-    ).disabled
+    assert not next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
+    beispiele = next(
+        wert for wert in anwendung.dataframe if list(wert.value.columns) == ["Text", "Wert"]
+    )
+    assert beispiele.value["Wert"].tolist() == [2]
 
 
 def test_textbereinigungsformular_zeigt_allgemeine_begrenzer_und_sicheren_standard() -> None:
@@ -214,9 +215,7 @@ def test_textbereinigungsformular_zeigt_allgemeine_begrenzer_und_sicheren_standa
             "Status": "Unverändert (kein Treffer)",
         },
     ]
-    assert not next(
-        e for e in anwendung.button if e.label == "Transformation zum Plan hinzufügen"
-    ).disabled
+    assert not next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
 
 
 def test_zurueck_aus_dem_letzten_etl_abschnitt_bewahrt_den_zustand() -> None:

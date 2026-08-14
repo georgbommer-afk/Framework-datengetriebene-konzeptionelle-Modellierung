@@ -2,8 +2,9 @@
 
 import logging
 import re
-from dataclasses import asdict, replace
-from typing import Any
+from collections.abc import MutableMapping
+from dataclasses import asdict
+from typing import Any, cast
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -57,6 +58,7 @@ from framework_mvp.ui.navigation import (
     framework_bereich_oeffnen,
     schritt_abschliessen_und_weiter,
 )
+from framework_mvp.ui.session_cleanup import folgeartefakte_zustand_invalidieren
 from framework_mvp.workspace import WorkspaceKonfiguration
 
 LOGGER = logging.getLogger(__name__)
@@ -705,20 +707,28 @@ def _transformation(
     """Zeigt und persistiert den Transformationsplan des bestätigten Imports."""
     importvorgang: Importvorgang = zustand["bestaetigter_import"]
     plan = zustand.get("transformationsplan")
-    globaler_plan = st.session_state.pop("etl_transformationsplan", None)
-    if globaler_plan is not None and globaler_plan.projekt_id == projekt_id:
-        plan = globaler_plan
+    anwendung = st.session_state.pop("etl_transformationsanwendung", None)
+    if anwendung is not None and anwendung[0].projekt_id == projekt_id:
+        plan, ergebnis, datensatz = anwendung
+        zustand["transformationsplan"] = plan
+        zustand["transformationsergebnis"] = ergebnis
+        zustand["zwischendatensatz"] = datensatz
+        zustand["zwischendatensatz_id"] = datensatz.zwischendatensatz_id
+        st.success("Die Transformation wurde angewendet und als neuer Zwischenstand gespeichert.")
+    if plan is None:
+        plan = service.neuester_plan_fuer_import(projekt_id, importvorgang.import_id)
     if plan is None:
         plan = Transformationsplan.neu(projekt_id, (importvorgang.import_id,))
         service.plan_speichern(plan)
-    rohdaten = service.import_dataframe_laden(importvorgang.import_id)
-    ausgangsprofil = service.ausgangsprofil_laden(importvorgang.import_id)
-    arbeitsdaten = (
-        service.vorschau(plan).daten
-        if all(not schritt.aktiviert or schritt.frameworkkonform for schritt in plan.schritte)
-        else rohdaten
-    )
-    plan = zeige_transformationseditor(service, plan, arbeitsdaten, ausgangsprofil.gesamtprofil)
+    letzter_datensatz, arbeitsdaten = service.arbeitsstand_laden(plan)
+    if letzter_datensatz is not None:
+        zustand["zwischendatensatz"] = letzter_datensatz
+        zustand["zwischendatensatz_id"] = letzter_datensatz.zwischendatensatz_id
+        st.session_state.aktueller_zwischendatensatz_id = str(
+            letzter_datensatz.zwischendatensatz_id
+        )
+    arbeitsprofil = service.arbeitsprofil_erstellen(arbeitsdaten)
+    plan = zeige_transformationseditor(service, plan, arbeitsdaten, asdict(arbeitsprofil.profil))
     if any(schritt.aktiviert and not schritt.frameworkkonform for schritt in plan.schritte):
         zustand["transformationsplan"] = plan
         st.warning(
@@ -726,11 +736,20 @@ def _transformation(
             "Transformationsstand ausführen oder verknüpfen."
         )
         return
-    zustand["transformationsplan"] = _join_konfigurieren(
-        service, projekt_id, plan, service.vorschau(plan).daten
-    )
-    if ergebnis := st.session_state.pop("etl_transformationsergebnis", None):
-        zustand["transformationsergebnis"] = ergebnis
+    zustand["transformationsplan"] = _join_konfigurieren(service, projekt_id, plan, arbeitsdaten)
+    if gespeichertes_ergebnis := zustand.get("transformationsergebnis"):
+        st.write("**Aktualisierte Vorschau**")
+        st.caption(
+            f"{len(gespeichertes_ergebnis.daten):,} Zeilen · "
+            f"{len(gespeichertes_ergebnis.daten.columns):,} Spalten"
+        )
+        st.dataframe(gespeichertes_ergebnis.vorschau, width="stretch")
+    if st.session_state.get("folgeartefakte_veraltet") == str(projekt_id):
+        st.warning(
+            "Die Datenbasis wurde geändert. Mapping, Event Log, Datenqualität, "
+            "Process Mining und Modellergebnisse müssen auf diesem Zwischenstand neu "
+            "erzeugt werden."
+        )
 
 
 def _join_konfigurieren(
@@ -817,10 +836,6 @@ def _join_konfigurieren(
             f"{pruefung.nicht_zuordenbar_rechts:,} · "
             f"**Erwartete {join_art}-Zeilen:** {pruefung.erwartete_zeilen:,}"
         )
-        risiko_bestaetigt = st.checkbox(
-            "Ich bestätige die mögliche Zeilenvervielfachung.",
-            disabled=not pruefung.moegliche_zeilenvervielfachung,
-        )
         for warnung in pruefung.warnungen:
             st.warning(warnung)
         parameter = {
@@ -829,7 +844,7 @@ def _join_konfigurieren(
             "rechte_schluessel": rechte_schluessel,
             "join_art": join_art,
             "suffixe": ["_haupt", "_zusatz"],
-            "nm_bestaetigt": risiko_bestaetigt,
+            "nm_bestaetigt": pruefung.moegliche_zeilenvervielfachung,
             "pruefung": {
                 "kardinalitaet": pruefung.kardinalitaet,
                 "erwartete_zeilen": pruefung.erwartete_zeilen,
@@ -841,7 +856,8 @@ def _join_konfigurieren(
             st.json(parameter)
         if st.button(
             "Verknüpfung anwenden",
-            disabled=pruefung.moegliche_zeilenvervielfachung and not risiko_bestaetigt,
+            type="primary",
+            width="stretch",
         ):
             schritt = Transformationsschritt.neu(
                 typ=Transformationsart.TABELLEN_JOIN,
@@ -850,13 +866,18 @@ def _join_konfigurieren(
                 reihenfolge=len(plan.schritte) + 1,
                 beschreibung=f"{join_art}-Verknüpfung",
             )
-            plan = service.schritt_hinzufuegen(plan, schritt)
-            plan = replace(
+            plan, ergebnis, datensatz = service.transformation_anwenden(
                 plan,
-                import_ids=tuple(dict.fromkeys((*plan.import_ids, *rechter_datensatz.import_ids))),
+                schritt,
+                uuid4(),
+                zusaetzliche_import_ids=rechter_datensatz.import_ids,
             )
-            service.plan_speichern(plan)
-            st.session_state.etl_transformationsplan = plan
+            st.session_state.etl_transformationsanwendung = (plan, ergebnis, datensatz)
+            folgeartefakte_zustand_invalidieren(
+                cast("MutableMapping[str, Any]", st.session_state),
+                projekt_id,
+                datensatz.zwischendatensatz_id,
+            )
             st.rerun()
     return plan
 
@@ -1009,14 +1030,11 @@ def _zeige_zwischendatensatz_t(
         st.markdown("**Warnungen:** keine")
     if datensatz is None:
         st.caption(
-            "Nach Bestätigung werden CSV.GZ, Schema-JSON und Herkunfts-/Transformations-JSON "
+            "Beim Fortfahren werden Daten, Schema, Profil und vollständige Lineage "
             "projektbezogen gespeichert."
         )
         return
     st.success("Der Zwischendatensatz wurde reproduzierbar gespeichert.")
-    st.write(f"**Daten:** `{datensatz.relativer_daten_pfad}`")
-    st.write(f"**Schema:** `{datensatz.relativer_schema_pfad}`")
-    st.write(f"**Herkunft und Transformation:** `{datensatz.relativer_transformation_pfad}`")
 
 
 def _zwischendatensatz(
@@ -1028,14 +1046,23 @@ def _zwischendatensatz(
     """Fasst Q, R und T vollständig zusammen und ermöglicht die Wiederaufnahme."""
     st.subheader("Ausgabe dieses Schritts")
     plan: Transformationsplan = zustand["transformationsplan"]
-    ergebnis = service.vorschau(plan)
+    datensatz = zustand.get("zwischendatensatz")
+    if datensatz is not None:
+        _, daten = service.zwischendatensatz_laden(datensatz.zwischendatensatz_id)
+        gespeichertes_ergebnis = zustand.get("transformationsergebnis")
+        ergebnis = (
+            gespeichertes_ergebnis if gespeichertes_ergebnis is not None else service.vorschau(plan)
+        )
+        if len(ergebnis.daten) != len(daten) or list(ergebnis.daten.columns) != list(daten.columns):
+            raise Domaenenfehler("Der aktive Zwischenstand passt nicht zur Transformationskette.")
+    else:
+        ergebnis = service.vorschau(plan)
     importe = _importe_des_plans(service, projekt_id, plan)
     _zeige_datenquellenkatalog_q(
         importe=importe,
         datenquelle_service=datenquelle_service,
     )
     _zeige_datenprofile_r(importe=importe, service=service)
-    datensatz = zustand.get("zwischendatensatz")
     _zeige_zwischendatensatz_t(
         importe=importe,
         plan=plan,
@@ -1049,18 +1076,19 @@ def _zwischendatensatz(
         st.rerun()
     datensatz_id = zustand.setdefault("zwischendatensatz_id", uuid4())
     if datensatz is None and st.button(
-        "Q, R und T speichern und zu Schritt 3",
+        "Zwischendatensatz erstellen und zu Schritt 3",
         type="primary",
+        width="stretch",
     ):
         datensatz = service.zwischendatensatz_erzeugen(plan, ergebnis, datensatz_id)
         zustand["zwischendatensatz"] = datensatz
         st.session_state.aktueller_zwischendatensatz_id = str(datensatz.zwischendatensatz_id)
+        st.session_state.pop("folgeartefakte_veraltet", None)
         schritt_abschliessen_und_weiter(aktueller_schritt=2, projekt_id=projekt_id)
-    if datensatz is not None and st.button("Weiter zu Schritt 3", type="primary"):
+    if datensatz is not None and st.button("Weiter zu Schritt 3", type="primary", width="stretch"):
         st.session_state.aktueller_zwischendatensatz_id = str(datensatz.zwischendatensatz_id)
+        st.session_state.pop("folgeartefakte_veraltet", None)
         schritt_abschliessen_und_weiter(aktueller_schritt=2, projekt_id=projekt_id)
-    if datensatz is None:
-        st.info("Speichern Sie Q, R und T, um mit Schritt 3 fortzufahren.")
 
 
 def _kann_weiter(zustand: dict[str, Any]) -> bool:

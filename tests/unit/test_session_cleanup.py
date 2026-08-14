@@ -3,9 +3,31 @@
 from uuid import uuid4
 
 from framework_mvp.ui.session_cleanup import (
+    folgeartefakte_zustand_invalidieren,
     projekt_zustand_bereinigen,
     zwischendatensatz_zustand_bereinigen,
 )
+
+
+def test_neue_datenbasis_bewahrt_etl_und_invalidiert_alle_folgeartefakte() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    zustand = {
+        "aktuelles_event_log_id": "alt",
+        "aktuelle_analyse_id": "alt",
+        "schritt10_ausgabe": b"alt",
+        "etl_wizard_zustaende": {str(projekt_id): {"schritt": 4, "plan": "bleibt"}},
+        "mapping_wizard_zustaende": {str(projekt_id): {"schritt": 3}},
+    }
+
+    folgeartefakte_zustand_invalidieren(zustand, projekt_id, datensatz_id)
+
+    assert zustand["etl_wizard_zustaende"][str(projekt_id)]["plan"] == "bleibt"
+    assert str(projekt_id) not in zustand["mapping_wizard_zustaende"]
+    assert "aktuelles_event_log_id" not in zustand
+    assert "aktuelle_analyse_id" not in zustand
+    assert "schritt10_ausgabe" not in zustand
+    assert zustand["aktueller_zwischendatensatz_id"] == str(datensatz_id)
+    assert zustand["folgeartefakte_veraltet"] == str(projekt_id)
 
 
 def test_t_loeschung_bereinigt_alle_abhaengigen_ids_und_projektzustaende() -> None:

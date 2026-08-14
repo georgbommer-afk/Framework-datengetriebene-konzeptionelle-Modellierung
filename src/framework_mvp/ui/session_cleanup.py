@@ -27,6 +27,28 @@ ABHAENGIGE_ID_SCHLUESSEL = (
     "schritt10_ausgabe_signatur",
 )
 
+ABHAENGIGE_ZUSTANDSSAMMLUNGEN = (
+    "mapping_wizard_zustaende",
+    "mappingtabelle_zustaende",
+    "event_log_zustaende",
+    "quality_gate_zustaende",
+    "process_mining_zustaende",
+)
+
+
+def folgeartefakte_zustand_invalidieren(
+    zustand: MutableMapping[str, Any], projekt_id: UUID, neuer_zwischendatensatz_id: UUID
+) -> None:
+    """Bindet die UI an eine neue Datenbasis und verwirft ausschließlich Folgeergebnisse."""
+    for schluessel in ABHAENGIGE_ID_SCHLUESSEL:
+        zustand.pop(schluessel, None)
+    for sammlung in ABHAENGIGE_ZUSTANDSSAMMLUNGEN:
+        werte = zustand.get(sammlung)
+        if isinstance(werte, dict):
+            werte.pop(str(projekt_id), None)
+    zustand["aktueller_zwischendatensatz_id"] = str(neuer_zwischendatensatz_id)
+    zustand["folgeartefakte_veraltet"] = str(projekt_id)
+
 
 def zwischendatensatz_zustand_bereinigen(
     zustand: MutableMapping[str, Any], projekt_id: UUID, zwischendatensatz_id: UUID
@@ -37,14 +59,7 @@ def zwischendatensatz_zustand_bereinigen(
         zustand.pop("aktueller_zwischendatensatz_id", None)
         for schluessel in ABHAENGIGE_ID_SCHLUESSEL:
             zustand.pop(schluessel, None)
-        for sammlung in (
-            "etl_wizard_zustaende",
-            "mapping_wizard_zustaende",
-            "mappingtabelle_zustaende",
-            "event_log_zustaende",
-            "quality_gate_zustaende",
-            "process_mining_zustaende",
-        ):
+        for sammlung in ("etl_wizard_zustaende", *ABHAENGIGE_ZUSTANDSSAMMLUNGEN):
             werte = zustand.get(sammlung)
             if isinstance(werte, dict):
                 werte.pop(str(projekt_id), None)
@@ -59,14 +74,7 @@ def projekt_zustand_bereinigen(zustand: MutableMapping[str, Any], projekt_id: UU
     zwischendatensatz_zustand_bereinigen(zustand, projekt_id, UUID(int=0))
     for schluessel in ABHAENGIGE_ID_SCHLUESSEL:
         zustand.pop(schluessel, None)
-    for sammlung in (
-        "etl_wizard_zustaende",
-        "mapping_wizard_zustaende",
-        "mappingtabelle_zustaende",
-        "event_log_zustaende",
-        "quality_gate_zustaende",
-        "process_mining_zustaende",
-    ):
+    for sammlung in ("etl_wizard_zustaende", *ABHAENGIGE_ZUSTANDSSAMMLUNGEN):
         werte = zustand.get(sammlung)
         if isinstance(werte, dict):
             werte.pop(str(projekt_id), None)

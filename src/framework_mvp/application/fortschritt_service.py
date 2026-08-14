@@ -134,6 +134,32 @@ class FortschrittService:
         )
         return self.laden(kontext, projekt_id)
 
+    def auf_datenbasis_zuruecksetzen(
+        self,
+        kontext: Zugriffskontext,
+        projekt_id: UUID,
+        *,
+        unterschritt: str,
+    ) -> None:
+        """Setzt den fachlichen Stand nach einer neuen ETL-Datenbasis bewusst auf Schritt 2."""
+        self._autorisierung.projekt_zugriff_pruefen(kontext, projekt_id, Projektaktion.BEARBEITEN)
+        zaehler, nenner = berechne_fortschritt(2, unterschritt)
+        jetzt = datetime.now(UTC)
+        alt = self._zugriff.fortschritt_laden(projekt_id)
+        self._zugriff.fortschritt_speichern(
+            Projektfortschritt(
+                projekt_id=projekt_id,
+                framework_schritt=2,
+                fachlicher_unterschritt=unterschritt,
+                fortschritt_zaehler=zaehler,
+                fortschritt_nenner=nenner,
+                phase=phase_fuer_schritt(2),
+                status="in_bearbeitung",
+                gespeichert_am=jetzt,
+                revision=1 if alt is None else alt.revision + 1,
+            )
+        )
+
     def laden(
         self, kontext: Zugriffskontext, projekt_id: UUID, *, dashboard: bool = False
     ) -> Fortschrittsanzeige:

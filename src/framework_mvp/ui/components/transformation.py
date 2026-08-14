@@ -1,7 +1,8 @@
 """Fachlich begrenzter Transformationseditor gemäß Tabelle 3.11."""
 
-from dataclasses import asdict
+from collections.abc import MutableMapping
 from typing import Any, cast
+from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
@@ -9,6 +10,7 @@ import streamlit as st
 from framework_mvp.application.transformation import (
     ermittle_ersatzwert_aus_profil,
     transformiere_textwerte,
+    vorschau_zu_loeschender_zeilen,
     zaehle_zu_loeschende_zeilen,
 )
 from framework_mvp.application.transformations_service import TransformationsService
@@ -21,6 +23,7 @@ from framework_mvp.domain.models import (
     Transformationsschritt,
 )
 from framework_mvp.ui.helpers import fachliche_auswahl
+from framework_mvp.ui.session_cleanup import folgeartefakte_zustand_invalidieren
 
 TECHNISCHE_ZIELTYPEN = (
     "Text",
@@ -235,7 +238,14 @@ def _zeilen_loeschen_formular(
     except (Domaenenfehler, TypeError, ValueError) as fehler:
         st.error(f"Die Löschbedingung ist ungültig: {fehler}")
         return None
-    st.info(f"Vorschau: {anzahl} von {len(daten)} Zeilen werden gelöscht.")
+    st.info(
+        f"Vorschau: {anzahl} von {len(daten)} Zeilen werden gelöscht; "
+        f"danach verbleiben voraussichtlich {len(daten) - anzahl} Zeilen."
+    )
+    beispiele = vorschau_zu_loeschender_zeilen(daten, spalte, parameter)
+    if not beispiele.empty:
+        st.write("**Beispiele der zu löschenden Zeilen**")
+        st.dataframe(beispiele, hide_index=True, width="stretch")
     parameter["vorschau_zu_loeschende_zeilen"] = anzahl
     return (spalte,), parameter, f"{anzahl} Zeilen in {spalte} löschen"
 
@@ -348,27 +358,18 @@ def zeige_transformationseditor(
     ausgangsdaten: pd.DataFrame,
     ausgangsprofil: dict[str, Any],
 ) -> Transformationsplan:
-    """Erfasst die explizit frameworkkonformen Transformationen für Schritt 2."""
-    st.subheader("Transformationsplan")
+    """Wendet genau eine konfigurierte Transformation auf den letzten Zwischenstand an."""
+    st.subheader("Transformationskette")
     st.caption(
-        "Transformationen werden nur nach Ihrer ausdrücklichen Auswahl ausgeführt. "
-        "Ein Durchlauf ohne Transformation ist zulässig."
+        "Jede angewendete Transformation erzeugt unmittelbar einen neuen, persistierten "
+        "Zwischenstand. Ein Durchlauf ohne Transformation ist weiterhin zulässig."
     )
-    for schritt in sorted(plan.schritte, key=lambda wert: wert.reihenfolge):
-        if schritt.typ is Transformationsart.TABELLEN_JOIN:
-            continue
-        if not schritt.frameworkkonform:
-            st.warning(
-                f"Legacy-Schritt '{schritt.typ.value}' ist nicht mehr frameworkkonform und "
-                "wird nicht ausgeführt."
-            )
-        else:
-            st.write(f"{schritt.reihenfolge}. {schritt.beschreibung}")
-        if st.button("Schritt entfernen", key=f"etl_remove_{schritt.transformationsschritt_id}"):
-            plan = service.schritt_entfernen(plan, schritt.transformationsschritt_id)
-            service.plan_speichern(plan)
-            st.session_state.etl_transformationsplan = plan
-            st.rerun()
+    historie_laden = getattr(service, "transformationshistorie", None)
+    historie = historie_laden(plan) if callable(historie_laden) else []
+    if historie:
+        st.dataframe(historie, hide_index=True, width="stretch")
+    elif plan.schritte:
+        st.info("Der vorhandene Plan besitzt noch keinen persistierten Ausführungsstand.")
 
     st.write("**Transformation hinzufügen**")
     art = fachliche_auswahl(
@@ -383,19 +384,19 @@ def zeige_transformationseditor(
     )
     if art is None:
         st.info("Wählen Sie zuerst eine Transformationsart aus.")
-    if st.button("Transformation zum Plan hinzufügen", disabled=schritt is None):
+    if st.button(
+        "Transformation anwenden",
+        disabled=schritt is None,
+        type="primary",
+        width="stretch",
+    ):
         assert schritt is not None
-        plan = service.schritt_hinzufuegen(plan, schritt)
-        service.plan_speichern(plan)
-        st.session_state.etl_transformationsplan = plan
+        plan, ergebnis, datensatz = service.transformation_anwenden(plan, schritt, uuid4())
+        st.session_state.etl_transformationsanwendung = (plan, ergebnis, datensatz)
+        folgeartefakte_zustand_invalidieren(
+            cast("MutableMapping[str, Any]", st.session_state),
+            plan.projekt_id,
+            datensatz.zwischendatensatz_id,
+        )
         st.rerun()
-
-    if st.button("Transformationsvorschau berechnen", type="primary"):
-        ergebnis = service.vorschau(plan)
-        st.session_state.etl_transformationsergebnis = ergebnis
-        st.dataframe(ergebnis.vorschau, width="stretch")
-        if ergebnis.historie:
-            st.dataframe([asdict(wert) for wert in ergebnis.historie], hide_index=True)
-        else:
-            st.info("Keine Transformation ausgewählt; der Datensatz bleibt unverändert.")
     return plan

@@ -242,6 +242,22 @@ def zaehle_zu_loeschende_zeilen(daten: pd.DataFrame, spalte: str, parameter: dic
     return int(_filtermaske(daten[spalte], parameter).fillna(False).sum())
 
 
+def vorschau_zu_loeschender_zeilen(
+    daten: pd.DataFrame,
+    spalte: str,
+    parameter: dict[str, Any],
+    *,
+    maximum: int = 5,
+) -> pd.DataFrame:
+    """Liefert einige Treffer einer validierten Löschbedingung ohne Datenmutation."""
+    if maximum < 1:
+        raise Domaenenfehler("Die Löschvorschau benötigt mindestens eine Beispielzeile.")
+    if spalte not in daten.columns:
+        raise Domaenenfehler(f"Die ausgewählte Spalte {spalte} ist nicht vorhanden.")
+    maske = _filtermaske(daten[spalte], parameter).fillna(False)
+    return daten.loc[maske].head(maximum).copy(deep=True)
+
+
 def transformiere_textwerte(
     spalte: pd.Series, parameter: dict[str, Any]
 ) -> tuple[pd.Series, pd.Series]:

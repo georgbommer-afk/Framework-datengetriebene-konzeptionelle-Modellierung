@@ -65,3 +65,45 @@ def test_fortschritt_kommt_nicht_aus_session_state(tmp_path: Path) -> None:
     assert neue_sitzung.prozent == gespeichert.prozent
     assert neue_sitzung.schritt == 4
     assert neue_sitzung.unterschritt == "Semantische Rollen"
+
+
+def test_neue_etl_datenbasis_setzt_persistierten_fortschritt_kontrolliert_zurueck(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "zuruecksetzen.sqlite"
+    projekt = ProjektService(SQLiteProjektRepository(db)).projekt_anlegen(
+        bezeichnung="Neue Datenbasis",
+        untersuchungsauftrag=Untersuchungsauftrag(
+            "Problem", "Zweck", Systemtyp.PRODUKTION, "Grenze"
+        ),
+    )
+    geheimnis = "z" * 40
+    jetzt = datetime.now(UTC)
+    repository = SQLiteZugriffsRepository(db)
+    repository.projektzugehoerigkeit_speichern(
+        Projektzugehoerigkeit(
+            projekt.projekt_id,
+            Projektzugriffsart.GAST,
+            None,
+            geheimnis_hash(geheimnis),
+            jetzt + timedelta(hours=2),
+            jetzt,
+            1,
+            jetzt,
+        )
+    )
+    kontext = Zugriffskontext.gast(geheimnis)
+    service = FortschrittService(
+        repository, SQLiteFortschrittRepository(db), AutorisierungsService(repository)
+    )
+    service.aktualisieren(kontext, projekt.projekt_id, schritt=10, unterschritt="")
+
+    service.auf_datenbasis_zuruecksetzen(
+        kontext,
+        projekt.projekt_id,
+        unterschritt="Transformieren und verknüpfen",
+    )
+
+    stand = service.laden(kontext, projekt.projekt_id)
+    assert stand.schritt == 2
+    assert stand.unterschritt == "Transformieren und verknüpfen"

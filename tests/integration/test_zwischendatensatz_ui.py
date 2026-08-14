@@ -51,7 +51,7 @@ plan = st.session_state.regressionsplan
 service = TransformationsService(
     SQLiteETLRepository(ermittle_datenbankpfad()),
     None,
-    None,
+    DatenimportService(),
     ImportartefaktSpeicher(WorkspaceKonfiguration.ermitteln()),
 )
 ergebnis = Transformationsergebnis(
@@ -103,13 +103,15 @@ def test_schritt_neun_zeigt_alle_artefaktpfade_ohne_attributfehler(
     monkeypatch.setenv(WORKSPACE_UMGEBUNGSVARIABLE, str(workspace))
     anwendung = AppTest.from_string(ANWENDUNG).run()
     next(
-        wert for wert in anwendung.button if wert.label == "Q, R und T speichern und zu Schritt 3"
+        wert
+        for wert in anwendung.button
+        if wert.label == "Zwischendatensatz erstellen und zu Schritt 3"
     ).click().run()
     assert not anwendung.exception
     ausgabe = "\n".join(wert.value for wert in anwendung.markdown)
-    assert ".csv.gz" in ausgabe
-    assert ".schema.json" in ausgabe
-    assert ".transformation.json" in ausgabe
+    assert ".csv.gz" not in ausgabe
+    assert ".schema.json" not in ausgabe
+    assert ".transformation.json" not in ausgabe
     assert "Datenquellenkatalog (Q)" in ausgabe
     assert "Datenprofil (R)" in ausgabe
     assert "Aufbereiteter Zwischendatensatz (T)" in ausgabe
