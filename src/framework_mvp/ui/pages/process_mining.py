@@ -300,7 +300,13 @@ def zeige_process_mining_seite(
                     format_func=lambda wert: wert.bezeichnung,
                     key=notation_key,
                 )
-                berechnen = st.form_submit_button("Modell berechnen", type="primary")
+                zurueck_spalte, berechnen_spalte = st.columns(2)
+                zurueck = zurueck_spalte.form_submit_button("Zurück", width="stretch")
+                berechnen = berechnen_spalte.form_submit_button(
+                    "Prozessmodell berechnen und zu Schritt 7",
+                    type="primary",
+                    width="stretch",
+                )
             if k == 0.0:
                 st.info("k = 0: Es wird der reguläre Inductive Miner verwendet.")
             else:
@@ -318,6 +324,11 @@ def zeige_process_mining_seite(
                 },
                 sort_keys=True,
             )
+            if zurueck:
+                zustand["schwellwert_k"] = k
+                zustand["prozessnotation"] = notation
+                zustand["schritt"] = 1
+                st.rerun()
             if berechnen:
                 konfiguration = DiscoveryKonfiguration(k, notation)
                 zustand["schwellwert_k"] = k
@@ -329,37 +340,9 @@ def zeige_process_mining_seite(
                         freigabe_id, konfiguration
                     )
                     zustand["vorschau_signatur"] = signatur
-            vorschau = zustand.get("vorschau")
-            if vorschau is None:
-                st.info("Starten Sie die Prozessentdeckung ausdrücklich mit „Modell berechnen“.")
-                _navigation(zustand, False)
-                return
-            if zustand.get("vorschau_signatur") != signatur:
-                st.warning(
-                    "Die angezeigte Vorschau gehört zur zuletzt bestätigten Konfiguration. "
-                    "Berechnen Sie das Modell mit den geänderten Werten erneut."
-                )
-                _navigation(zustand, False)
-                return
-            if not isinstance(vorschau, ProcessMiningVorschau):
-                raise Domaenenfehler("Die Process-Mining-Vorschau ist ungültig.")
-            _dfg(vorschau)
-            _prozessmodell(vorschau)
-            _technik(process_mining_service, vorschau)
-            _navigation(zustand, True)
-            return
-
-        st.write("### Prozessmodell P und Discovery-Ergebnisse A_D")
-        analyse = zustand.get("gespeicherte_analyse")
-        if analyse is None:
-            vorschau = zustand.get("vorschau")
-            if vorschau is None:
-                zustand["schritt"] = 2
-                st.rerun()
-            konfiguration = vorschau.konfiguration
-            _dfg(vorschau)
-            _prozessmodell(vorschau)
-            if st.button("P und A_D speichern und zu Schritt 7", type="primary"):
+                vorschau = zustand.get("vorschau")
+                if not isinstance(vorschau, ProcessMiningVorschau):
+                    raise Domaenenfehler("Die Process-Mining-Vorschau ist ungültig.")
                 analyse = process_mining_service.speichern(
                     zustand["analyse_id"], freigabe_id, konfiguration, vorschau
                 )
@@ -372,6 +355,13 @@ def zeige_process_mining_seite(
                 st.session_state.aktuelles_prozessmodell_id = str(analyse.analyse_id)
                 st.session_state.aktuelle_discovery_ergebnisse_id = str(analyse.analyse_id)
                 schritt_abschliessen_und_weiter(aktueller_schritt=6, projekt_id=projekt_id)
+            return
+
+        st.write("### Prozessmodell P und Discovery-Ergebnisse A_D")
+        analyse = zustand.get("gespeicherte_analyse")
+        if analyse is None:
+            zustand["schritt"] = 2
+            st.rerun()
         if analyse is None:
             _navigation(zustand, False)
             return

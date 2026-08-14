@@ -1,10 +1,12 @@
 """Kompakte Streamlit-Verträge der Schritte 9 und 10."""
 
-import base64
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from streamlit.testing.v1 import AppTest
+
+from framework_mvp.ui.pages.modellausgabe import _html_link
 
 SCHRITT_9_APP = r"""
 from types import SimpleNamespace
@@ -229,20 +231,32 @@ def test_schritt_10_bietet_html_pdf_und_nur_deaktivierten_xlsx_dummy() -> None:
     assert "Fördertechnik Ost ÄÖÜ.xlsx" in dummy.label
     next(wert for wert in app.button if wert.label == "HTML und PDF erzeugen").click().run()
     downloads = cast(list[Any], app.get("download_button"))
-    assert {wert.label for wert in downloads} == {"PDF-Report herunterladen"}
+    assert {wert.label for wert in downloads} == {
+        "HTML-Report herunterladen",
+        "PDF-Report herunterladen",
+    }
     assert not any("Excel-Ausgabe herunterladen" == wert.label for wert in downloads)
     link = next(
         wert.value
         for wert in app.markdown
-        if "Konzeptionelles Modell im neuen Tab öffnen" in wert.value
+        if "Konzeptionelles Modell in neuem Tab öffnen" in wert.value
     )
     assert 'target="_blank"' in link
     assert 'rel="noopener noreferrer"' in link
-    assert "data:text/html;charset=utf-8;base64," in link
-    kodiert = link.split("base64,", 1)[1].split('"', 1)[0]
-    assert base64.b64decode(kodiert) == b"<!DOCTYPE html><style></style>"
+    assert 'href="/mock/media/' in link
+    assert link.split('href="', 1)[1].split('"', 1)[0].endswith(".html")
+    assert "data:" not in link
     assert not app.text_input
     assert not app.text_area
+
+
+def test_html_link_akzeptiert_nur_streamlit_medienressource() -> None:
+    link = _html_link("/media/bericht.html")
+    assert 'href="/media/bericht.html"' in link
+    assert 'target="_blank"' in link
+    assert 'rel="noopener noreferrer"' in link
+    with pytest.raises(ValueError):
+        _html_link("data:text/html;base64,PGh0bWw+")
 
 
 def test_seiten_dokumentieren_die_verbindlichen_vertraege() -> None:

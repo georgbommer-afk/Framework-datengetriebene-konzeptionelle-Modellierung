@@ -151,15 +151,14 @@ def test_unvollstaendige_ressourcen_zeigen_kompakte_manuelle_tabelle() -> None:
         "manuelle Ressourcenzuordnung ist nicht vollständig" in wert.value for wert in app.warning
     )
     assert next(
-        wert for wert in app.button if wert.label == "A_G vollständig neu berechnen"
+        wert for wert in app.button if wert.label == "A_G berechnen und zu Schritt 8"
     ).disabled
 
 
 def test_a_g_speichern_setzt_id_uebergabe_und_schritt_acht() -> None:
     app = _app()
-    next(wert for wert in app.button if wert.label == "A_G vollständig neu berechnen").click().run()
     next(
-        wert for wert in app.button if wert.label == "A_G speichern und zu Schritt 8"
+        wert for wert in app.button if wert.label == "A_G berechnen und zu Schritt 8"
     ).click().run()
 
     assert app.session_state["aktuelle_aggregations_id"] == ("66666666-6666-6666-6666-666666666666")
@@ -169,9 +168,8 @@ def test_a_g_speichern_setzt_id_uebergabe_und_schritt_acht() -> None:
 
 def test_schritt_7_hat_keine_redundante_vorschau_bestaetigung() -> None:
     app = _app()
-    next(wert for wert in app.button if wert.label == "A_G vollständig neu berechnen").click().run()
     assert not any("Ich bestätige die Vorschau" in wert.label for wert in app.checkbox)
-    assert any(wert.label == "Technische Details" for wert in app.expander)
+    assert not any(wert.label == "A_G speichern und zu Schritt 8" for wert in app.button)
 
 
 def test_woped_url_iframe_und_fallback_sind_fest_und_bedingt() -> None:

@@ -402,16 +402,12 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
                 st.session_state.ag_lineare_reihenfolge = reihenfolge
                 st.rerun()
         meta = _sollmodell_metadaten("ag_linear")
-        bestaetigt = st.checkbox(
-            "Ich bestätige diese Reihenfolge als menschlich festgelegten fachlichen Sollablauf.",
-            key="ag_linear_bestaetigt",
-        )
         if st.button("Lineares P_Soll erzeugen", type="primary"):
             try:
                 st.session_state.ag_sollmodell = erzeuge_lineares_sollmodell(
                     projekt_id=basis.projekt.projekt_id,
                     aktivitaeten=reihenfolge,
-                    menschlich_bestaetigt=bestaetigt,
+                    menschlich_bestaetigt=True,
                     **meta,
                 )
                 st.session_state.pop("ag_aktivitaetsmapping", None)
@@ -434,14 +430,13 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
             key="ag_pnml_upload",
         )
         meta = _sollmodell_metadaten("ag_pnml")
-        markierung = st.checkbox(
-            "Falls Markierungen fehlen: Ableitung aus genau einem Quell- und Senkenplatz "
-            "bestätigen",
+        markierung = st.radio(
+            "Umgang mit fehlenden Anfangs- oder Endmarkierungen",
+            (
+                "Import abbrechen",
+                "Aus eindeutigem Quell- und Senkenplatz ableiten",
+            ),
             key="ag_pnml_markierung",
-        )
-        bestaetigt = st.checkbox(
-            "Ich bestätige dieses Modell als unabhängige menschliche Sollvorgabe.",
-            key="ag_pnml_bestaetigt",
         )
         if st.button("PNML sicher validieren", disabled=upload is None, type="primary"):
             try:
@@ -450,8 +445,10 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
                     projekt_id=basis.projekt.projekt_id,
                     dateiname=upload.name,
                     originalbytes=upload.getvalue(),
-                    menschlich_bestaetigt=bestaetigt,
-                    markierungsableitung_bestaetigt=markierung,
+                    menschlich_bestaetigt=True,
+                    markierungsableitung_bestaetigt=(
+                        markierung == "Aus eindeutigem Quell- und Senkenplatz ableiten"
+                    ),
                     **meta,
                 )
                 st.session_state.pop("ag_aktivitaetsmapping", None)
@@ -484,11 +481,7 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
         )
         if ziel != _PLATZHALTER:
             manuell[aktivitaet] = ziel
-    mapping_bestaetigt = st.checkbox(
-        "Ich bestätige die exakten und manuellen Aktivitätszuordnungen.",
-        key="ag_mapping_bestaetigt",
-    )
-    if st.button("Aktivitätsmapping bestätigen"):
+    if st.button("Aktivitätsmapping übernehmen"):
         try:
             st.session_state.ag_aktivitaetsmapping = erstelle_aktivitaetsmapping(
                 projekt_id=basis.projekt.projekt_id,
@@ -496,7 +489,7 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
                 event_aktivitaeten=aktivitaeten,
                 modell_transitionen=sollmodell.sichtbare_transitionen,
                 manuelle_zuordnungen=manuell,
-                menschlich_bestaetigt=mapping_bestaetigt,
+                menschlich_bestaetigt=True,
             )
         except Domaenenfehler as fehler:
             st.error(str(fehler))
@@ -871,14 +864,14 @@ def zeige_ergebnisaggregation_seite(
         st.warning(
             "Eingaben oder Entscheidungen wurden geändert. Die Vorschau muss neu berechnet werden."
         )
-    st.subheader("7. Vorschau und Speicherung von A_G")
+    st.subheader("7. A_G berechnen")
     if st.button(
-        "A_G vollständig neu berechnen",
+        "A_G berechnen und zu Schritt 8",
         type="primary",
         disabled=ressourcenanalyse is None,
     ):
         try:
-            st.session_state.ag_vorschau = service.vorschau(
+            vorschau = service.vorschau(
                 projekt_id=projekt_id,
                 freigabe_id=freigabe_id,
                 analyse_id=analyse_id,
@@ -893,45 +886,42 @@ def zeige_ergebnisaggregation_seite(
                 ressourcenanalyse=ressourcenanalyse,
                 ankunftsspalte=ankunftsspalte,
             )
-            vorschau = st.session_state.ag_vorschau
-        except (Domaenenfehler, Importintegritaetsfehler, KeyError, TypeError) as fehler:
+            st.session_state.ag_vorschau = vorschau
+            aggregations_id = (
+                UUID(str(st.session_state.get("ag_neue_id")))
+                if st.session_state.get("ag_neue_id")
+                else uuid5(
+                    projekt_id,
+                    f"{basis.eingabefingerabdruck}:{vorschau.konfigurationsfingerabdruck}",
+                )
+            )
+            aggregation = service.speichern(aggregations_id, vorschau, menschlich_bestaetigt=True)
+            st.session_state.aktuelle_aggregations_id = str(aggregation.aggregations_id)
+            for schluessel in (
+                "aktuelle_modellableitungs_id",
+                "aktuelle_k_id",
+                "aktuelle_o_id",
+                "aktuelle_validierungslauf_id",
+                "aktuelle_k_stern_id",
+                "schritt10_ausgabe",
+                "schritt10_ausgabe_signatur",
+            ):
+                st.session_state.pop(schluessel, None)
+            service.uebergabe_schritt8(
+                aggregation.aggregations_id, projekt_id, freigabe_id, analyse_id
+            )
+            st.session_state.naechster_framework_bereich = "8 Modellbestandteile ableiten"
+            st.rerun()
+        except (
+            Domaenenfehler,
+            Importintegritaetsfehler,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as fehler:
             st.error(str(fehler))
     if vorschau is not None:
         _vorschau_anzeigen(vorschau)
-        if st.button(
-            "A_G speichern und zu Schritt 8",
-            type="primary",
-        ):
-            try:
-                aggregations_id = (
-                    UUID(str(st.session_state.get("ag_neue_id")))
-                    if st.session_state.get("ag_neue_id")
-                    else uuid5(
-                        projekt_id,
-                        f"{basis.eingabefingerabdruck}:{vorschau.konfigurationsfingerabdruck}",
-                    )
-                )
-                aggregation = service.speichern(
-                    aggregations_id, vorschau, menschlich_bestaetigt=True
-                )
-                st.session_state.aktuelle_aggregations_id = str(aggregation.aggregations_id)
-                for schluessel in (
-                    "aktuelle_modellableitungs_id",
-                    "aktuelle_k_id",
-                    "aktuelle_o_id",
-                    "aktuelle_validierungslauf_id",
-                    "aktuelle_k_stern_id",
-                    "schritt10_ausgabe",
-                    "schritt10_ausgabe_signatur",
-                ):
-                    st.session_state.pop(schluessel, None)
-                service.uebergabe_schritt8(
-                    aggregation.aggregations_id, projekt_id, freigabe_id, analyse_id
-                )
-                st.session_state.naechster_framework_bereich = "8 Modellbestandteile ableiten"
-                st.rerun()
-            except (Domaenenfehler, Importintegritaetsfehler, ValueError) as fehler:
-                st.error(str(fehler))
     aktive_id = st.session_state.get("aktuelle_aggregations_id")
     if aktive_id:
         try:

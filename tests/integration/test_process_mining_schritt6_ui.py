@@ -166,13 +166,8 @@ def test_regulaerer_ablauf_bietet_nur_k_und_notation_und_uebergibt_p_und_a_d() -
     )
     app.slider[0].set_value(0.2)
     app.radio[0].set_value("BPMN")
-    _button(app, "Modell berechnen").click().run()
+    _button(app, "Prozessmodell berechnen und zu Schritt 7").click().run()
     assert app.session_state["test_vorschau_aufrufe"] == 1
-    assert any("Inductive Miner – infrequent" in wert.value for wert in app.warning)
-    app.run()
-    assert app.session_state["test_vorschau_aufrufe"] == 1
-    _button(app, "Weiter").click().run()
-    _button(app, "P und A_D speichern und zu Schritt 7").click().run()
     assert app.session_state["aktuelle_analyse_id"] == "44444444-4444-4444-4444-444444444444"
     assert app.session_state["aktuelles_prozessmodell_id"] == (
         "44444444-4444-4444-4444-444444444444"
@@ -181,27 +176,28 @@ def test_regulaerer_ablauf_bietet_nur_k_und_notation_und_uebergibt_p_und_a_d() -
         "44444444-4444-4444-4444-444444444444"
     )
     assert app.session_state["naechster_framework_bereich"] == "7 Ergebnisse aggregieren"
+    assert not any(
+        wert.label in {"Modell berechnen", "P und A_D speichern und zu Schritt 7"}
+        for wert in app.button
+    )
 
 
-def test_zurueck_aus_dem_letzten_abschnitt_bewahrt_vorschau_und_konfiguration() -> None:
+def test_ruecknavigation_bewahrt_konfiguration_ohne_berechnung() -> None:
     app = _app()
     _button(app, "Weiter").click().run()
     app.slider[0].set_value(0.2)
     app.radio[0].set_value("BPMN")
-    _button(app, "Modell berechnen").click().run()
-    _button(app, "Weiter").click().run()
     zustand = app.session_state["process_mining_zustaende"]["11111111-1111-1111-1111-111111111111"]
-    signatur = zustand["vorschau_signatur"]
     analyse_id = zustand["analyse_id"]
 
-    [wert for wert in app.button if wert.label == "Zurück"][-1].click().run()
+    _button(app, "Zurück").click().run()
+    _button(app, "Weiter").click().run()
 
     zustand = app.session_state["process_mining_zustaende"]["11111111-1111-1111-1111-111111111111"]
     assert zustand["schritt"] == 2
-    assert zustand["vorschau_signatur"] == signatur
     assert zustand["analyse_id"] == analyse_id
     assert app.slider[0].value == 0.2
     notation = app.radio[0].value
     assert notation is not None
     assert notation.value == "bpmn"
-    assert app.session_state["test_vorschau_aufrufe"] == 1
+    assert _vorschau_aufrufe(app) == 0

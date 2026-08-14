@@ -1,10 +1,10 @@
 """Framework-Schritt 10: Browser- und PDF-Ausgabe eines validierten K*."""
 
-import base64
 import html
 from uuid import UUID
 
 import streamlit as st
+from streamlit import runtime
 
 from framework_mvp.application.dateinamen import (
     sicherer_dateiname,
@@ -32,13 +32,29 @@ def _aktive_ids() -> tuple[UUID, UUID, UUID] | None:
         return None
 
 
-def _html_link(report_html: bytes) -> str:
-    """Erzeugt einen isoliert öffnenden Link auf das vollständige HTML-Dokument."""
-    kodiert = base64.b64encode(report_html).decode("ascii")
-    ziel = f"data:text/html;charset=utf-8;base64,{kodiert}"
+def _html_link(ziel: str) -> str:
+    """Erzeugt einen isoliert öffnenden Link auf eine von Streamlit erreichbare Ressource."""
+    normalisiert = f"/{ziel.lstrip('/')}"
+    if "/media/" not in normalisiert or not normalisiert.endswith(".html") or ".." in normalisiert:
+        raise ValueError(
+            f"Der HTML-Bericht benötigt einen gültigen Streamlit-Ressourcenlink: {ziel!r}"
+        )
     return (
-        f'<a href="{html.escape(ziel, quote=True)}" target="_blank" '
-        'rel="noopener noreferrer">Konzeptionelles Modell im neuen Tab öffnen</a>'
+        f'<a href="{html.escape(normalisiert, quote=True)}" target="_blank" '
+        'rel="noopener noreferrer">Konzeptionelles Modell in neuem Tab öffnen</a>'
+    )
+
+
+def _html_ressource(report_html: bytes, *, koordinaten: str) -> str:
+    """Registriert das vollständige Dokument stabil im aktiven Streamlit-Mediaspeicher."""
+    if not runtime.exists():
+        raise RuntimeError(
+            "Der HTML-Bericht kann nur in einer aktiven Streamlit-Sitzung geöffnet werden."
+        )
+    return runtime.get_instance().media_file_mgr.add(
+        report_html,
+        "text/html",
+        koordinaten,
     )
 
 
@@ -124,9 +140,19 @@ def zeige_modellausgabe_seite(
             return
         st.subheader("3. Ausgabe öffnen oder herunterladen")
         if ausgabe.report_html is not None and ausgabe.html_dateiname is not None:
+            report_url = _html_ressource(
+                ausgabe.report_html,
+                koordinaten=f"konzeptbericht-{projekt_id}-{validierungslauf_id}-{k_stern_id}",
+            )
             st.markdown(
-                _html_link(ausgabe.report_html),
+                _html_link(report_url),
                 unsafe_allow_html=True,
+            )
+            st.download_button(
+                "HTML-Report herunterladen",
+                ausgabe.report_html,
+                ausgabe.html_dateiname,
+                "text/html",
             )
         if ausgabe.report_pdf is not None and ausgabe.pdf_dateiname is not None:
             st.download_button(

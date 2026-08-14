@@ -627,13 +627,10 @@ def _pruefen_und_speichern(
         f"Objekte {len(gruppen.get('objektidentifikatoren', ()))}  \n"
         f"**Validierungsfehler:** {len(fehler)} · **Warnungen:** {len(warnungen)}"
     )
-    warnungen_bestaetigt = not warnungen or st.checkbox(
-        "Ich habe die Warnungen geprüft und möchte das Mapping speichern."
-    )
     if st.button(
-        "Event-Log-Konfiguration speichern",
+        "Event-Log-Konfiguration speichern und weiter",
         type="primary",
-        disabled=bool(fehler) or not warnungen_bestaetigt,
+        disabled=bool(fehler),
     ):
         erneut, erneutes_ergebnis = service.validieren(mapping, daten)
         if not erneutes_ergebnis.validierung.gueltig:
@@ -642,8 +639,7 @@ def _pruefen_und_speichern(
         zustand["mapping_pfad"] = service.speichern(erneut)
         st.session_state.aktuelle_mapping_id = str(erneut.mapping_id)
         st.session_state.mapping_id = erneut.mapping_id
-        st.success("Die Event-Log-Konfiguration wurde für Schritt 4 gespeichert.")
-        st.rerun()
+        schritt_abschliessen_und_weiter(aktueller_schritt=3, projekt_id=mapping.projekt_id)
 
 
 def _navigation(zustand: dict[str, Any]) -> None:
