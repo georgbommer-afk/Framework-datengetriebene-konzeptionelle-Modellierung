@@ -40,6 +40,8 @@ EVENTS = pd.DataFrame({
     "case_id": ["1", "1"], "activity": ["A", "B"],
     "timestamp": pd.to_datetime(["2026-01-01", "2026-01-02"], utc=True),
 })
+if st.session_state.get("test_ressourcen_vollstaendig"):
+    EVENTS["resource"] = ["M1", "M2"]
 TABELLE = pd.DataFrame({"position": ["P1", "P2"], "befriedigt": ["ja", "nein"]})
 BASIS = SimpleNamespace(
     projekt=PROJEKT, freigabe=FREIGABE, event_log=EVENTS, zwischendaten=TABELLE,
@@ -79,12 +81,14 @@ zeige_ergebnisaggregation_seite(Projekte(), Aggregation())
 """
 
 
-def _app(*, aktiv: bool = True) -> AppTest:
+def _app(*, aktiv: bool = True, ressourcen_vollstaendig: bool = False) -> AppTest:
     app = AppTest.from_string(APP, default_timeout=10)
     if aktiv:
         app.session_state["aktuelles_projekt_id"] = "11111111-1111-1111-1111-111111111111"
         app.session_state["aktuelle_freigabe_id"] = "22222222-2222-2222-2222-222222222222"
         app.session_state["aktuelle_analyse_id"] = "44444444-4444-4444-4444-444444444444"
+    if ressourcen_vollstaendig:
+        app.session_state["test_ressourcen_vollstaendig"] = True
     return app.run()
 
 
@@ -116,27 +120,56 @@ def test_aktive_kette_hat_keine_lokale_auswahl_und_nur_kpis_aus_u() -> None:
         wert.label == "Direkte zeitbezogene Soll-Ist-Auswertung durchführen"
         for wert in app.checkbox
     )
+    assert any(wert.label == "Ressourcenentscheidung" for wert in app.radio)
+    assert any(wert.label == "Explizite Ankunftszeitspalte (optional)" for wert in app.selectbox)
+
+
+def test_vollstaendige_ressourcenspalte_zeigt_automatische_schreibgeschuetzte_zuordnung() -> None:
+    app = _app(ressourcen_vollstaendig=True)
+    assert not app.exception
+    assert any("kanonische Spalte resource" in wert.value for wert in app.success)
+    assert not any(wert.label == "Ressourcenentscheidung" for wert in app.radio)
+    assert any(
+        "Die eindeutigen Zuordnungen werden automatisch übernommen" in wert.value
+        for wert in app.success
+    )
+
+
+def test_unvollstaendige_ressourcen_zeigen_kompakte_manuelle_tabelle() -> None:
+    app = _app()
+    auswahl = next(wert for wert in app.radio if wert.label == "Ressourcenentscheidung")
+    app = auswahl.set_value("Manuell je Aktivität zuordnen").run()
+
+    assert not app.exception
+    assert len(app.dataframe) == 1
+    assert app.dataframe[0].key == "ag_ressourcen_tabelle"
+    assert list(app.dataframe[0].value.columns) == [
+        "Aktivität",
+        "Ressourcen (kommagetrennt)",
+    ]
+    assert any(
+        "manuelle Ressourcenzuordnung ist nicht vollständig" in wert.value for wert in app.warning
+    )
+    assert next(
+        wert for wert in app.button if wert.label == "A_G berechnen und zu Schritt 8"
+    ).disabled
 
 
 def test_a_g_speichern_setzt_id_uebergabe_und_schritt_acht() -> None:
     app = _app()
-    next(wert for wert in app.button if wert.label == "A_G vollständig neu berechnen").click().run()
     next(
-        wert
-        for wert in app.checkbox
-        if wert.label.startswith("Ich bestätige die Vorschau")
-    ).check().run()
-    next(
-        wert for wert in app.button if wert.label == "A_G speichern und zu Schritt 8"
+        wert for wert in app.button if wert.label == "A_G berechnen und zu Schritt 8"
     ).click().run()
 
-    assert app.session_state["aktuelle_aggregations_id"] == (
-        "66666666-6666-6666-6666-666666666666"
-    )
+    assert app.session_state["aktuelle_aggregations_id"] == ("66666666-6666-6666-6666-666666666666")
     assert app.session_state["test_uebergabe_schritt8"] is True
-    assert app.session_state["naechster_framework_bereich"] == (
-        "8 Modellbestandteile ableiten"
-    )
+    assert app.session_state["naechster_framework_bereich"] == ("8 Modellbestandteile ableiten")
+
+
+def test_schritt_7_hat_keine_redundante_vorschau_bestaetigung() -> None:
+    app = _app()
+    assert not any("Ich bestätige die Vorschau" in wert.label for wert in app.checkbox)
+    assert not any(wert.label == "A_G speichern und zu Schritt 8" for wert in app.button)
 
 
 def test_woped_url_iframe_und_fallback_sind_fest_und_bedingt() -> None:

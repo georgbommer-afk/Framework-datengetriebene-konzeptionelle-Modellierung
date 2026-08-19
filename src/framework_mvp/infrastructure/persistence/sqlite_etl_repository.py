@@ -94,6 +94,20 @@ class SQLiteETLRepository:
             datetime.fromisoformat(zeile["geaendert_am_utc"]),
         )
 
+    def plaene_fuer_projekt(self, projekt_id: UUID) -> list[Transformationsplan]:
+        """Lädt die Pläne eines Projekts in chronologischer Änderungsreihenfolge."""
+        with self._verbindung() as verbindung:
+            ids = verbindung.execute(
+                "SELECT transformationsplan_id FROM transformationsplaene "
+                "WHERE projekt_id=? ORDER BY geaendert_am_utc, transformationsplan_id",
+                (str(projekt_id),),
+            ).fetchall()
+        return [
+            plan
+            for zeile in ids
+            if (plan := self.plan_laden(UUID(zeile["transformationsplan_id"]))) is not None
+        ]
+
     def datensatz_speichern(self, datensatz: Zwischendatensatz) -> None:
         """Speichert Metadaten eines erzeugten Zwischendatensatzes."""
         with self._verbindung() as verbindung, verbindung:
@@ -130,6 +144,16 @@ class SQLiteETLRepository:
                 "SELECT * FROM zwischendatensaetze WHERE projekt_id=? "
                 "ORDER BY erstellt_am_utc, zwischendatensatz_id",
                 (str(projekt_id),),
+            ).fetchall()
+        return [self._datensatz(zeile) for zeile in zeilen]
+
+    def datensaetze_fuer_plan(self, plan_id: UUID) -> list[Zwischendatensatz]:
+        """Listet alle persistierten Zwischenstände einer Transformationskette."""
+        with self._verbindung() as verbindung:
+            zeilen = verbindung.execute(
+                "SELECT * FROM zwischendatensaetze WHERE transformationsplan_id=? "
+                "ORDER BY erstellt_am_utc, zwischendatensatz_id",
+                (str(plan_id),),
             ).fetchall()
         return [self._datensatz(zeile) for zeile in zeilen]
 

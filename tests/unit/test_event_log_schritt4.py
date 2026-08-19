@@ -198,6 +198,127 @@ def test_breiter_pfad_erzeugt_exakt_je_vorhandenem_ausgewaehltem_zeitstempel() -
     assert ergebnis.ereignisse["ressource"].tolist() == ["R1", "R1", "R2"]
 
 
+def test_version_drei_erzeugt_optionale_kanonische_rollen_mit_utc_zeiten() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A"],
+            "aktion": ["Bearbeiten"],
+            "zeit": ["2025-01-01T10:00:00+01:00"],
+            "start": ["2025-01-01T09:00:00+01:00"],
+            "ende": ["2025-01-01T10:30:00Z"],
+            "bearbeiter": ["R1"],
+            "status": ["complete"],
+        }
+    )
+    konfiguration = replace(
+        _konfiguration(projekt_id, datensatz_id),
+        konfigurationsversion=3,
+        startzeitstempelspalte="start",
+        endzeitstempelspalte="ende",
+        ressourcen_spalte="bearbeiter",
+        lifecycle_spalte="status",
+    )
+
+    ergebnis = erzeuge_event_log(daten, konfiguration, datensatz_id)
+
+    assert ergebnis.ereignisse["resource"].tolist() == ["R1"]
+    assert ergebnis.ereignisse["lifecycle"].tolist() == ["complete"]
+    assert isinstance(ergebnis.ereignisse["start_timestamp"].dtype, pd.DatetimeTZDtype)
+    assert isinstance(ergebnis.ereignisse["end_timestamp"].dtype, pd.DatetimeTZDtype)
+    assert str(ergebnis.ereignisse["start_timestamp"].dt.tz) == "UTC"
+    assert str(ergebnis.ereignisse["end_timestamp"].dt.tz) == "UTC"
+    assert ergebnis.herkunft_standardspalten["resource"] == "bearbeiter"
+    assert ergebnis.herkunft_standardspalten["start_timestamp"] == "start"
+
+
+def test_version_drei_verbietet_ressource_zusaetzlich_als_allgemeines_attribut() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    basis = replace(
+        _konfiguration(projekt_id, datensatz_id),
+        konfigurationsversion=3,
+        ressourcen_spalte="bearbeiter",
+    )
+
+    with pytest.raises(Domaenenfehler, match="allgemeines Attribut"):
+        replace(
+            basis,
+            spaltenzuordnungen=(Spaltenzuordnung("bearbeiter", Attributrolle.EREIGNISATTRIBUT),),
+        )
+
+
+def test_version_drei_ordnete_im_breiten_modus_ressource_und_status_je_zeitspalte_zu() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A"],
+            "start": ["2025-01-01"],
+            "ende": ["2025-01-02"],
+            "start_person": ["R1"],
+            "ende_person": ["R2"],
+            "start_status": ["started"],
+            "ende_status": ["complete"],
+        }
+    )
+    basis = _konfiguration(
+        projekt_id,
+        datensatz_id,
+        modus=MappingModus.BREITER_ZEITSTEMPELDATENSATZ,
+        zeitzuordnungen=(
+            ZeitstempelZuordnung("start", "Start"),
+            ZeitstempelZuordnung("ende", "Ende"),
+        ),
+    )
+    konfiguration = replace(
+        basis,
+        konfigurationsversion=3,
+        zeitstempelzuordnungen=(
+            ZeitstempelZuordnung("start", "Start", "start_person", "start_status"),
+            ZeitstempelZuordnung("ende", "Ende", "ende_person", "ende_status"),
+        ),
+    )
+
+    ergebnis = erzeuge_event_log(daten, konfiguration, datensatz_id)
+
+    assert ergebnis.ereignisse["resource"].tolist() == ["R1", "R2"]
+    assert ergebnis.ereignisse["lifecycle"].tolist() == ["started", "complete"]
+    assert "start_timestamp" not in ergebnis.ereignisse
+    assert "end_timestamp" not in ergebnis.ereignisse
+    assert ergebnis.herkunft_standardspalten["resource"] == (
+        "start: start_person; ende: ende_person"
+    )
+
+
+def test_version_eins_und_zwei_behalten_ihre_bisherige_rollensemantik() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A"],
+            "aktion": ["Start"],
+            "zeit": ["2025-01-01"],
+            "bearbeiter": ["R1"],
+        }
+    )
+    basis = _konfiguration(projekt_id, datensatz_id)
+    version_eins = replace(
+        basis,
+        konfigurationsversion=1,
+        ressourcen_spalte="bearbeiter",
+    )
+    version_zwei = replace(
+        basis,
+        spaltenzuordnungen=(Spaltenzuordnung("bearbeiter", Attributrolle.EREIGNISATTRIBUT),),
+    )
+
+    ereignisse_eins = erzeuge_event_log(daten, version_eins, datensatz_id).ereignisse
+    ereignisse_zwei = erzeuge_event_log(daten, version_zwei, datensatz_id).ereignisse
+
+    assert ereignisse_eins["resource"].tolist() == ["R1"]
+    assert "bearbeiter" not in ereignisse_eins
+    assert ereignisse_zwei["bearbeiter"].tolist() == ["R1"]
+    assert "resource" not in ereignisse_zwei
+
+
 def test_neue_konfiguration_weist_legacy_erweiterungen_und_mehrere_fallspalten_ab() -> None:
     projekt_id, datensatz_id = uuid4(), uuid4()
     basis = _konfiguration(projekt_id, datensatz_id)

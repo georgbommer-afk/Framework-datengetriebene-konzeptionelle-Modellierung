@@ -89,11 +89,13 @@ def test_etl_seite_startet_und_markiert_schritt_zwei(
     assert "Datenquellenkatalog (Q)" in einleitung
     assert "Datenprofil (R)" in einleitung
     assert "Zwischendatensatz (T)" in einleitung
-    assert anwendung.get("progress")
-    assert any("Schritt 1 von 5" in element.value for element in anwendung.caption)
-    assert sum("Noch nicht verfügbar" in element.value for element in anwendung.caption) == 0
-    assert any("4 Transformation" in element.value for element in anwendung.markdown)
-    assert any(element.label == "Alle Schritte anzeigen" for element in anwendung.expander)
+    assert len(anwendung.get("progress")) == 1
+    assert any("Phase 1 – Aufbereitung der Datenbasis" in wert.value for wert in anwendung.caption)
+    assert any(
+        "Unterschritt 1/5" in wert.value and "Datenquelle und Datei" in wert.value
+        for wert in anwendung.markdown
+    )
+    assert not any(element.label == "Alle Schritte anzeigen" for element in anwendung.expander)
     assert not any(element.label == "Aktuelles Projekt" for element in anwendung.selectbox)
     assert any("Aktuelles Projekt: ETL-Projekt" in element.value for element in anwendung.markdown)
 
@@ -156,9 +158,8 @@ def test_transformation_startet_ohne_vorbelegten_typ() -> None:
     assert not anwendung.exception
     assert auswahl.value is None
     assert auswahl.proto.placeholder == "Choose an option"
-    assert next(
-        e for e in anwendung.button if e.label == "Transformation zum Plan hinzufügen"
-    ).disabled
+    assert next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
+    assert not any(e.label == "Transformationsvorschau berechnen" for e in anwendung.button)
 
 
 def test_zeilen_loeschen_formular_zeigt_bedingung_und_vorschau() -> None:
@@ -176,9 +177,11 @@ def test_zeilen_loeschen_formular_zeigt_bedingung_und_vorschau() -> None:
 
     assert not anwendung.exception
     assert any("1 von 2 Zeilen werden gelöscht" in wert.value for wert in anwendung.info)
-    assert not next(
-        e for e in anwendung.button if e.label == "Transformation zum Plan hinzufügen"
-    ).disabled
+    assert not next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
+    beispiele = next(
+        wert for wert in anwendung.dataframe if list(wert.value.columns) == ["Text", "Wert"]
+    )
+    assert beispiele.value["Wert"].tolist() == [2]
 
 
 def test_textbereinigungsformular_zeigt_allgemeine_begrenzer_und_sicheren_standard() -> None:
@@ -195,9 +198,24 @@ def test_textbereinigungsformular_zeigt_allgemeine_begrenzer_und_sicheren_standa
 
     assert not anwendung.exception
     assert any("Werte ohne Treffer bleiben unverändert" in wert.value for wert in anwendung.caption)
-    assert not next(
-        e for e in anwendung.button if e.label == "Transformation zum Plan hinzufügen"
-    ).disabled
+    vorschau = next(
+        wert
+        for wert in anwendung.dataframe
+        if list(wert.value.columns) == ["Originalwert", "Vorschau", "Status"]
+    ).value
+    assert vorschau.to_dict(orient="records") == [
+        {
+            "Originalwert": "RS TX (abc)",
+            "Vorschau": "abc",
+            "Status": "Transformiert",
+        },
+        {
+            "Originalwert": "ohne Treffer",
+            "Vorschau": "ohne Treffer",
+            "Status": "Unverändert (kein Treffer)",
+        },
+    ]
+    assert not next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
 
 
 def test_zurueck_aus_dem_letzten_etl_abschnitt_bewahrt_den_zustand() -> None:

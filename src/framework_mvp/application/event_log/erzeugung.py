@@ -116,6 +116,8 @@ def _ausgabenamen(
     }
     haeufigkeit = {basis: list(basen.values()).count(basis) for basis in set(basen.values())}
     reserviert = {"case_id", "activity", "timestamp", "event_id"}
+    if konfiguration.konfigurationsversion >= 3:
+        reserviert.update({"start_timestamp", "end_timestamp", "lifecycle", "resource"})
     verwendet = set(reserviert)
     ausgabenamen: dict[str, str] = {}
     herkunft: dict[str, str] = {}
@@ -237,8 +239,14 @@ def _ereignisorientiert(
             "_source_timestamp_order": 0,
         }
     )
-    # Alte optionale Standardrollen bleiben ausschließlich für gespeicherte Altbestände wirksam.
-    if konfiguration.konfigurationsversion < 2:
+    standardherkunft = {
+        "case_id": konfiguration.fall_id.trennzeichen.join(konfiguration.fall_id.spalten),
+        "activity": aktivitaetsherkunft,
+        "timestamp": konfiguration.zeitstempelspalte,
+    }
+    # Version 1 bleibt im bisherigen Rohwertpfad; Version 3 nutzt dieselbe fachliche
+    # Wertabbildung wie die übrigen expliziten Rollen.
+    if konfiguration.konfigurationsversion != 2:
         for ziel, quelle in {
             "start_timestamp": konfiguration.startzeitstempelspalte,
             "end_timestamp": konfiguration.endzeitstempelspalte,
@@ -246,17 +254,19 @@ def _ereignisorientiert(
             "resource": konfiguration.ressourcen_spalte,
         }.items():
             if quelle:
-                ereignisse[ziel] = daten[quelle]
+                ereignisse[ziel] = (
+                    _fachliche_serie(daten, quelle, mappingtabelle)
+                    if konfiguration.konfigurationsversion >= 3
+                    else daten[quelle]
+                )
+                if konfiguration.konfigurationsversion >= 3:
+                    standardherkunft[ziel] = quelle
     ereignisse, rollen, attributherkunft = _attribute_ereignisorientiert(
         daten, konfiguration, mappingtabelle, ereignisse
     )
     return (
         ereignisse,
-        {
-            "case_id": konfiguration.fall_id.trennzeichen.join(konfiguration.fall_id.spalten),
-            "activity": aktivitaetsherkunft,
-            "timestamp": konfiguration.zeitstempelspalte,
-        },
+        standardherkunft,
         rollen,
         attributherkunft,
     )
@@ -291,11 +301,21 @@ def _breit(
                 "_source_timestamp_order": reihenfolge,
             }
         )
-        if konfiguration.konfigurationsversion < 2:
+        if konfiguration.konfigurationsversion != 2:
             if zuordnung.ressourcenspalte:
-                teil["resource"] = daten[zuordnung.ressourcenspalte].iloc[positionen].to_numpy()
+                quelle = (
+                    _fachliche_serie(daten, zuordnung.ressourcenspalte, mappingtabelle)
+                    if konfiguration.konfigurationsversion >= 3
+                    else daten[zuordnung.ressourcenspalte]
+                )
+                teil["resource"] = quelle.iloc[positionen].to_numpy()
             if zuordnung.statusspalte:
-                teil["lifecycle"] = daten[zuordnung.statusspalte].iloc[positionen].to_numpy()
+                quelle = (
+                    _fachliche_serie(daten, zuordnung.statusspalte, mappingtabelle)
+                    if konfiguration.konfigurationsversion >= 3
+                    else daten[zuordnung.statusspalte]
+                )
+                teil["lifecycle"] = quelle.iloc[positionen].to_numpy()
         for attribut in konfiguration.spaltenzuordnungen:
             if attribut.rolle is Attributrolle.IGNORIERT:
                 continue
@@ -326,13 +346,29 @@ def _breit(
             ]
         )
     )
+    standardherkunft = {
+        "case_id": konfiguration.fall_id.trennzeichen.join(konfiguration.fall_id.spalten),
+        "activity": "Aktivitätsbeschreibung der jeweiligen Zeitstempelzuordnung",
+        "timestamp": "jeweilige ausgewählte technische Zeitstempelspalte",
+    }
+    if konfiguration.konfigurationsversion >= 3:
+        ressourcenherkunft = [
+            f"{wert.zeitstempelspalte}: {wert.ressourcenspalte}"
+            for wert in konfiguration.zeitstempelzuordnungen
+            if wert.ressourcenspalte
+        ]
+        lifecycleherkunft = [
+            f"{wert.zeitstempelspalte}: {wert.statusspalte}"
+            for wert in konfiguration.zeitstempelzuordnungen
+            if wert.statusspalte
+        ]
+        if ressourcenherkunft:
+            standardherkunft["resource"] = "; ".join(ressourcenherkunft)
+        if lifecycleherkunft:
+            standardherkunft["lifecycle"] = "; ".join(lifecycleherkunft)
     return (
         ereignisse,
-        {
-            "case_id": konfiguration.fall_id.trennzeichen.join(konfiguration.fall_id.spalten),
-            "activity": "Aktivitätsbeschreibung der jeweiligen Zeitstempelzuordnung",
-            "timestamp": "jeweilige ausgewählte technische Zeitstempelspalte",
-        },
+        standardherkunft,
         rollen,
         attributherkunft,
     )
@@ -347,7 +383,7 @@ def _referenzen_pruefen(daten: pd.DataFrame, konfiguration: SemantischesMapping)
         *(wert.zeitstempelspalte for wert in konfiguration.zeitstempelzuordnungen),
         *konfiguration.zusaetzliche_attribute,
     }
-    if konfiguration.konfigurationsversion < 2:
+    if konfiguration.konfigurationsversion != 2:
         referenzen.update(
             {
                 konfiguration.startzeitstempelspalte,
@@ -459,7 +495,12 @@ def erzeuge_event_log(
     ereignisse["timestamp"] = zeit
     for name in ("start_timestamp", "end_timestamp"):
         if name in ereignisse:
-            ereignisse[name] = pd.to_datetime(ereignisse[name], errors="coerce")
+            ereignisse[name] = pd.to_datetime(
+                ereignisse[name],
+                errors="coerce",
+                format="mixed" if konfiguration.konfigurationsversion >= 3 else None,
+                utc=konfiguration.konfigurationsversion >= 3,
+            )
     ereignisse["_case_sort"] = ereignisse["case_id"].astype("string")
     ereignisse = (
         ereignisse.sort_values(

@@ -28,22 +28,30 @@ Prozessbaum, Petrinetz und BPMN über die öffentliche PM4Py-Schnittstelle geles
 Aktivitäten werden übernommen. P_Soll wird weder gelesen noch als P verwendet. A_D, A_C,
 KPI-Ergebnisse und A_V werden nur über A_G berücksichtigt.
 
+Ressourcen, Übergangswartezeiten und zeitbezogene Datenauswahl werden nur aus der versionierten
+strukturierten Sektion von A_G übernommen. Schritt 8 berechnet diese Inhalte niemals aus E* neu.
+Ein lesbares A_G v1 ohne diese Sektion erzeugt dafür einen begründeten offenen Eintrag. Start-
+und Endaktivitäten aus A_D/P dienen als Beleg des Modellumfangs. Der Discovery-Schwellwert k ist
+eine technische Abstraktionsentscheidung und kein fachlicher Detaillierungsgrad.
+
 K enthält alle elf Bestandteile in stabiler Reihenfolge, ihre belegten Informationen, Status und
 Referenzen auf O. O enthält ausschließlich offene Einträge der Kategorien `fehlend`,
 `nicht_ableitbar` und `fachlich_unsicher`; Kennzeichnungsherkunft und Belege bleiben erhalten,
-der Status ist stets `offen`. Menschliche Unsicherheitsmarkierungen ergänzen O, verändern aber
-keine Information in K.
+der Status ist stets `offen`. Schritt 8 ergänzt O nur für tatsächlich fehlende oder nicht
+ableitbare Inhalte und besitzt keine menschlichen Unsicherheitsmarkierungen.
 
 K und O werden als zwei technische JSON-Artefakte mit eigener ID und Prüfsumme gemeinsam
 erzeugt. O referenziert ID, Gesamt- und Dateiprüfsumme von K. Eine additive Schemaversion 9
 speichert die gemeinsame Modellableitungs-ID, K-/O-IDs, A_G-, Analyse- und E*-Bezug,
-Eingabefingerabdruck, Mappingversion, Unsicherheitsfingerabdruck, Pfade und Prüfsummen.
+Eingabefingerabdruck, Mappingversion, Unsicherheitsfingerabdruck, Pfade und Prüfsummen. Die
+geänderte Quellenmatrix ist Mappingversion 2. K/O mit Mappingversion 1 werden nicht automatisch
+migriert und müssen bei Bedarf aus dem weiterhin lesbaren A_G neu erzeugt werden.
 Identische Läufe werden über einen eindeutigen Schlüssel wiederverwendet. Dateischreibfehler
 werden kompensiert.
 
 Beim Laden werden Dateien, Artefakt- und Mappingversion, Gesamtprüfsummen, Beziehung zwischen K
 und O, Quellenmatrix, Herkunftsprüfsummen, offene Referenzen und die vollständige aktuelle
-Lineage erneut geprüft. Änderungen an U, S, Q, R, T, E*, P, A_G oder menschlichen Markierungen
+Lineage erneut geprüft. Änderungen an U, S, Q, R, T, E*, P oder A_G
 erzwingen eine neue Vorschau. Schritt 9 erhält ausschließlich das validierte Paar K und O.
 
 ## Konsequenzen
@@ -51,14 +59,14 @@ erzwingen eine neue Vorschau. Schritt 9 erhält ausschließlich das validierte P
 - Eingangsartefakte werden nur als tiefe Arbeitskopien gelesen und nicht verändert.
 - T und E* erscheinen nur als Referenzen, Schema- und Umfangszusammenfassungen; Zeilen werden
   nicht nach K kopiert.
-- `case_id`, Zeitlücken, Attributnamen und Prozessstrukturen führen zu keiner automatischen
-  fachlichen Interpretation.
+- `case_id`, Attributnamen und Prozessstrukturen führen zu keiner automatischen fachlichen
+  Interpretation; strukturierte Schritt-7-Ergebnisse werden lediglich zugeordnet.
 - Widersprüchliche Belege bleiben getrennt und erzeugen einen offenen Klärungsbedarf.
 - K ist ausdrücklich vorläufig und keine Vorwegnahme von K*.
 
 ## Abgrenzung
 
 Nicht enthalten sind Datenaufbereitung, Process Discovery, KPI-Neuberechnung, Conformance
-Checking, Warteschlangen- oder Ressourcenklassifikation, semantische Interpretation,
+Checking, Warteschlangen- oder Ressourcenneuberechnung, semantische Interpretation,
 fachliche Ergänzung, Konfliktauflösung, Maßnahmenempfehlung, Simulation, Validierung von K,
 Erzeugung von K* oder eine endgültige Ausgabeform.

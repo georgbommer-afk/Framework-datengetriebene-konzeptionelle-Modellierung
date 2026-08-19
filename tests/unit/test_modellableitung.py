@@ -1,6 +1,7 @@
 """Fachliche Unit-Tests der festen Zuordnung aus Tabelle 3.15."""
 
-from dataclasses import dataclass
+import json
+from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,11 @@ from pm4py.objects.process_tree.obj import Operator, ProcessTree
 
 from framework_mvp.application.ergebnisaggregation.sollprozess import (
     erzeuge_lineares_sollmodell,
+)
+from framework_mvp.application.ergebnisaggregation.strukturierte_ergebnisse import (
+    analysiere_ressourcen,
+    analysiere_warteschlangen,
+    analysiere_zeitbezogene_datenauswahl,
 )
 from framework_mvp.application.modellableitung import (
     MODELLBESTANDTEILE,
@@ -147,6 +153,23 @@ def _basis(tmp_path: Path):  # type: ignore[no-untyped-def]
     referenzen = {
         quelle: {"id": f"id-{quelle.value}", "sha256": "a" * 64} for quelle in Eingangsartefakt
     }
+    zwischendaten = pd.DataFrame({"auftrag": [1, 2], "wert": [3.0, 4.0]})
+    event_log = pd.DataFrame(
+        {
+            "case_id": ["1", "1"],
+            "activity": ["A", "B"],
+            "timestamp": pd.to_datetime(["2026-01-01", "2026-01-02"], utc=True),
+            "resource": ["M1", "M1"],
+        }
+    )
+    strukturiert = {
+        "ergebnisversion": 1,
+        "ressourcen": _json_dict(analysiere_ressourcen(event_log)),
+        "warteschlangen_und_wartezeiten": _json_dict(analysiere_warteschlangen(event_log)),
+        "zeitbezogene_datenauswahl": _json_dict(
+            analysiere_zeitbezogene_datenauswahl(zwischendaten, event_log)
+        ),
+    }
     return SimpleNamespace(
         projekt=projekt,
         datenquellen=(quelle,),
@@ -154,15 +177,8 @@ def _basis(tmp_path: Path):  # type: ignore[no-untyped-def]
             {"import_id": str(uuid4()), "profil_sha256": "b" * 64, "gesamtprofil": {}},
         ),
         zwischendatensatz=_Datensatz(uuid4(), 2, 2, "t.csv.gz", "t.schema.json"),
-        zwischendaten=pd.DataFrame({"auftrag": [1, 2], "wert": [3.0, 4.0]}),
-        event_log=pd.DataFrame(
-            {
-                "case_id": ["1", "1"],
-                "activity": ["A", "B"],
-                "timestamp": pd.to_datetime(["2026-01-01", "2026-01-02"], utc=True),
-                "resource": ["M1", "M1"],
-            }
-        ),
+        zwischendaten=zwischendaten,
+        event_log=event_log,
         freigabe=SimpleNamespace(event_log_id=uuid4()),
         analyse=SimpleNamespace(analyse_id=uuid4(), relativer_modell_pfad="p.pnml"),
         discovery_ergebnisse={
@@ -190,9 +206,14 @@ def _basis(tmp_path: Path):  # type: ignore[no-untyped-def]
                 "prozessmodell_p_soll": {"sha256": "c" * 64},
                 "conformance_ergebnisse_a_c": {"sha256": "d" * 64},
             },
+            "strukturierte_ergebnisse": strukturiert,
         },
         quellreferenzen=referenzen,
     )
+
+
+def _json_dict(wert):  # type: ignore[no-untyped-def]
+    return json.loads(json.dumps(asdict(wert), ensure_ascii=False, default=str))
 
 
 def test_elf_bestandteile_und_quellenmatrix_sind_exakt_und_stabil() -> None:
@@ -225,10 +246,10 @@ def test_elf_bestandteile_und_quellenmatrix_sind_exakt_und_stabil() -> None:
         ModellbestandteilId.MODELLUMFANG_GRENZEN_DETAILLIERUNG: ("U", "S", "P", "A_G"),
         ModellbestandteilId.ENTITAETEN: ("S", "E*"),
         ModellbestandteilId.AKTIVITAETEN: ("P", "A_G"),
-        ModellbestandteilId.WARTESCHLANGEN: ("E*", "A_G"),
-        ModellbestandteilId.RESSOURCEN: ("S", "E*", "A_G"),
+        ModellbestandteilId.WARTESCHLANGEN: ("A_G",),
+        ModellbestandteilId.RESSOURCEN: ("S", "A_G"),
         ModellbestandteilId.ANNAHMEN_UND_VEREINFACHUNGEN: ("P", "A_G"),
-        ModellbestandteilId.DATENAUSWAHL_UND_DATEN: ("Q", "R", "T", "E*"),
+        ModellbestandteilId.DATENAUSWAHL_UND_DATEN: ("Q", "R", "T", "E*", "A_G"),
         ModellbestandteilId.DARSTELLUNG_DER_VORGAENGE: ("P",),
     }
 
@@ -255,7 +276,18 @@ def test_ableitung_bleibt_belegt_offen_und_schliesst_p_soll_aus(tmp_path: Path) 
     assert nicht_berechenbar.wert["status"] == "nicht_berechenbar"
     assert nicht_berechenbar.wert["ergebnis"] is None
     assert "prozessmodell_p_soll" not in repr(bestandteile)
-    assert any(
+    annahmen = next(
+        wert
+        for wert in bestandteile
+        if wert.bestandteil_id is ModellbestandteilId.ANNAHMEN_UND_VEREINFACHUNGEN
+    )
+    schwellwert = next(
+        wert
+        for wert in annahmen.informationen
+        if wert.strukturreferenz == "discovery_ergebnisse_a_d.schwellwert_k.auswirkung"
+    )
+    assert "technische Abstraktions" in schwellwert.wert["einordnung"]
+    assert not any(
         wert.bestandteil_id is ModellbestandteilId.ANNAHMEN_UND_VEREINFACHUNGEN
         and wert.kategorie is Offenheitskategorie.FACHLICH_UNSICHER
         and "k > 0" in wert.begruendung
@@ -283,9 +315,9 @@ def test_menschliche_unsicherheit_erzeugt_nur_offenen_eintrag(tmp_path: Path) ->
     assert markierung.status == "offen"
 
 
-def test_ressourcen_werden_pro_aktivitaet_bereinigt_und_gruppiert(tmp_path: Path) -> None:
+def test_ressourcen_werden_nur_aus_strukturiertem_a_g_uebernommen(tmp_path: Path) -> None:
     basis = _basis(tmp_path)
-    basis.event_log = pd.DataFrame(
+    schritt7_log = pd.DataFrame(
         {
             "case_id": ["1"] * 6,
             "activity": ["A", "A", "A", "B", "B", "B"],
@@ -293,6 +325,10 @@ def test_ressourcen_werden_pro_aktivitaet_bereinigt_und_gruppiert(tmp_path: Path
             "resource": [" M1 ", "M1", "M2", "M2", "", None],
         }
     )
+    basis.a_g["strukturierte_ergebnisse"]["ressourcen"] = _json_dict(
+        analysiere_ressourcen(schritt7_log)
+    )
+    basis.event_log = schritt7_log.assign(resource="DARF_NICHT_NEU_BERECHNET_WERDEN")
 
     bestandteile, _ = leite_modellbestandteile_ab(basis)
 
@@ -300,19 +336,19 @@ def test_ressourcen_werden_pro_aktivitaet_bereinigt_und_gruppiert(tmp_path: Path
         wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.RESSOURCEN
     )
     information = next(
-        wert for wert in ressourcen.informationen if wert.strukturreferenz == "schema.resource"
+        wert
+        for wert in ressourcen.informationen
+        if wert.strukturreferenz == "strukturierte_ergebnisse.ressourcen"
     )
-    assert information.wert == {
-        "attribut": "resource",
-        "eindeutige_werte": ("M1", "M2"),
-        "aktivitaet_ressourcen": (
-            {"aktivitaet": "A", "ressourcen": ("M1", "M2")},
-            {"aktivitaet": "B", "ressourcen": ("M2",)},
-        ),
-    }
+    assert information.wert["modus"] == "automatisch"
+    assert information.wert["zuordnungen"] == [
+        {"aktivitaet": "A", "ressourcen": ["M1", "M2"]},
+        {"aktivitaet": "B", "ressourcen": ["M2"]},
+    ]
+    assert "DARF_NICHT_NEU_BERECHNET_WERDEN" not in repr(information.wert)
 
 
-def test_positive_uebergangsdifferenzen_werden_aggregiert_ohne_e_stern_mutation(
+def test_uebergangsdifferenzen_werden_aus_a_g_uebernommen_ohne_neuberechnung(
     tmp_path: Path,
 ) -> None:
     basis = _basis(tmp_path)
@@ -346,35 +382,42 @@ def test_positive_uebergangsdifferenzen_werden_aggregiert_ohne_e_stern_mutation(
             ),
         }
     )
+    basis.a_g["strukturierte_ergebnisse"]["warteschlangen_und_wartezeiten"] = _json_dict(
+        analysiere_warteschlangen(basis.event_log)
+    )
     vorher = basis.event_log.copy(deep=True)
+    basis.event_log["start_timestamp"] = basis.event_log["start_timestamp"].iloc[::-1].to_numpy()
 
     bestandteile, offen = leite_modellbestandteile_ab(basis)
 
-    pd.testing.assert_frame_equal(basis.event_log, vorher)
+    assert not basis.event_log.equals(vorher)
     warteschlangen = next(
         wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
     )
     hinweis = next(
         wert
         for wert in warteschlangen.informationen
-        if wert.strukturreferenz == "start_timestamp_end_timestamp.positive_uebergangsdifferenzen"
+        if wert.strukturreferenz == "strukturierte_ergebnisse.warteschlangen_und_wartezeiten"
     )
-    assert hinweis.wert == (
+    assert hinweis.wert["uebergaenge"] == [
         {
-            "uebergang": {"von": "A", "zu": "B"},
-            "positive_hinweise": 2,
-            "mittlere_wartezeit_sekunden": 180.0,
-            "mediane_wartezeit_sekunden": 180.0,
-        },
-    )
+            "von_aktivitaet": "A",
+            "zu_aktivitaet": "B",
+            "statistik": {
+                "anzahl": 2,
+                "mittelwert_sekunden": 180.0,
+                "median_sekunden": 180.0,
+            },
+        }
+    ]
     assert not any(
         wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
-        and "keine ableitbaren positiven" in wert.begruendung
+        and "keine in Schritt 7" in wert.begruendung
         for wert in offen
     )
 
 
-def test_null_negative_und_fehlende_differenzen_bleiben_ohne_wartehinweis(
+def test_nullwartezeit_bleibt_gueltig_negative_und_fehlende_werden_ausgeschlossen(
     tmp_path: Path,
 ) -> None:
     basis = _basis(tmp_path)
@@ -408,19 +451,27 @@ def test_null_negative_und_fehlende_differenzen_bleiben_ohne_wartehinweis(
             ),
         }
     )
+    basis.a_g["strukturierte_ergebnisse"]["warteschlangen_und_wartezeiten"] = _json_dict(
+        analysiere_warteschlangen(basis.event_log)
+    )
 
     bestandteile, offen = leite_modellbestandteile_ab(basis)
 
     warteschlangen = next(
         wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
     )
-    assert not any(
-        wert.strukturreferenz == "start_timestamp_end_timestamp.positive_uebergangsdifferenzen"
+    analyse = next(
+        wert.wert
         for wert in warteschlangen.informationen
+        if wert.strukturreferenz == "strukturierte_ergebnisse.warteschlangen_und_wartezeiten"
     )
-    assert any(
+    assert analyse["status"] == "ableitbar"
+    assert analyse["uebergaenge"][0]["statistik"]["median_sekunden"] == 0.0
+    assert analyse["ausgeschlossene_negative_werte"] == 1
+    assert analyse["ausgeschlossene_nicht_auswertbare_werte"] == 1
+    assert not any(
         wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
-        and "keine ableitbaren positiven" in wert.begruendung
+        and "keine nichtnegativen" in wert.begruendung
         for wert in offen
     )
 
@@ -430,13 +481,14 @@ def test_fehlende_zeitspalten_und_warteinformation_erzeugen_offenen_eintrag(
 ) -> None:
     basis = _basis(tmp_path)
     basis.a_g["kpi_ergebnisse"] = []
+    basis.a_g.pop("strukturierte_ergebnisse")
 
     _, offen = leite_modellbestandteile_ab(basis)
 
     assert any(
         wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
         and wert.kategorie is Offenheitskategorie.NICHT_ABLEITBAR
-        and "Andere Spalten werden nicht" in wert.begruendung
+        and "Schritt 8 berechnet sie nicht erneut" in wert.begruendung
         for wert in offen
     )
 

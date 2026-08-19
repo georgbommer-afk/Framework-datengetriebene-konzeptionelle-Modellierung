@@ -21,9 +21,7 @@ def _uuid_text(wert: Any, feld: str) -> str | None:
     try:
         return str(UUID(str(wert)))
     except (ValueError, TypeError, AttributeError) as exc:
-        raise ReportAssetFehler(
-            f"Ungültige UUID in '{feld}': {wert!r}."
-        ) from exc
+        raise ReportAssetFehler(f"Ungültige UUID in '{feld}': {wert!r}.") from exc
 
 
 def _svg_fragment(pfad: Path) -> str | None:
@@ -34,17 +32,13 @@ def _svg_fragment(pfad: Path) -> str | None:
     try:
         text = pfad.read_text(encoding="utf-8")
     except OSError as exc:
-        raise ReportAssetFehler(
-            f"SVG konnte nicht gelesen werden: {pfad}"
-        ) from exc
+        raise ReportAssetFehler(f"SVG konnte nicht gelesen werden: {pfad}") from exc
 
     start = text.find("<svg")
     ende = text.rfind("</svg>")
 
     if start < 0 or ende < 0:
-        raise ReportAssetFehler(
-            f"Datei enthält kein gültiges SVG-Element: {pfad}"
-        )
+        raise ReportAssetFehler(f"Datei enthält kein gültiges SVG-Element: {pfad}")
 
     ende += len("</svg>")
     return text[start:ende]
@@ -66,14 +60,10 @@ def resolve_report_assets(
     prozess = ergebnis.get("prozessdarstellung")
 
     if not isinstance(projekt, dict):
-        raise ReportAssetFehler(
-            "Reportdaten enthalten keinen gültigen Projektbereich."
-        )
+        raise ReportAssetFehler("Reportdaten enthalten keinen gültigen Projektbereich.")
 
     if not isinstance(prozess, dict):
-        raise ReportAssetFehler(
-            "Reportdaten enthalten keine gültige Prozessdarstellung."
-        )
+        raise ReportAssetFehler("Reportdaten enthalten keine gültige Prozessdarstellung.")
 
     # Schlüssel werden immer bereitgestellt, damit das Template stabil bleibt.
     prozess["svg_inline"] = None
@@ -99,12 +89,7 @@ def resolve_report_assets(
 
     wurzel = Path(workspace_root).resolve()
 
-    analyseordner = (
-        wurzel
-        / "projects"
-        / projekt_id
-        / "process_mining"
-    )
+    analyseordner = wurzel / "projects" / projekt_id / "process_mining"
 
     modell_svg = analyseordner / f"{analyse_id}.model.svg"
     dfg_svg = analyseordner / f"{analyse_id}.dfg.svg"

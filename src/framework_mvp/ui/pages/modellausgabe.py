@@ -1,9 +1,15 @@
-"""Framework-Schritt 10: HTML- und PDF-Ausgabe eines validierten K*."""
+"""Framework-Schritt 10: Browser- und PDF-Ausgabe eines validierten K*."""
 
+import html
 from uuid import UUID
 
 import streamlit as st
+from streamlit import runtime
 
+from framework_mvp.application.dateinamen import (
+    sicherer_dateiname,
+    sicherer_dateinamenbestandteil,
+)
 from framework_mvp.application.modellausgabe_service import (
     ModellausgabeService,
     StrukturierteModellausgabe,
@@ -26,6 +32,32 @@ def _aktive_ids() -> tuple[UUID, UUID, UUID] | None:
         return None
 
 
+def _html_link(ziel: str) -> str:
+    """Erzeugt einen isoliert öffnenden Link auf eine von Streamlit erreichbare Ressource."""
+    normalisiert = f"/{ziel.lstrip('/')}"
+    if "/media/" not in normalisiert or not normalisiert.endswith(".html") or ".." in normalisiert:
+        raise ValueError(
+            f"Der HTML-Bericht benötigt einen gültigen Streamlit-Ressourcenlink: {ziel!r}"
+        )
+    return (
+        f'<a href="{html.escape(normalisiert, quote=True)}" target="_blank" '
+        'rel="noopener noreferrer">Konzeptionelles Modell in neuem Tab öffnen</a>'
+    )
+
+
+def _html_ressource(report_html: bytes, *, koordinaten: str) -> str:
+    """Registriert das vollständige Dokument stabil im aktiven Streamlit-Mediaspeicher."""
+    if not runtime.exists():
+        raise RuntimeError(
+            "Der HTML-Bericht kann nur in einer aktiven Streamlit-Sitzung geöffnet werden."
+        )
+    return runtime.get_instance().media_file_mgr.add(
+        report_html,
+        "text/html",
+        koordinaten,
+    )
+
+
 def zeige_modellausgabe_seite(
     projekt_service: ProjektService,
     validierungs_service: ModellvalidierungService,
@@ -40,7 +72,8 @@ def zeige_modellausgabe_seite(
             framework_bereich_oeffnen(schritt=9)
         return
     projekt_id, validierungslauf_id, k_stern_id = ids
-    if projekt_service.projekt_laden(projekt_id) is None:
+    projekt = projekt_service.projekt_laden(projekt_id)
+    if projekt is None:
         st.error("Das aktive Projekt wurde nicht gefunden.")
         return
     try:
@@ -54,12 +87,9 @@ def zeige_modellausgabe_seite(
         return
     st.subheader("1. Aktives validiertes konzeptionelles Modell K*")
     st.success(
-        f"K* `{k_stern['k_stern_id']}` ist projektgebunden, checksum-validiert und fachlich "
+        f"Das konzeptionelle Modell für **{projekt.bezeichnung}** ist projektgebunden, "
+        "checksum-validiert und fachlich "
         "validiert. Schritt 10 verändert dieses Modell nicht."
-    )
-    st.caption(
-        f"Projekt `{k_stern['projekt_id']}` · Validierungslauf "
-        f"`{k_stern['validierungslauf_id']}` · Erstellt `{k_stern['erstellt_am']}`"
     )
     for index, bestandteil in enumerate(k_stern["modellbestandteile"], 1):
         with st.expander(f"{index}. {bestandteil['bezeichnung']}"):
@@ -71,18 +101,34 @@ def zeige_modellausgabe_seite(
                 f"Menschliche Ergänzungen oder Anpassungen: "
                 f"**{len(bestandteil.get('menschliche_eintraege', []))}**"
             )
-    st.subheader("2. Ausgabeformen wählen")
-    formate = st.multiselect("Ausgabeformen", ["HTML", "PDF"], default=["HTML", "PDF"])
-    st.button("XLSX-Ausgabe – noch nicht implementiert", disabled=True)
-    signatur = (str(validierungslauf_id), str(k_stern_id), tuple(formate))
-    if st.button("Ausgewählte Dateien erzeugen", disabled=not formate, type="primary"):
+    with st.expander("Technische Details", expanded=False):
+        st.json(
+            {
+                "projekt_id": str(projekt_id),
+                "validierungslauf_id": str(validierungslauf_id),
+                "k_stern_id": str(k_stern_id),
+                "erstellt_am": k_stern["erstellt_am"],
+                "gesamtpruefsumme": k_stern.get("gesamtpruefsumme"),
+                "eingabefingerabdruck": k_stern.get("eingabefingerabdruck"),
+                "entscheidungsfingerabdruck": k_stern.get("entscheidungsfingerabdruck"),
+            },
+            expanded=False,
+        )
+    st.subheader("2. Ausgabe erzeugen")
+    xlsx_dateiname = sicherer_dateiname(
+        f"Konzeptionelles Modell {sicherer_dateinamenbestandteil(projekt.bezeichnung)}",
+        "xlsx",
+    )
+    st.button(f"{xlsx_dateiname} – noch nicht implementiert", disabled=True)
+    signatur = (str(validierungslauf_id), str(k_stern_id))
+    if st.button("HTML und PDF erzeugen", type="primary"):
         try:
             st.session_state.schritt10_ausgabe = ausgabe_service.erzeugen(
                 validierungslauf_id=validierungslauf_id,
                 projekt_id=projekt_id,
                 k_stern_id=k_stern_id,
-                html="HTML" in formate,
-                pdf="PDF" in formate,
+                html=True,
+                pdf=True,
             )
             st.session_state.schritt10_ausgabe_signatur = signatur
         except (Domaenenfehler, Importintegritaetsfehler, KeyError) as fehler:
@@ -90,10 +136,18 @@ def zeige_modellausgabe_seite(
     ausgabe = st.session_state.get("schritt10_ausgabe")
     if isinstance(ausgabe, StrukturierteModellausgabe):
         if st.session_state.get("schritt10_ausgabe_signatur") != signatur:
-            st.warning("K* oder die Formatauswahl wurde geändert; die Ausgabe ist veraltet.")
+            st.warning("Das aktive K* wurde geändert; die Ausgabe ist veraltet.")
             return
-        st.subheader("3. Strukturierte Ausgabe herunterladen")
+        st.subheader("3. Ausgabe öffnen oder herunterladen")
         if ausgabe.report_html is not None and ausgabe.html_dateiname is not None:
+            report_url = _html_ressource(
+                ausgabe.report_html,
+                koordinaten=f"konzeptbericht-{projekt_id}-{validierungslauf_id}-{k_stern_id}",
+            )
+            st.markdown(
+                _html_link(report_url),
+                unsafe_allow_html=True,
+            )
             st.download_button(
                 "HTML-Report herunterladen",
                 ausgabe.report_html,

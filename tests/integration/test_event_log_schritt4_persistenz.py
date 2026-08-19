@@ -1,6 +1,7 @@
 """Reproduzierbare Persistenz der Schritt-4-Konfiguration und des Event Logs E."""
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -155,6 +156,27 @@ def test_konfiguration_m_und_e_bleiben_vollstaendig_reproduzierbar(tmp_path: Pat
         speicher,
         mappingtabelle_service,
     )
+    version_drei = replace(
+        konfiguration,
+        mapping_id=uuid4(),
+        ressourcen_spalte="ressource",
+        spaltenzuordnungen=(),
+        validierung=None,
+        status=Mappingstatus.ENTWURF,
+        konfigurationsversion=3,
+    )
+    version_drei, pruefung_drei = konfigurations_service.validieren(version_drei, daten)
+    assert pruefung_drei.validierung.gueltig
+    pfad_drei = konfigurations_service.speichern(version_drei)
+    assert konfigurations_service.laden(version_drei.mapping_id) == version_drei
+    struktur_drei = json.loads(speicher.lesen(pfad_drei))
+    assert struktur_drei["artefakt_version"] == 2
+    assert struktur_drei["mapping"]["konfigurationsversion"] == 3
+    assert event_service.vorschau(version_drei.mapping_id).ereignisse["resource"].tolist() == [
+        "R2",
+        "R1",
+    ]
+
     event_log_id = uuid4()
     event_service.vorschau(konfiguration.mapping_id)
     artefakt = event_service.speichern(event_log_id, konfiguration.mapping_id)

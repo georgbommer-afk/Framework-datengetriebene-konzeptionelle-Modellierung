@@ -27,6 +27,7 @@ from framework_mvp.application.transformation import (
 )
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
+    TRANSFORMATIONSART_BEZEICHNUNGEN,
     Importvorgang,
     Transformationshistorie,
     Transformationsplan,
@@ -127,6 +128,17 @@ class TransformationsService:
         """Lädt einen persistierten Transformationsplan."""
         return self._repository.plan_laden(plan_id)
 
+    def neuester_plan_fuer_import(
+        self, projekt_id: UUID, import_id: UUID
+    ) -> Transformationsplan | None:
+        """Lädt die zuletzt geänderte, persistierte Kette eines Ausgangsimports."""
+        kandidaten = [
+            plan
+            for plan in self._repository.plaene_fuer_projekt(projekt_id)
+            if import_id in plan.import_ids
+        ]
+        return max(kandidaten, key=lambda wert: wert.geaendert_am, default=None)
+
     def import_dataframe_laden(self, import_id: UUID) -> pd.DataFrame:
         """Rekonstruiert die importierte Tabelle aus Raw-Datei und Importparametern."""
         importvorgang, inhalt = self._import_service.originaldatei_laden(import_id)
@@ -172,6 +184,10 @@ class TransformationsService:
         """Berechnet ein separates, nicht persistiertes Profil des vollständigen Ergebnisses."""
         return self._datenimport_service.profil_erstellen(ergebnis.daten)
 
+    def arbeitsprofil_erstellen(self, daten: pd.DataFrame) -> Profilierungsergebnis:
+        """Berechnet das aktuelle Profil für die Konfiguration des nächsten Kettenschritts."""
+        return self._datenimport_service.profil_erstellen(daten)
+
     def vorschau(self, plan: Transformationsplan) -> Transformationsergebnis:
         """Wendet alle Schritte streng geordnet neu auf unveränderte Raw-Daten an."""
         self._importe_des_plans(plan)
@@ -181,57 +197,10 @@ class TransformationsService:
         for schritt in sorted(plan.schritte, key=lambda wert: wert.reihenfolge):
             if not schritt.aktiviert:
                 continue
-            if not schritt.frameworkkonform:
-                raise Domaenenfehler(
-                    f"Der Legacy-Schritt '{schritt.typ.value}' ist nicht mehr "
-                    "frameworkkonform und wird nicht ausgeführt."
-                )
-            if schritt.typ.value != "tabellen_join":
-                einzelplan = replace(plan, schritte=(replace(schritt, reihenfolge=1),))
-                ergebnis = fuehre_transformationsplan_aus(daten, einzelplan)
-                daten = ergebnis.daten
-                historie.extend(
-                    replace(wert, schritt=schritt.reihenfolge) for wert in ergebnis.historie
-                )
-                warnungen.extend(ergebnis.warnungen)
-                continue
-            parameter = schritt.parameter
-            rechte_datensatz_id = parameter.get("rechter_zwischendatensatz_id")
-            if not rechte_datensatz_id:
-                raise Domaenenfehler(
-                    "Eine Legacy-Verknüpfung mit einem unaufbereiteten rechten Rohimport "
-                    "ist nicht mehr frameworkkonform."
-                )
-            rechter_datensatz, rechte_daten = self.zwischendatensatz_laden(
-                UUID(str(rechte_datensatz_id))
-            )
-            if rechter_datensatz.projekt_id != plan.projekt_id:
-                raise Domaenenfehler("Die Join-Datensätze gehören nicht zum selben Projekt.")
-            suffixe_roh = parameter.get("suffixe", ["_links", "_rechts"])
-            suffixe = (str(suffixe_roh[0]), str(suffixe_roh[1]))
-            zeilen_vorher, spalten_vorher = daten.shape
-            daten, pruefung = fuehre_join_aus(
-                daten,
-                rechte_daten,
-                linke_schluessel=tuple(parameter["linke_schluessel"]),
-                rechte_schluessel=tuple(parameter["rechte_schluessel"]),
-                join_art=str(parameter["join_art"]),
-                suffixe=suffixe,
-                nm_bestaetigt=bool(parameter.get("nm_bestaetigt", False)),
-            )
-            historie.append(
-                Transformationshistorie(
-                    schritt.reihenfolge,
-                    schritt.beschreibung,
-                    schritt.betroffene_spalten,
-                    zeilen_vorher,
-                    len(daten),
-                    spalten_vorher,
-                    len(daten.columns),
-                    f"Kardinalität {pruefung.kardinalitaet}; {len(daten)} Ergebniszeilen",
-                )
-            )
-            warnungen.extend(pruefung.warnungen)
+            ergebnis = self._schritt_ausfuehren(plan, schritt, daten)
+            daten = ergebnis.daten
+            historie.extend(ergebnis.historie)
+            warnungen.extend(ergebnis.warnungen)
         return Transformationsergebnis(
             daten,
             daten.head(200).copy(deep=True),
@@ -239,8 +208,169 @@ class TransformationsService:
             tuple(warnungen),
         )
 
+    def _schritt_ausfuehren(
+        self,
+        plan: Transformationsplan,
+        schritt: Transformationsschritt,
+        daten: pd.DataFrame,
+    ) -> Transformationsergebnis:
+        """Validiert und berechnet genau einen Schritt auf einem vorhandenen Arbeitsstand."""
+        if not schritt.frameworkkonform:
+            raise Domaenenfehler(
+                f"Der Legacy-Schritt '{schritt.typ.value}' ist nicht mehr "
+                "frameworkkonform und wird nicht ausgeführt."
+            )
+        if schritt.typ.value != "tabellen_join":
+            einzelplan = replace(plan, schritte=(replace(schritt, reihenfolge=1),))
+            ergebnis = fuehre_transformationsplan_aus(daten, einzelplan)
+            return replace(
+                ergebnis,
+                historie=tuple(
+                    replace(wert, schritt=schritt.reihenfolge) for wert in ergebnis.historie
+                ),
+            )
+        parameter = schritt.parameter
+        rechte_datensatz_id = parameter.get("rechter_zwischendatensatz_id")
+        if not rechte_datensatz_id:
+            raise Domaenenfehler(
+                "Eine Verknüpfung benötigt einen aufbereiteten rechten Zwischendatensatz."
+            )
+        rechter_datensatz, rechte_daten = self.zwischendatensatz_laden(
+            UUID(str(rechte_datensatz_id))
+        )
+        if rechter_datensatz.projekt_id != plan.projekt_id:
+            raise Domaenenfehler("Die Join-Datensätze gehören nicht zum selben Projekt.")
+        suffixe_roh = parameter.get("suffixe", ["_links", "_rechts"])
+        suffixe = (str(suffixe_roh[0]), str(suffixe_roh[1]))
+        zeilen_vorher, spalten_vorher = daten.shape
+        ergebnisdaten, pruefung = fuehre_join_aus(
+            daten,
+            rechte_daten,
+            linke_schluessel=tuple(parameter["linke_schluessel"]),
+            rechte_schluessel=tuple(parameter["rechte_schluessel"]),
+            join_art=str(parameter["join_art"]),
+            suffixe=suffixe,
+            nm_bestaetigt=bool(parameter.get("nm_bestaetigt", False)),
+        )
+        historie = Transformationshistorie(
+            schritt.reihenfolge,
+            schritt.beschreibung,
+            schritt.betroffene_spalten,
+            zeilen_vorher,
+            len(ergebnisdaten),
+            spalten_vorher,
+            len(ergebnisdaten.columns),
+            f"Kardinalität {pruefung.kardinalitaet}; {len(ergebnisdaten)} Ergebniszeilen",
+        )
+        return Transformationsergebnis(
+            ergebnisdaten,
+            ergebnisdaten.head(200).copy(deep=True),
+            (historie,),
+            tuple(pruefung.warnungen),
+        )
+
+    def _transformationsartefakt(self, datensatz: Zwischendatensatz) -> dict[str, object]:
+        try:
+            struktur = json.loads(self._artefakte.lesen(datensatz.relativer_transformation_pfad))
+        except (json.JSONDecodeError, UnicodeDecodeError) as fehler:
+            raise Importintegritaetsfehler(
+                "Die Transformations-Lineage ist kein gültiges JSON."
+            ) from fehler
+        if not isinstance(struktur, dict):
+            raise Importintegritaetsfehler("Die Transformations-Lineage ist ungültig.")
+        return struktur
+
+    def _letzter_ausgefuehrter_stand(
+        self, plan: Transformationsplan
+    ) -> tuple[Zwischendatensatz | None, pd.DataFrame, tuple[Transformationshistorie, ...]]:
+        """Lädt den letzten zur aktuellen Plankette passenden Zwischenstand."""
+        schritt_ids = [str(wert.transformationsschritt_id) for wert in plan.schritte]
+        for datensatz in reversed(
+            self._repository.datensaetze_fuer_plan(plan.transformationsplan_id)
+        ):
+            artefakt = self._transformationsartefakt(datensatz)
+            artefakt_plan = artefakt.get("transformationsplan")
+            artefakt_schritte = (
+                artefakt_plan.get("schritte", []) if isinstance(artefakt_plan, dict) else []
+            )
+            ids = [
+                str(wert.get("transformationsschritt_id"))
+                for wert in artefakt_schritte
+                if isinstance(wert, dict)
+            ]
+            if ids != schritt_ids:
+                continue
+            _, daten = self.zwischendatensatz_laden(datensatz.zwischendatensatz_id)
+            historie_roh = artefakt.get("transformationshistorie", [])
+            if not isinstance(historie_roh, list):
+                historie_roh = []
+            historie = tuple(
+                Transformationshistorie(
+                    int(wert["schritt"]),
+                    str(wert["aktion"]),
+                    tuple(str(spalte) for spalte in wert.get("betroffene_spalten", [])),
+                    int(wert["zeilen_vorher"]),
+                    int(wert["zeilen_nachher"]),
+                    int(wert["spalten_vorher"]),
+                    int(wert["spalten_nachher"]),
+                    str(wert["ergebnis_oder_warnung"]),
+                )
+                for wert in historie_roh
+                if isinstance(wert, dict)
+            )
+            return datensatz, daten, historie
+        ergebnis = self.vorschau(plan)
+        return None, ergebnis.daten, ergebnis.historie
+
+    def arbeitsstand_laden(
+        self, plan: Transformationsplan
+    ) -> tuple[Zwischendatensatz | None, pd.DataFrame]:
+        """Liefert den letzten persistierten Zwischenstand oder den kontrollierten Planstand."""
+        datensatz, daten, _ = self._letzter_ausgefuehrter_stand(plan)
+        return datensatz, daten
+
+    def transformation_anwenden(
+        self,
+        plan: Transformationsplan,
+        schritt: Transformationsschritt,
+        datensatz_id: UUID,
+        *,
+        zusaetzliche_import_ids: tuple[UUID, ...] = (),
+    ) -> tuple[Transformationsplan, Transformationsergebnis, Zwischendatensatz]:
+        """Validiert, hängt an, berechnet inkrementell und persistiert in einem Aufruf."""
+        vorgaenger, eingangsdaten, bisherige_historie = self._letzter_ausgefuehrter_stand(plan)
+        aktualisiert = self.schritt_hinzufuegen(plan, schritt)
+        if zusaetzliche_import_ids:
+            aktualisiert = replace(
+                aktualisiert,
+                import_ids=tuple(
+                    dict.fromkeys((*aktualisiert.import_ids, *zusaetzliche_import_ids))
+                ),
+            )
+        ergebnis = self._schritt_ausfuehren(aktualisiert, aktualisiert.schritte[-1], eingangsdaten)
+        vollstaendige_historie = (*bisherige_historie, *ergebnis.historie)
+        vollstaendiges_ergebnis = replace(ergebnis, historie=vollstaendige_historie)
+        try:
+            datensatz = self.zwischendatensatz_erzeugen(
+                aktualisiert,
+                vollstaendiges_ergebnis,
+                datensatz_id,
+                vorgaenger=vorgaenger,
+                angewendeter_schritt=aktualisiert.schritte[-1],
+            )
+        except Exception:
+            self._repository.plan_speichern(plan)
+            raise
+        return aktualisiert, vollstaendiges_ergebnis, datensatz
+
     def zwischendatensatz_erzeugen(
-        self, plan: Transformationsplan, ergebnis: Transformationsergebnis, datensatz_id: UUID
+        self,
+        plan: Transformationsplan,
+        ergebnis: Transformationsergebnis,
+        datensatz_id: UUID,
+        *,
+        vorgaenger: Zwischendatensatz | None = None,
+        angewendeter_schritt: Transformationsschritt | None = None,
     ) -> Zwischendatensatz:
         """Speichert CSV.GZ, Schema und Transformation mit Kompensation."""
         vorhanden = self._repository.datensatz_laden(datensatz_id)
@@ -276,19 +406,31 @@ class TransformationsService:
         transformation_pfad = (basis / f"{datensatz_id}.transformation.json").as_posix()
         ausgangsimporte = self._importe_des_plans(plan)
         ausgangsprofile = [self.ausgangsprofil_laden(wert.import_id) for wert in ausgangsimporte]
+        vorherige_lineage = self._transformationsartefakt(vorgaenger) if vorgaenger else None
+        vorheriges_schema = (
+            json.loads(self._artefakte.lesen(vorgaenger.relativer_schema_pfad))
+            if vorgaenger is not None
+            else None
+        )
+        ursprungsspalten = dict(
+            vorheriges_schema.get("urspruengliche_quellspalten_nach_import", {})
+            if isinstance(vorheriges_schema, dict)
+            else {}
+        )
+        for importvorgang in ausgangsimporte:
+            import_schluessel = str(importvorgang.import_id)
+            if import_schluessel not in ursprungsspalten:
+                ursprungsspalten[import_schluessel] = [
+                    str(name)
+                    for name in self.import_dataframe_laden(importvorgang.import_id).columns
+                ]
         schema = {
             "artefakt_version": 1,
             "spalten": [
                 {"name": str(name), "technischer_datentyp": str(ergebnis.daten[name].dtype)}
                 for name in ergebnis.daten.columns
             ],
-            "urspruengliche_quellspalten_nach_import": {
-                str(importvorgang.import_id): [
-                    str(name)
-                    for name in self.import_dataframe_laden(importvorgang.import_id).columns
-                ]
-                for importvorgang in ausgangsimporte
-            },
+            "urspruengliche_quellspalten_nach_import": ursprungsspalten,
             "datumsformat": "ISO-8601",
             "fehlwertdarstellung": "leeres CSV-Feld",
             "zeilenanzahl": len(ergebnis.daten),
@@ -297,6 +439,7 @@ class TransformationsService:
             "import_ids": [str(wert) for wert in plan.import_ids],
             "erstellt_am": jetzt.isoformat(),
         }
+        ergebnisprofil = self._datenimport_service.profil_erstellen(ergebnis.daten).profil
         transformation = {
             "artefakt_version": TRANSFORMATIONS_ARTEFAKT_VERSION,
             "software_schema_version": 4,
@@ -315,22 +458,68 @@ class TransformationsService:
                 }
                 for importvorgang, profil in zip(ausgangsimporte, ausgangsprofile, strict=True)
             ],
-            "relevante_auffaelligkeiten": [
-                asdict(wert)
-                for wert in ermittle_auffaelligkeiten(
-                    self.ausgangsprofil_laden(plan.import_ids[0]).gesamtprofil,
-                    self.import_dataframe_laden(plan.import_ids[0]),
-                )
-                if wert.anzahl > 0
-            ],
+            "relevante_auffaelligkeiten": (
+                vorherige_lineage.get("relevante_auffaelligkeiten", [])
+                if isinstance(vorherige_lineage, dict)
+                else [
+                    asdict(wert)
+                    for wert in ermittle_auffaelligkeiten(
+                        self.ausgangsprofil_laden(plan.import_ids[0]).gesamtprofil,
+                        self.import_dataframe_laden(plan.import_ids[0]),
+                    )
+                    if wert.anzahl > 0
+                ]
+            ),
             "transformationsplan": asdict(plan),
             "transformationshistorie": [asdict(wert) for wert in ergebnis.historie],
+            "inkrementelle_lineage": {
+                "eingabedatensatz": (
+                    "Rohimport"
+                    if vorgaenger is None
+                    else f"Zwischendatensatz {max(1, len(ergebnis.historie) - 1)}"
+                ),
+                "eingabe_zwischendatensatz_id": (
+                    None if vorgaenger is None else str(vorgaenger.zwischendatensatz_id)
+                ),
+                "ausgabe_zwischendatensatz_id": str(datensatz_id),
+                "angewendeter_transformationsschritt_id": (
+                    None
+                    if angewendeter_schritt is None
+                    else str(angewendeter_schritt.transformationsschritt_id)
+                ),
+                "folgeartefakte_neu_zu_erzeugen": vorgaenger is not None,
+            },
+            "ergebnisprofil": asdict(ergebnisprofil),
             "ergebniskennzahlen": {
                 "zeilen": len(ergebnis.daten),
                 "spalten": len(ergebnis.daten.columns),
             },
             "warnungen": list(ergebnis.warnungen),
         }
+        if angewendeter_schritt is not None and ergebnis.historie:
+            wirkung = ergebnis.historie[-1]
+            transformation["inkrementelle_ausfuehrung"] = {
+                "reihenfolge": angewendeter_schritt.reihenfolge,
+                "transformationsart": TRANSFORMATIONSART_BEZEICHNUNGEN.get(
+                    angewendeter_schritt.typ, angewendeter_schritt.typ.value
+                ),
+                "betroffene_spalte_oder_bedingung": (
+                    angewendeter_schritt.beschreibung
+                    or ", ".join(angewendeter_schritt.betroffene_spalten)
+                    or "gesamter Datensatz"
+                ),
+                "eingabedatensatz": (
+                    "Rohimport"
+                    if vorgaenger is None
+                    else f"Zwischendatensatz {angewendeter_schritt.reihenfolge - 1}"
+                ),
+                "erzeugter_zwischendatensatz": (
+                    f"Zwischendatensatz {angewendeter_schritt.reihenfolge}"
+                ),
+                "zeilen_vorher": wirkung.zeilen_vorher,
+                "zeilen_nachher": wirkung.zeilen_nachher,
+                "status": "Erfolgreich",
+            }
         schema_bytes = json.dumps(schema, ensure_ascii=False, sort_keys=True, indent=2).encode()
         transformation_bytes = json.dumps(
             transformation, ensure_ascii=False, sort_keys=True, indent=2, default=str
@@ -411,3 +600,50 @@ class TransformationsService:
     def datensaetze_fuer_projekt(self, projekt_id: UUID) -> list[Zwischendatensatz]:
         """Listet gespeicherte Zwischendatensätze eines Projekts."""
         return self._repository.datensaetze_fuer_projekt(projekt_id)
+
+    def transformationshistorie(self, plan: Transformationsplan) -> list[dict[str, object]]:
+        """Liefert die chronologische fachliche Historie ohne technische Primärdetails."""
+        datensaetze = self._repository.datensaetze_fuer_plan(plan.transformationsplan_id)
+        zeilen_nach_reihenfolge: dict[int, dict[str, object]] = {}
+        for datensatz in datensaetze:
+            artefakt = self._transformationsartefakt(datensatz)
+            ausfuehrung = artefakt.get("inkrementelle_ausfuehrung")
+            if isinstance(ausfuehrung, dict):
+                try:
+                    reihenfolge = int(ausfuehrung["reihenfolge"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                zeilen_nach_reihenfolge[reihenfolge] = dict(ausfuehrung)
+        if not datensaetze:
+            return []
+        artefakt = self._transformationsartefakt(datensaetze[-1])
+        historie = artefakt.get("transformationshistorie", [])
+        if not isinstance(historie, list):
+            historie = []
+        schritte = {wert.reihenfolge: wert for wert in plan.schritte}
+        for index, wirkung in enumerate(historie, 1):
+            if not isinstance(wirkung, dict):
+                continue
+            nummer = int(wirkung.get("schritt", index))
+            if nummer in zeilen_nach_reihenfolge:
+                continue
+            schritt = schritte.get(nummer)
+            zeilen_nach_reihenfolge[nummer] = {
+                "reihenfolge": nummer,
+                "transformationsart": (
+                    TRANSFORMATIONSART_BEZEICHNUNGEN.get(schritt.typ, schritt.typ.value)
+                    if schritt is not None
+                    else str(wirkung.get("aktion", "Transformation"))
+                ),
+                "betroffene_spalte_oder_bedingung": str(
+                    wirkung.get("aktion", "gesamter Datensatz")
+                ),
+                "eingabedatensatz": (
+                    "Rohimport" if index == 1 else f"Zwischendatensatz {index - 1}"
+                ),
+                "erzeugter_zwischendatensatz": f"Zwischendatensatz {index}",
+                "zeilen_vorher": int(wirkung.get("zeilen_vorher", 0)),
+                "zeilen_nachher": int(wirkung.get("zeilen_nachher", 0)),
+                "status": "Erfolgreich",
+            }
+        return [zeilen_nach_reihenfolge[nummer] for nummer in sorted(zeilen_nach_reihenfolge)]

@@ -265,6 +265,15 @@ def _t_verwendungen(kontext: QualityGateKontext) -> dict[str, tuple[str, bool, b
             verwendungen[spalte] = (beschreibung, True, False)
     if config.mapping_modus is MappingModus.EREIGNISORIENTIERT:
         verwendungen[config.zeitstempelspalte] = ("Ereigniszeitstempel", True, True)
+        if config.konfigurationsversion >= 3:
+            for spalte, beschreibung, ist_zeit in (
+                (config.startzeitstempelspalte, "Startzeitstempel", True),
+                (config.endzeitstempelspalte, "Endzeitstempel", True),
+                (config.lifecycle_spalte, "Lifecycle-/Statusangabe", False),
+                (config.ressourcen_spalte, "Ressource", False),
+            ):
+                if spalte:
+                    verwendungen[spalte] = (beschreibung, False, ist_zeit)
     else:
         for wert in config.zeitstempelzuordnungen:
             verwendungen[wert.zeitstempelspalte] = (
@@ -272,6 +281,19 @@ def _t_verwendungen(kontext: QualityGateKontext) -> dict[str, tuple[str, bool, b
                 True,
                 True,
             )
+            if config.konfigurationsversion >= 3:
+                if wert.ressourcenspalte:
+                    verwendungen[wert.ressourcenspalte] = (
+                        f"Ressource für Aktivität „{wert.aktivitaetsbezeichnung}“",
+                        False,
+                        False,
+                    )
+                if wert.statusspalte:
+                    verwendungen[wert.statusspalte] = (
+                        f"Lifecycle für Aktivität „{wert.aktivitaetsbezeichnung}“",
+                        False,
+                        False,
+                    )
     for spalte in config.zusaetzliche_attribute:
         verwendungen[spalte] = ("Ausgewähltes zusätzliches Attribut", False, False)
     return verwendungen

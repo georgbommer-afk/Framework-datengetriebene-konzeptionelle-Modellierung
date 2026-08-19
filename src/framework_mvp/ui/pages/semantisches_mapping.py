@@ -34,15 +34,14 @@ from framework_mvp.domain.models import (
     Zwischendatensatz,
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
-from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
+from framework_mvp.ui.fortschritt import unterschritte_fuer
 from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import (
     framework_bereich_oeffnen,
     schritt_abschliessen_und_weiter,
 )
 
-MAPPING_SCHRITTE = ("Datenstruktur", "Rollen und Aktivität", "Prüfen und speichern")
-MAPPING_KURZNAMEN = ("Struktur", "Zuordnung", "Ergebnis")
+MAPPING_SCHRITTE = unterschritte_fuer(3)
 
 STANDARDROLLEN = (
     "Ressource",
@@ -81,15 +80,6 @@ def _zustand(projekt_id: UUID) -> dict[str, Any]:
     """Liefert den projektbezogenen Zustand des dreiteiligen Mapping-Ablaufs."""
     zustaende = st.session_state.setdefault("mapping_wizard_zustaende", {})
     return zustaende.setdefault(str(projekt_id), {"schritt": 1})
-
-
-def _fortschritt(schritt: int) -> None:
-    """Zeigt den kompakten dreistufigen Mappingfortschritt."""
-    zeige_kompakten_fortschritt(
-        schritt=schritt,
-        kurze_namen=MAPPING_KURZNAMEN,
-        lange_namen=MAPPING_SCHRITTE,
-    )
 
 
 def _projektkontext(service: ProjektService) -> tuple[UUID, str] | None:
@@ -169,7 +159,7 @@ def _datensatzkontext(
         f"{sum(s.aktiviert for s in plan.schritte) if plan else 0} Transformationen · "
         f"erstellt am {datensatz.erstellt_am:%d.%m.%Y um %H:%M Uhr}"
     )
-    with st.expander("Technische Datensatzinformationen"):
+    with st.expander("Technische Details", expanded=False):
         st.write(f"Zwischendatensatz-ID: `{datensatz.zwischendatensatz_id}`")
         st.write(f"Transformationsplan-ID: `{datensatz.transformationsplan_id}`")
         st.write(f"Prüfsumme: `{datensatz.sha256}`")
@@ -637,13 +627,10 @@ def _pruefen_und_speichern(
         f"Objekte {len(gruppen.get('objektidentifikatoren', ()))}  \n"
         f"**Validierungsfehler:** {len(fehler)} · **Warnungen:** {len(warnungen)}"
     )
-    warnungen_bestaetigt = not warnungen or st.checkbox(
-        "Ich habe die Warnungen geprüft und möchte das Mapping speichern."
-    )
     if st.button(
-        "Event-Log-Konfiguration speichern",
+        "Event-Log-Konfiguration speichern und weiter",
         type="primary",
-        disabled=bool(fehler) or not warnungen_bestaetigt,
+        disabled=bool(fehler),
     ):
         erneut, erneutes_ergebnis = service.validieren(mapping, daten)
         if not erneutes_ergebnis.validierung.gueltig:
@@ -652,8 +639,7 @@ def _pruefen_und_speichern(
         zustand["mapping_pfad"] = service.speichern(erneut)
         st.session_state.aktuelle_mapping_id = str(erneut.mapping_id)
         st.session_state.mapping_id = erneut.mapping_id
-        st.success("Die Event-Log-Konfiguration wurde für Schritt 4 gespeichert.")
-        st.rerun()
+        schritt_abschliessen_und_weiter(aktueller_schritt=3, projekt_id=mapping.projekt_id)
 
 
 def _navigation(zustand: dict[str, Any]) -> None:
@@ -708,7 +694,6 @@ def zeige_event_log_konfiguration(
         if zustand.get("datensatz_id") != aktive_id:
             zustand.clear()
             zustand.update({"schritt": 1, "datensatz_id": aktive_id})
-        _fortschritt(zustand["schritt"])
         if zustand["schritt"] == 1:
             _datenstruktur(daten, zustand)
         elif zustand["schritt"] == 2:

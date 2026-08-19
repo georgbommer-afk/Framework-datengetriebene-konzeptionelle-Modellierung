@@ -19,18 +19,12 @@ from framework_mvp.domain.models import (
     QualityGateStatus,
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
-from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
+from framework_mvp.ui.fortschritt import unterschritte_fuer
 from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import framework_bereich_oeffnen, schritt_abschliessen_und_weiter
 from framework_mvp.ui.pages.semantisches_mapping import _projektkontext
 
-SCHRITTE = (
-    "Artefaktkette übernehmen",
-    "Automatische Pflichtprüfungen",
-    "Fachlich bewerten",
-    "Freigeben oder zurückspringen",
-)
-KURZ = ("Q · T · M · E", "Automatisch", "Menschlich", "E* / Rücksprung")
+SCHRITTE = unterschritte_fuer(5)
 
 
 def _zustand(projekt_id: UUID, event_log_id: UUID) -> dict[str, Any]:
@@ -126,22 +120,18 @@ def _artefaktkette(ergebnis: QualityGateErgebnis, kontext: EventLogKontext) -> N
             }
         )
     st.write("**Datenquellenkatalog (Q) – tatsächlich verwendete Quellen**")
-    st.dataframe(pd.DataFrame(q_zeilen), hide_index=True, width="stretch")
+    st.dataframe(
+        pd.DataFrame(q_zeilen).drop(columns=["Datenquellen-ID", "Import-ID"]),
+        hide_index=True,
+        width="stretch",
+    )
     st.write(
-        f"**Zwischendatensatz (T):** {ergebnis.zwischendatensatz_id} · "
+        f"**Zwischendatensatz (T):** "
         f"{kontext.zwischendatensatz.zeilenanzahl:,} Zeilen · "
-        f"{kontext.zwischendatensatz.spaltenanzahl:,} Spalten · "
-        f"Prüfsumme `{ergebnis.zwischendatensatz_sha256}`  \n"
+        f"{kontext.zwischendatensatz.spaltenanzahl:,} Spalten  \n"
         f"**Mappingtabelle (M):** {ergebnis.mappingzustand.value}"
-        + (
-            f" · {ergebnis.mappingtabelle_id} · Prüfsumme `{ergebnis.mappingtabelle_sha256}`"
-            if ergebnis.mappingtabelle_id is not None
-            else ""
-        )
-        + f"  \n**Event-Log-Konfiguration:** {ergebnis.mapping_id} · "
-        f"Strukturart {ergebnis.strukturart}  \n"
-        f"**Event Log (E):** {ergebnis.event_log_id} · Prüfsumme "
-        f"`{ergebnis.event_log_sha256}`"
+        + f"  \n**Event-Log-Konfiguration:** Strukturart {ergebnis.strukturart}  \n"
+        "**Event Log (E):** erneut technisch validiert"
     )
     spalten = st.columns(4)
     spalten[0].metric("Ereignisse", ergebnis.ereignisanzahl)
@@ -155,8 +145,20 @@ def _artefaktkette(ergebnis: QualityGateErgebnis, kontext: EventLogKontext) -> N
             else "nicht bestimmbar"
         ),
     )
-    with st.expander("Technische Herkunft von E"):
-        st.json(kontext.lineage)
+    with st.expander("Technische Details", expanded=False):
+        st.json(
+            {
+                "datenquellenkatalog": q_zeilen,
+                "zwischendatensatz_id": str(ergebnis.zwischendatensatz_id),
+                "zwischendatensatz_sha256": ergebnis.zwischendatensatz_sha256,
+                "mappingtabelle_id": str(ergebnis.mappingtabelle_id),
+                "mappingtabelle_sha256": ergebnis.mappingtabelle_sha256,
+                "event_log_konfiguration_id": str(ergebnis.mapping_id),
+                "event_log_id": str(ergebnis.event_log_id),
+                "event_log_sha256": ergebnis.event_log_sha256,
+                "lineage": kontext.lineage,
+            }
+        )
 
 
 def _automatische_pruefung(ergebnis: QualityGateErgebnis) -> None:
@@ -338,15 +340,21 @@ def _abschluss(
         "freigegeben. Es wurde keine zusätzliche Qualitäts-CSV erzeugt."
     )
     st.write(
-        f"**Freigabe-ID:** {freigabe.freigabe_id}  \n"
-        f"**Event-Log-ID:** {freigabe.event_log_id}  \n"
-        f"**Unveränderte E-Prüfsumme:** `{freigabe.event_log_sha256}`  \n"
-        f"**Auditbericht:** `{freigabe.relativer_report_pfad}`  \n"
         f"**Ereignisse:** {ergebnis.ereignisanzahl:,} · **Fälle:** "
         f"{ergebnis.fallanzahl:,} · **Aktivitäten:** {ergebnis.aktivitaetsanzahl:,}  \n"
         f"**Zeitraum:** {ergebnis.zeitraum_von or 'nicht bestimmbar'} – "
         f"{ergebnis.zeitraum_bis or 'nicht bestimmbar'}"
     )
+    with st.expander("Technische Details", expanded=False):
+        st.json(
+            {
+                "freigabe_id": str(freigabe.freigabe_id),
+                "event_log_id": str(freigabe.event_log_id),
+                "event_log_sha256": freigabe.event_log_sha256,
+                "auditbericht": freigabe.relativer_report_pfad,
+                "lineage": kontext.lineage,
+            }
+        )
     fachspalten = [
         wert
         for wert in e_stern.columns
@@ -380,9 +388,6 @@ def zeige_datenqualitaet_seite(
             event_log_id,
             tuple(zustand.get("entscheidungen", ())),
         )
-        zeige_kompakten_fortschritt(
-            schritt=zustand["schritt"], kurze_namen=KURZ, lange_namen=SCHRITTE
-        )
         if zustand["schritt"] == 1:
             _artefaktkette(ergebnis, kontext)
             vorhandene = qualitaet_service.freigaben_fuer_event_log(projekt_id, event_log_id)
@@ -391,6 +396,12 @@ def zeige_datenqualitaet_seite(
                     auswahl = st.selectbox(
                         "Freigabe E*",
                         [wert.freigabe_id for wert in vorhandene],
+                        format_func=lambda wert: next(
+                            f"Freigabe vom {eintrag.erstellt_am:%d.%m.%Y, %H:%M Uhr} · "
+                            f"{eintrag.status.value}"
+                            for eintrag in vorhandene
+                            if eintrag.freigabe_id == wert
+                        ),
                     )
                     if st.button("Freigabe wiederaufnehmen"):
                         zustand["freigabe"] = next(

@@ -16,6 +16,7 @@ from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.application.transformations_service import TransformationsService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
+    AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION,
     Aktivitaetsbildungsart,
     Aktivitaetsdefinition,
     Attributrolle,
@@ -29,7 +30,7 @@ from framework_mvp.domain.models import (
     Zwischendatensatz,
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
-from framework_mvp.ui.components.kompakter_wizard import zeige_kompakten_fortschritt
+from framework_mvp.ui.fortschritt import unterschritte_fuer
 from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import framework_bereich_oeffnen, schritt_abschliessen_und_weiter
 from framework_mvp.ui.pages.semantisches_mapping import (
@@ -38,14 +39,7 @@ from framework_mvp.ui.pages.semantisches_mapping import (
     _projektkontext,
 )
 
-SCHRITTE = (
-    "Strukturart festlegen",
-    "Mindestbestandteile konfigurieren",
-    "Zusätzliche Attribute auswählen",
-    "Event Log erzeugen und prüfen",
-    "Event Log ausgeben und speichern",
-)
-KURZ = ("Struktur", "Mindestbestandteile", "Attribute", "Erzeugen", "Ausgabe E")
+SCHRITTE = unterschritte_fuer(4)
 
 
 def _folgeergebnisse_verwerfen(zustand: dict[str, Any]) -> None:
@@ -244,6 +238,9 @@ def _mindestbestandteile(
             key=f"event_breite_zeitspalten_{datensatz_id}",
         )
     )
+    bisherige_zuordnungen = {
+        wert.zeitstempelspalte: wert for wert in zustand.get("zeitstempelzuordnungen", ())
+    }
     zuordnungen = tuple(
         ZeitstempelZuordnung(
             spalte,
@@ -251,12 +248,21 @@ def _mindestbestandteile(
                 f"Aktivitätsbeschreibung für {label(spalte)}",
                 key=f"event_breite_aktivitaet_{datensatz_id}_{position}_{spalte}",
             ),
+            bisherige_zuordnungen.get(spalte, ZeitstempelZuordnung("", "")).ressourcenspalte,
+            bisherige_zuordnungen.get(spalte, ZeitstempelZuordnung("", "")).statusspalte,
         )
         for position, spalte in enumerate(zeitspalten)
     )
     zustand["zeitstempelzuordnungen"] = zuordnungen
     zustand["zeitstempelspalte"] = ""
     zustand["aktivitaetsquellen"] = ()
+    for schluessel in (
+        "startzeitstempelspalte",
+        "endzeitstempelspalte",
+        "lifecycle_spalte",
+        "ressourcen_spalte",
+    ):
+        zustand[schluessel] = ""
     if not zeitspalten:
         st.info("Wählen Sie mindestens eine relevante Zeitstempelspalte.")
         return False
@@ -276,7 +282,98 @@ def _attribute(
         *zustand.get("aktivitaetsquellen", ()),
         *(w.zeitstempelspalte for w in zustand.get("zeitstempelzuordnungen", ())),
     }
-    optionen = [str(w) for w in daten.columns if str(w) not in kern]
+    alle_optionen = [str(w) for w in daten.columns if str(w) not in kern]
+    datensatz_id = zustand["datensatz_id"]
+
+    def label(wert: str) -> str:
+        return _spaltenlabel(mapping, wert)
+
+    st.write("### Semantische Rollen (optional)")
+    st.caption("Jede gewählte T-Spalte wird als benannte kanonische Spalte in E übernommen.")
+    semantische_spalten: set[str] = set()
+    if zustand["mapping_modus"] is MappingModus.EREIGNISORIENTIERT:
+        rollendefinitionen = (
+            ("ressourcen_spalte", "Ressourcenspalte", "resource"),
+            ("startzeitstempelspalte", "Startzeitstempel", "start_timestamp"),
+            ("endzeitstempelspalte", "Endzeitstempel", "end_timestamp"),
+            ("lifecycle_spalte", "Lifecycle-/Statusspalte", "lifecycle"),
+        )
+        for zustandsschluessel, rollenlabel, zielname in rollendefinitionen:
+            andere = {
+                str(zustand.get(anderer_schluessel, ""))
+                for anderer_schluessel, _, _ in rollendefinitionen
+                if anderer_schluessel != zustandsschluessel and zustand.get(anderer_schluessel)
+            }
+            optionen = [wert for wert in alle_optionen if wert not in andere]
+            wert = fachliche_auswahl(
+                f"{rollenlabel} → {zielname}",
+                optionen,
+                wert=zustand.get(zustandsschluessel) or None,
+                format_func=label,
+                key=f"event_rolle_{zustandsschluessel}_{datensatz_id}",
+            )
+            zustand[zustandsschluessel] = wert or ""
+            if wert:
+                semantische_spalten.add(wert)
+    else:
+        neue_zuordnungen: list[ZeitstempelZuordnung] = []
+        verwendete_ressourcen = {
+            wert.ressourcenspalte
+            for wert in zustand.get("zeitstempelzuordnungen", ())
+            if wert.ressourcenspalte
+        }
+        verwendete_status = {
+            wert.statusspalte
+            for wert in zustand.get("zeitstempelzuordnungen", ())
+            if wert.statusspalte
+        }
+        for position, zuordnung in enumerate(zustand.get("zeitstempelzuordnungen", ())):
+            st.write(f"**{label(zuordnung.zeitstempelspalte)}**")
+            ressourcenoptionen = [
+                wert
+                for wert in alle_optionen
+                if wert not in verwendete_status or wert == zuordnung.ressourcenspalte
+            ]
+            ressource = fachliche_auswahl(
+                "Ressourcenspalte → resource",
+                ressourcenoptionen,
+                wert=zuordnung.ressourcenspalte or None,
+                format_func=label,
+                key=(
+                    f"event_breite_ressource_{datensatz_id}_{position}_"
+                    f"{zuordnung.zeitstempelspalte}"
+                ),
+            )
+            statusoptionen = [
+                wert
+                for wert in alle_optionen
+                if wert not in verwendete_ressourcen or wert == zuordnung.statusspalte
+            ]
+            status = fachliche_auswahl(
+                "Lifecycle-/Statusspalte → lifecycle",
+                statusoptionen,
+                wert=zuordnung.statusspalte or None,
+                format_func=label,
+                key=(
+                    f"event_breite_status_{datensatz_id}_{position}_{zuordnung.zeitstempelspalte}"
+                ),
+            )
+            neue_zuordnungen.append(
+                ZeitstempelZuordnung(
+                    zuordnung.zeitstempelspalte,
+                    zuordnung.aktivitaetsbezeichnung,
+                    ressource or "",
+                    status or "",
+                )
+            )
+            if ressource:
+                semantische_spalten.add(ressource)
+            if status:
+                semantische_spalten.add(status)
+        zustand["zeitstempelzuordnungen"] = tuple(neue_zuordnungen)
+
+    st.write("### Weitere Attribute übernehmen")
+    optionen = [wert for wert in alle_optionen if wert not in semantische_spalten]
     widget_key = f"event_zusatzattribute_{zustand['datensatz_id']}"
     bisher = st.session_state.get(widget_key, zustand.get("zusaetzliche_attribute", ()))
     st.session_state[widget_key] = [w for w in bisher if w in optionen]
@@ -284,7 +381,7 @@ def _attribute(
         st.multiselect(
             "Weitere Attribute in E übernehmen",
             optionen,
-            format_func=lambda w: _spaltenlabel(mapping, w),
+            format_func=label,
             key=widget_key,
         )
     )
@@ -323,10 +420,10 @@ def _konfiguration(
         ZusammengesetzteFallId((zustand["fall_id"],)),
         aktivitaetsspalte,
         zustand.get("zeitstempelspalte", ""),
-        "",
-        "",
-        "",
-        "",
+        zustand.get("startzeitstempelspalte", ""),
+        zustand.get("endzeitstempelspalte", ""),
+        zustand.get("lifecycle_spalte", ""),
+        zustand.get("ressourcen_spalte", ""),
         tuple(
             Spaltenzuordnung(w, Attributrolle.EREIGNISATTRIBUT)
             for w in zustand.get("zusaetzliche_attribute", ())
@@ -338,15 +435,24 @@ def _konfiguration(
         Mappingstatus.ENTWURF,
         definition,
         mapping.mapping_id if mapping is not None else None,
-        2,
+        AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION,
     )
 
 
 def _fachspalten(ergebnis: EventLogErgebnis) -> list[str]:
+    standardspalten = {
+        "case_id",
+        "activity",
+        "timestamp",
+        "start_timestamp",
+        "end_timestamp",
+        "lifecycle",
+        "resource",
+    }
     return [
         w
         for w in ergebnis.ereignisse.columns
-        if w in {"case_id", "activity", "timestamp"} or w in ergebnis.attributherkunft
+        if w in standardspalten or w in ergebnis.attributherkunft
     ]
 
 
@@ -378,12 +484,11 @@ def _ergebnis(
         if mapping is None
         else "bestätigt leer"
         if mapping.kein_mapping_erforderlich
-        else str(mapping.mapping_id)
+        else "vorhanden"
     )
     st.write("### Fallbezogener Event Log (E)")
     st.write(
         f"**Projekt:** {projektname}  \n"
-        f"**Zwischendatensatz T:** {datensatz.zwischendatensatz_id}  \n"
         f"**Mappingtabelle M:** {mappingtext}  \n"
         f"**Strukturart:** {konfiguration.mapping_modus.value}  \n"
         f"**Fallidentifikation:** "
@@ -407,10 +512,44 @@ def _ergebnis(
         hide_index=True,
         width="stretch",
     )
+    st.write("**Entstehende Spalten und ihre Herkunft aus T**")
+    standardherkunft = {
+        ziel: quelle
+        for ziel, quelle in ergebnis.herkunft_standardspalten.items()
+        if ziel != "event_id"
+    }
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Spalte in E": ziel,
+                    "Rolle": "Kanonische Spalte",
+                    "Quellspalte(n) in T": quelle,
+                }
+                for ziel, quelle in standardherkunft.items()
+            ]
+            + [
+                {
+                    "Spalte in E": ziel,
+                    "Rolle": "Weiteres Attribut",
+                    "Quellspalte(n) in T": quelle,
+                }
+                for ziel, quelle in ergebnis.attributherkunft.items()
+            ]
+        ),
+        hide_index=True,
+        width="stretch",
+    )
     st.dataframe(ergebnis.ereignisse.loc[:, _fachspalten(ergebnis)].head(200), width="stretch")
-    with st.expander("Technische Herkunft und Lineage"):
-        st.json(ergebnis.herkunft_standardspalten)
-        st.json(ergebnis.attributherkunft)
+    with st.expander("Technische Details", expanded=False):
+        st.json(
+            {
+                "zwischendatensatz_id": str(datensatz.zwischendatensatz_id),
+                "mappingtabelle_id": str(mapping.mapping_id) if mapping is not None else None,
+                "herkunft_standardspalten": ergebnis.herkunft_standardspalten,
+                "herkunft_attribute": ergebnis.attributherkunft,
+            }
+        )
         technische = [
             w for w in ergebnis.ereignisse.columns if str(w).startswith("_") or w == "event_id"
         ]
@@ -466,9 +605,6 @@ def _speichern(
     artefakt = zustand.get("artefakt")
     if artefakt is not None:
         st.success("Der fallbezogene Event Log (E) wurde gespeichert.")
-        st.write(f"**CSV.GZ:** {artefakt.relativer_csv_pfad}")
-        st.write(f"**Schema:** {artefakt.relativer_schema_pfad}")
-        st.write(f"**Lineage:** {artefakt.relativer_lineage_pfad}")
     if artefakt is None and st.button(
         "Event Log E speichern und zu Schritt 5",
         type="primary",
@@ -546,9 +682,6 @@ def zeige_event_log_seite(
         _mapping_anzeigen(mapping)
         st.write("### Unveränderte Vorschau des Zwischendatensatzes T")
         st.dataframe(daten.head(100), width="stretch")
-        zeige_kompakten_fortschritt(
-            schritt=zustand["schritt"], kurze_namen=KURZ, lange_namen=SCHRITTE
-        )
         weiter = False
         if zustand["schritt"] == 1:
             weiter = _struktur(

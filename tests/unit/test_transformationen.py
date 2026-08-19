@@ -13,6 +13,7 @@ from framework_mvp.application.transformation import (
     fuehre_join_aus,
     fuehre_transformationsplan_aus,
     pruefe_join,
+    transformiere_textwerte,
 )
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
@@ -262,6 +263,29 @@ def test_allgemeine_texttransformation_bewahrt_nichttreffer_und_eingangsdaten(
 
     assert ergebnis.daten["text"].tolist() == erwartet
     pd.testing.assert_frame_equal(daten, original)
+
+
+def test_reine_texttransformation_vertraegt_leere_und_sehr_lange_werte() -> None:
+    langer_wert = f"RS ({'x' * 10_000})"
+    werte = pd.Series([None, "", langer_wert, "ohne Treffer"], dtype="object")
+    original = werte.copy(deep=True)
+
+    ergebnis, treffer = transformiere_textwerte(
+        werte,
+        {
+            "art": "Zwischen Begrenzern extrahieren",
+            "startbegrenzer": "(",
+            "endbegrenzer": ")",
+            "nichttreffer": "Originalwert beibehalten",
+        },
+    )
+
+    assert pd.isna(ergebnis.iloc[0])
+    assert ergebnis.iloc[1] == ""
+    assert ergebnis.iloc[2] == "x" * 10_000
+    assert ergebnis.iloc[3] == "ohne Treffer"
+    assert treffer.tolist() == [False, False, True, False]
+    pd.testing.assert_series_equal(werte, original)
 
 
 @pytest.mark.parametrize(

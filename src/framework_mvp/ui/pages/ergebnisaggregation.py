@@ -17,6 +17,9 @@ from framework_mvp.application.ergebnisaggregation.sollprozess import (
     erzeuge_lineares_sollmodell,
     validiere_pnml_sollmodell,
 )
+from framework_mvp.application.ergebnisaggregation.strukturierte_ergebnisse import (
+    analysiere_ressourcen,
+)
 from framework_mvp.application.ergebnisaggregation.zeitvergleich import (
     lese_externe_sollzeitdaten,
 )
@@ -32,6 +35,8 @@ from framework_mvp.domain.models import (
     KpiStatus,
     Operandentyp,
     OperandZuordnung,
+    RessourcenanalyseErgebnis,
+    Ressourcenzuordnungsmodus,
     SollmodellEntscheidung,
     Vergleichsebene,
     Vorkommensregel,
@@ -68,21 +73,11 @@ def _eingangsartefakte(basis: object) -> None:
     spalten[0].metric("Ereignisse", len(basis.event_log))
     spalten[1].metric("Fälle", basis.event_log["case_id"].nunique())
     spalten[2].metric("Aktivitäten", basis.event_log["activity"].nunique())
-    st.write(f"**Aktives Projekt:** {basis.projekt.bezeichnung} (`{basis.projekt.projekt_id}`)")
-    st.write(
-        f"**Freigabe:** `{basis.freigabe.freigabe_id}` · "
-        f"**Event Log:** `{basis.freigabe.event_log_id}`"
-    )
+    st.write(f"**Aktives Projekt:** {basis.projekt.bezeichnung}")
     von = basis.event_log["timestamp"].min()
     bis = basis.event_log["timestamp"].max()
     st.write(f"**Zeitraum:** {von} bis {bis}")
-    st.code(basis.freigabe.event_log_sha256, language=None)
-    st.write(f"**Process-Mining-Analyse:** `{basis.analyse.analyse_id}`")
-    st.write(
-        f"**Notation von P:** {basis.discovery_ergebnisse['prozessnotation']} · "
-        f"**P-Prüfsumme:** `{basis.prozessmodell_sha256}`"
-    )
-    st.write(f"**A_D-Prüfsumme:** `{basis.discovery_ergebnisse_sha256}`")
+    st.write(f"**Notation von P:** {basis.discovery_ergebnisse['prozessnotation']}")
 
 
 def _auswahl(
@@ -407,16 +402,12 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
                 st.session_state.ag_lineare_reihenfolge = reihenfolge
                 st.rerun()
         meta = _sollmodell_metadaten("ag_linear")
-        bestaetigt = st.checkbox(
-            "Ich bestätige diese Reihenfolge als menschlich festgelegten fachlichen Sollablauf.",
-            key="ag_linear_bestaetigt",
-        )
         if st.button("Lineares P_Soll erzeugen", type="primary"):
             try:
                 st.session_state.ag_sollmodell = erzeuge_lineares_sollmodell(
                     projekt_id=basis.projekt.projekt_id,
                     aktivitaeten=reihenfolge,
-                    menschlich_bestaetigt=bestaetigt,
+                    menschlich_bestaetigt=True,
                     **meta,
                 )
                 st.session_state.pop("ag_aktivitaetsmapping", None)
@@ -439,14 +430,13 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
             key="ag_pnml_upload",
         )
         meta = _sollmodell_metadaten("ag_pnml")
-        markierung = st.checkbox(
-            "Falls Markierungen fehlen: Ableitung aus genau einem Quell- und Senkenplatz "
-            "bestätigen",
+        markierung = st.radio(
+            "Umgang mit fehlenden Anfangs- oder Endmarkierungen",
+            (
+                "Import abbrechen",
+                "Aus eindeutigem Quell- und Senkenplatz ableiten",
+            ),
             key="ag_pnml_markierung",
-        )
-        bestaetigt = st.checkbox(
-            "Ich bestätige dieses Modell als unabhängige menschliche Sollvorgabe.",
-            key="ag_pnml_bestaetigt",
         )
         if st.button("PNML sicher validieren", disabled=upload is None, type="primary"):
             try:
@@ -455,8 +445,10 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
                     projekt_id=basis.projekt.projekt_id,
                     dateiname=upload.name,
                     originalbytes=upload.getvalue(),
-                    menschlich_bestaetigt=bestaetigt,
-                    markierungsableitung_bestaetigt=markierung,
+                    menschlich_bestaetigt=True,
+                    markierungsableitung_bestaetigt=(
+                        markierung == "Aus eindeutigem Quell- und Senkenplatz ableiten"
+                    ),
                     **meta,
                 )
                 st.session_state.pop("ag_aktivitaetsmapping", None)
@@ -489,11 +481,7 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
         )
         if ziel != _PLATZHALTER:
             manuell[aktivitaet] = ziel
-    mapping_bestaetigt = st.checkbox(
-        "Ich bestätige die exakten und manuellen Aktivitätszuordnungen.",
-        key="ag_mapping_bestaetigt",
-    )
-    if st.button("Aktivitätsmapping bestätigen"):
+    if st.button("Aktivitätsmapping übernehmen"):
         try:
             st.session_state.ag_aktivitaetsmapping = erstelle_aktivitaetsmapping(
                 projekt_id=basis.projekt.projekt_id,
@@ -501,7 +489,7 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
                 event_aktivitaeten=aktivitaeten,
                 modell_transitionen=sollmodell.sichtbare_transitionen,
                 manuelle_zuordnungen=manuell,
-                menschlich_bestaetigt=mapping_bestaetigt,
+                menschlich_bestaetigt=True,
             )
         except Domaenenfehler as fehler:
             st.error(str(fehler))
@@ -515,8 +503,127 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
     return sollmodell, mapping, conformance
 
 
+def _ressourcenzuordnung(basis: object) -> RessourcenanalyseErgebnis | None:
+    st.subheader("4. Ressourcen den Aktivitäten zuordnen")
+    automatisch = analysiere_ressourcen(basis.event_log.copy(deep=True))
+    if automatisch.modus is Ressourcenzuordnungsmodus.AUTOMATISCH:
+        st.success(
+            "Die kanonische Spalte resource ist für alle Aktivitäten vollständig. "
+            "Die eindeutigen Zuordnungen werden automatisch übernommen."
+        )
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Aktivität": wert.aktivitaet,
+                        "Ressourcen": ", ".join(wert.ressourcen),
+                        "Ursprung": "automatisch aus E*.resource",
+                    }
+                    for wert in automatisch.zuordnungen
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+        return automatisch
+
+    st.info(
+        "E* enthält keine vollständige Ressourcenzuordnung für alle Aktivitäten. "
+        "Ordnen Sie Ressourcen manuell zu oder dokumentieren Sie, warum dies nicht möglich ist."
+    )
+    modus = st.radio(
+        "Ressourcenentscheidung",
+        ["Nicht möglich dokumentieren", "Manuell je Aktivität zuordnen"],
+        key="ag_ressourcen_modus",
+        horizontal=True,
+    )
+    if modus == "Nicht möglich dokumentieren":
+        begruendung = st.text_area(
+            "Begründung",
+            value=(
+                "E* enthält keine vollständige kanonische Ressourcenzuordnung; eine "
+                "belastbare manuelle Zuordnung liegt nicht vor."
+            ),
+            key="ag_ressourcen_nicht_moeglich_begruendung",
+        )
+        if not begruendung.strip():
+            st.warning("Die Entscheidung 'nicht möglich' benötigt eine Begründung.")
+            return None
+        return analysiere_ressourcen(
+            basis.event_log.copy(deep=True),
+            nicht_moeglich_begruendung=begruendung,
+        )
+
+    aktivitaeten = sorted(
+        {str(wert).strip() for wert in basis.event_log["activity"].dropna() if str(wert).strip()}
+    )
+    beobachtet: dict[str, list[str]] = {wert: [] for wert in aktivitaeten}
+    if "resource" in basis.event_log.columns:
+        for aktivitaet, ressource in basis.event_log.loc[:, ["activity", "resource"]].itertuples(
+            index=False, name=None
+        ):
+            name = "" if pd.isna(aktivitaet) else str(aktivitaet).strip()
+            wert = "" if pd.isna(ressource) else str(ressource).strip()
+            if name in beobachtet and wert and wert not in beobachtet[name]:
+                beobachtet[name].append(wert)
+    tabelle = st.data_editor(
+        pd.DataFrame(
+            {
+                "Aktivität": aktivitaeten,
+                "Ressourcen (kommagetrennt)": [
+                    ", ".join(beobachtet[name]) for name in aktivitaeten
+                ],
+            }
+        ),
+        hide_index=True,
+        width="stretch",
+        disabled=["Aktivität"],
+        key="ag_ressourcen_tabelle",
+    )
+    zuordnungen = {
+        str(zeile["Aktivität"]): tuple(
+            wert.strip()
+            for wert in str(zeile["Ressourcen (kommagetrennt)"]).split(",")
+            if wert.strip()
+        )
+        for _, zeile in tabelle.iterrows()
+    }
+    try:
+        return analysiere_ressourcen(
+            basis.event_log.copy(deep=True),
+            manuelle_zuordnungen=zuordnungen,
+        )
+    except Domaenenfehler as fehler:
+        st.warning(str(fehler))
+        return None
+
+
+def _ankunftsspalte(basis: object) -> str:
+    st.subheader("5. Zeitbezogene Datenauswahl")
+    st.caption(
+        "Q, R, der transformierte Datensatz T und E* bilden die bestätigte Datenbasis. "
+        "Bearbeitungs- und Übergangswartezeiten werden nur aus kanonischem Start und Ende "
+        "berechnet."
+    )
+    kandidaten = [
+        str(name)
+        for name in basis.event_log.columns
+        if str(name) not in {"case_id", "activity", "timestamp", "start_timestamp", "end_timestamp"}
+    ]
+    auswahl = st.selectbox(
+        "Explizite Ankunftszeitspalte (optional)",
+        ["— erster gültiger Ereigniszeitstempel je Fall —", *kandidaten],
+        key="ag_ankunftsspalte",
+    )
+    if auswahl == "— erster gültiger Ereigniszeitstempel je Fall —":
+        st.caption("Ankunftsregel: erster gültiger E*.timestamp je Fall.")
+        return ""
+    st.caption(f"Ankunftsregel: ausdrücklich gewählte Spalte E*.{auswahl} je Fall.")
+    return str(auswahl)
+
+
 def _zeitvergleich(basis: object) -> tuple[object | None, pd.DataFrame | None, object | None, bool]:
-    st.subheader("4. Optionale Soll-Zeitstempel")
+    st.subheader("6. Optionale Soll-Zeitstempel")
     aktiv = st.checkbox("Direkte zeitbezogene Soll-Ist-Auswertung durchführen", key="ag_zeit_aktiv")
     if not aktiv:
         return None, None, None, False
@@ -634,7 +741,7 @@ def _zeitvergleich(basis: object) -> tuple[object | None, pd.DataFrame | None, o
 
 
 def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
-    st.subheader("5. Vorschau und Speicherung von A_G")
+    st.subheader("7. Vorschau und Speicherung von A_G")
     st.write("**Status der ausgewählten KPIs**")
     for wert in vorschau.kpi_ergebnisse:
         if wert.status is KpiStatus.BERECHNET:
@@ -653,12 +760,32 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
         + ("A_V enthalten" if vorschau.zeitvergleich_ergebnis is not None else "nicht enthalten")
     )
     st.write("**Immer enthalten:** unveränderte Referenz auf A_D")
+    ressourcenanalyse = getattr(vorschau, "ressourcenanalyse", None)
+    if ressourcenanalyse is not None:
+        st.write(
+            "**Ressourcenzuordnung:** "
+            f"{ressourcenanalyse.modus.value} · {ressourcenanalyse.herkunft}"
+        )
+    warteschlangenanalyse = getattr(vorschau, "warteschlangenanalyse", None)
+    if warteschlangenanalyse is not None:
+        st.write(
+            "**Übergangswartezeiten:** "
+            f"{warteschlangenanalyse.status.value} · "
+            f"{len(warteschlangenanalyse.uebergaenge)} Übergänge"
+        )
+    datenauswahl = getattr(vorschau, "zeitbezogene_datenauswahl", None)
+    if datenauswahl is not None:
+        st.write("**Zeitbezogene Datenauswahl:** " + datenauswahl.status.value)
     if vorschau.warnungen:
         for warnung in vorschau.warnungen:
             st.warning(warnung)
-    with st.expander("Vollständige Lineage der Vorschau"):
+    with st.expander("Technische Details", expanded=False):
         st.json(
             {
+                "projekt_id": str(vorschau.grundlage.projekt.projekt_id),
+                "freigabe_id": str(vorschau.grundlage.freigabe.freigabe_id),
+                "event_log_id": str(vorschau.grundlage.freigabe.event_log_id),
+                "analyse_id": str(vorschau.grundlage.analyse.analyse_id),
                 "U": vorschau.grundlage.untersuchungsauftrag_sha256,
                 "R": vorschau.grundlage.datenprofil_sha256,
                 "T": vorschau.grundlage.zwischendatensatz.sha256,
@@ -713,6 +840,8 @@ def zeige_ergebnisaggregation_seite(
     _eingangsartefakte(basis)
     kpi_konfigurationen = _kpi_konfigurationen(basis)
     sollmodell, mapping, conformance = _sollmodell_und_mapping(basis)
+    ressourcenanalyse = _ressourcenzuordnung(basis)
+    ankunftsspalte = _ankunftsspalte(basis)
     sollzeitdaten, sollzeit_tabelle, zeitkonfiguration, zeit_aktiv = _zeitvergleich(basis)
     aktueller_fingerprint = service.konfigurationsfingerabdruck(
         kpi_konfigurationen=kpi_konfigurationen,
@@ -722,6 +851,8 @@ def zeige_ergebnisaggregation_seite(
         sollzeitdaten=sollzeitdaten,
         zeitvergleich_konfiguration=zeitkonfiguration,
         zeitvergleich_ausfuehren=zeit_aktiv,
+        ressourcenanalyse=ressourcenanalyse,
+        ankunftsspalte=ankunftsspalte,
     )
     vorschau = st.session_state.get("ag_vorschau")
     if vorschau is not None and (
@@ -733,10 +864,14 @@ def zeige_ergebnisaggregation_seite(
         st.warning(
             "Eingaben oder Entscheidungen wurden geändert. Die Vorschau muss neu berechnet werden."
         )
-    st.subheader("5. Vorschau und Speicherung von A_G")
-    if st.button("A_G vollständig neu berechnen", type="primary"):
+    st.subheader("7. A_G berechnen")
+    if st.button(
+        "A_G berechnen und zu Schritt 8",
+        type="primary",
+        disabled=ressourcenanalyse is None,
+    ):
         try:
-            st.session_state.ag_vorschau = service.vorschau(
+            vorschau = service.vorschau(
                 projekt_id=projekt_id,
                 freigabe_id=freigabe_id,
                 analyse_id=analyse_id,
@@ -748,57 +883,55 @@ def zeige_ergebnisaggregation_seite(
                 sollzeit_tabelle=sollzeit_tabelle,
                 zeitvergleich_konfiguration=zeitkonfiguration,
                 zeitvergleich_ausfuehren=zeit_aktiv,
+                ressourcenanalyse=ressourcenanalyse,
+                ankunftsspalte=ankunftsspalte,
             )
-            vorschau = st.session_state.ag_vorschau
-        except (Domaenenfehler, Importintegritaetsfehler, KeyError, TypeError) as fehler:
+            st.session_state.ag_vorschau = vorschau
+            aggregations_id = (
+                UUID(str(st.session_state.get("ag_neue_id")))
+                if st.session_state.get("ag_neue_id")
+                else uuid5(
+                    projekt_id,
+                    f"{basis.eingabefingerabdruck}:{vorschau.konfigurationsfingerabdruck}",
+                )
+            )
+            aggregation = service.speichern(aggregations_id, vorschau, menschlich_bestaetigt=True)
+            st.session_state.aktuelle_aggregations_id = str(aggregation.aggregations_id)
+            for schluessel in (
+                "aktuelle_modellableitungs_id",
+                "aktuelle_k_id",
+                "aktuelle_o_id",
+                "aktuelle_validierungslauf_id",
+                "aktuelle_k_stern_id",
+                "schritt10_ausgabe",
+                "schritt10_ausgabe_signatur",
+            ):
+                st.session_state.pop(schluessel, None)
+            service.uebergabe_schritt8(
+                aggregation.aggregations_id, projekt_id, freigabe_id, analyse_id
+            )
+            st.session_state.naechster_framework_bereich = "8 Modellbestandteile ableiten"
+            st.rerun()
+        except (
+            Domaenenfehler,
+            Importintegritaetsfehler,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as fehler:
             st.error(str(fehler))
     if vorschau is not None:
         _vorschau_anzeigen(vorschau)
-        bestaetigt = st.checkbox(
-            "Ich bestätige die Vorschau, alle Zuordnungen und die vollständige Lineage von A_G.",
-            key="ag_speichern_bestaetigt",
-        )
-        if st.button(
-            "A_G speichern und zu Schritt 8",
-            type="primary",
-            disabled=not bestaetigt,
-        ):
-            try:
-                aggregations_id = (
-                    UUID(str(st.session_state.get("ag_neue_id")))
-                    if st.session_state.get("ag_neue_id")
-                    else uuid5(
-                        projekt_id,
-                        f"{basis.eingabefingerabdruck}:{vorschau.konfigurationsfingerabdruck}",
-                    )
-                )
-                aggregation = service.speichern(
-                    aggregations_id, vorschau, menschlich_bestaetigt=bestaetigt
-                )
-                st.session_state.aktuelle_aggregations_id = str(aggregation.aggregations_id)
-                service.uebergabe_schritt8(
-                    aggregation.aggregations_id, projekt_id, freigabe_id, analyse_id
-                )
-                st.session_state.naechster_framework_bereich = "8 Modellbestandteile ableiten"
-                st.rerun()
-            except (Domaenenfehler, Importintegritaetsfehler, ValueError) as fehler:
-                st.error(str(fehler))
     aktive_id = st.session_state.get("aktuelle_aggregations_id")
     if aktive_id:
         try:
             aggregation, a_g = service.laden(UUID(str(aktive_id)))
-            st.success(f"Aktives, erneut validiertes A_G: `{aggregation.aggregations_id}`")
+            st.success("A_G ist gespeichert und erneut validiert.")
             st.download_button(
                 "A_G als JSON herunterladen",
                 service.a_g_download_laden(aggregation.aggregations_id),
-                file_name=f"{aggregation.aggregations_id}.aggregation.json",
+                file_name="aggregation-a-g.json",
                 mime="application/json",
             )
-            if st.button("Weiter zu Schritt 8: Modellbestandteile ableiten", type="primary"):
-                service.uebergabe_schritt8(
-                    aggregation.aggregations_id, projekt_id, freigabe_id, analyse_id
-                )
-                st.session_state.naechster_framework_bereich = "8 Modellbestandteile ableiten"
-                st.rerun()
         except (Domaenenfehler, Importintegritaetsfehler, ValueError) as fehler:
             st.error(f"Das aktive A_G ist nicht mehr gültig: {fehler}")

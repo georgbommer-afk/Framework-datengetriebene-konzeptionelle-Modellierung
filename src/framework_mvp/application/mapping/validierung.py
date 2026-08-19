@@ -125,13 +125,27 @@ def validiere_mapping(daten: pd.DataFrame, mapping: SemantischesMapping) -> Mapp
     activity_text = ereignisse["activity"].astype("string")
     fehlende_ids = int((case_text.isna() | case_text.str.strip().eq("")).sum())
     fehlende_aktivitaeten = int((activity_text.isna() | activity_text.str.strip().eq("")).sum())
-    zeit = pd.to_datetime(ereignisse["timestamp"], errors="coerce")
+    zeit = pd.to_datetime(
+        ereignisse["timestamp"],
+        errors="coerce",
+        format="mixed" if mapping.konfigurationsversion >= 3 else None,
+    )
     nicht_zeit = int(ereignisse["timestamp"].notna().sum() - zeit.notna().sum())
     fehlende_zeit = int(ereignisse["timestamp"].isna().sum())
     start_nach_ende = 0
     if {"start_timestamp", "end_timestamp"} <= set(ereignisse.columns):
-        start = pd.to_datetime(ereignisse["start_timestamp"], errors="coerce")
-        ende = pd.to_datetime(ereignisse["end_timestamp"], errors="coerce")
+        start = pd.to_datetime(
+            ereignisse["start_timestamp"],
+            errors="coerce",
+            format="mixed" if mapping.konfigurationsversion >= 3 else None,
+            utc=mapping.konfigurationsversion >= 3,
+        )
+        ende = pd.to_datetime(
+            ereignisse["end_timestamp"],
+            errors="coerce",
+            format="mixed" if mapping.konfigurationsversion >= 3 else None,
+            utc=mapping.konfigurationsversion >= 3,
+        )
         start_nach_ende = int((start > ende).sum())
     identisch = int(ereignisse.duplicated().sum())
     moeglich = int(ereignisse.duplicated(["case_id", "activity", "timestamp"], keep=False).sum())
@@ -152,6 +166,8 @@ def validiere_mapping(daten: pd.DataFrame, mapping: SemantischesMapping) -> Mapp
         mapping.lifecycle_spalte,
         mapping.ressourcen_spalte,
         *(wert.zeitstempelspalte for wert in mapping.zeitstempelzuordnungen),
+        *(wert.ressourcenspalte for wert in mapping.zeitstempelzuordnungen),
+        *(wert.statusspalte for wert in mapping.zeitstempelzuordnungen),
         *(wert.spaltenname for wert in mapping.spaltenzuordnungen),
     }
     fehlende_spalten = sorted(wert for wert in referenzen if wert and wert not in daten)
@@ -175,8 +191,35 @@ def validiere_mapping(daten: pd.DataFrame, mapping: SemantischesMapping) -> Mapp
         *(wert.zeitstempelspalte for wert in mapping.zeitstempelzuordnungen),
         *(wert.spaltenname for wert in mapping.spaltenzuordnungen),
     ]
-    belegte_spalten = [wert for wert in rollenbelegungen if wert]
-    doppelte_belegungen = len(belegte_spalten) - len(set(belegte_spalten))
+    if mapping.konfigurationsversion >= 3:
+        rollen_nach_spalte: dict[str, set[str]] = {}
+
+        def rolle_erfassen(spalte: str, rolle: str) -> None:
+            if spalte:
+                rollen_nach_spalte.setdefault(spalte, set()).add(rolle)
+
+        for spalte in mapping.fall_id.spalten:
+            rolle_erfassen(spalte, "case_id")
+        for spalte in definition.quellspalten if definition else ():
+            rolle_erfassen(spalte, "activity")
+        rolle_erfassen(mapping.zeitstempelspalte, "timestamp")
+        rolle_erfassen(mapping.startzeitstempelspalte, "start_timestamp")
+        rolle_erfassen(mapping.endzeitstempelspalte, "end_timestamp")
+        rolle_erfassen(mapping.lifecycle_spalte, "lifecycle")
+        rolle_erfassen(mapping.ressourcen_spalte, "resource")
+        for wert in mapping.zeitstempelzuordnungen:
+            rolle_erfassen(wert.zeitstempelspalte, "timestamp")
+            rolle_erfassen(wert.ressourcenspalte, "resource")
+            rolle_erfassen(wert.statusspalte, "lifecycle")
+        for wert in mapping.spaltenzuordnungen:
+            if wert.rolle is not Attributrolle.IGNORIERT:
+                rolle_erfassen(wert.spaltenname, "allgemeines Attribut")
+        doppelte_belegungen = sum(
+            len(rollen) - 1 for rollen in rollen_nach_spalte.values() if len(rollen) > 1
+        )
+    else:
+        belegte_spalten = [wert for wert in rollenbelegungen if wert]
+        doppelte_belegungen = len(belegte_spalten) - len(set(belegte_spalten))
     if doppelte_belegungen:
         warnungen.append(
             MappingWarnung(
