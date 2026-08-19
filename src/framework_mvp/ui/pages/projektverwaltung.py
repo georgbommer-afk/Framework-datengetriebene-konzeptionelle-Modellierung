@@ -336,13 +336,21 @@ def zeige_loeschaktionen(
         return
     st.sidebar.divider()
     links, rechts = st.sidebar.columns(2)
-    if projekt_loeschen_erlaubt and links.button(projekt_loesch_label, width="stretch"):
+    if projekt_loeschen_erlaubt and links.button(
+        projekt_loesch_label,
+        width="stretch",
+        key=f"projekt_loeschen_oeffnen_{projekt.projekt_id}",
+    ):
         _projekt_loeschen_dialog(
             projekt,
             loesch_service,
             projektloeschung_nachbereiten,
         )
-    if datensaetze and rechts.button("Datensatz löschen", width="stretch"):
+    if datensaetze and rechts.button(
+        "Datensatz löschen",
+        width="stretch",
+        key=f"datensatz_loeschen_oeffnen_{projekt.projekt_id}",
+    ):
         _datensatz_loeschen_dialog(projekt, datensaetze, loesch_service)
 
 

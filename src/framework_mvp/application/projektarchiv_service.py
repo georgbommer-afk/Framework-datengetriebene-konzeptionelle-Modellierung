@@ -110,6 +110,31 @@ class ArchivImportPruefung:
     bereits_vorhanden: bool
 
 
+@dataclass(frozen=True, slots=True)
+class ArchivStaging:
+    """Kleine, rerun-stabile Referenz auf ein noch ungeprüftes Uploadarchiv."""
+
+    staging_id: UUID
+    archiv_sha256: str
+    zielkontext: str
+    ziel_gruppen_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class GestagterProjektimport:
+    """Vollständig geprüftes Archiv samt konflikt- und kontextgebundener Metadaten."""
+
+    staging_id: UUID
+    archiv_sha256: str
+    archivversion: int
+    projekt_id: UUID
+    projektname: str
+    exportiert_am: str
+    bereits_vorhanden: bool
+    zielkontext: str
+    ziel_gruppen_id: UUID | None
+
+
 class ProjektSperren:
     """Prozesslokale Projektsperren; SQLite ergänzt sie prozessübergreifend."""
 
@@ -197,6 +222,159 @@ class ProjektArchivService:
     ) -> ArchivImportPruefung:
         """Validiert ohne Mutation und prüft Ziel beziehungsweise Ersetzungsberechtigung."""
         _, manifest = self._archiv_pruefen(archiv)
+        return self._import_pruefung_aus_manifest(
+            kontext,
+            manifest,
+            ziel_gruppen_id=ziel_gruppen_id,
+        )
+
+    def archiv_stagen(
+        self,
+        kontext: Zugriffskontext,
+        archiv: bytes,
+        *,
+        ziel_gruppen_id: UUID | None = None,
+    ) -> ArchivStaging:
+        """Übernimmt einen begrenzten Upload ohne Dateinamen in kontrolliertes Staging."""
+        if len(archiv) > self._grenzen.maximale_archivgroesse_bytes:
+            raise ArchivUngueltig("Das Archiv überschreitet die zulässige Größe.")
+        staging_id = uuid4()
+        staging = self._upload_staging_pfad(staging_id)
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.mkdir()
+        archiv_sha256 = hashlib.sha256(archiv).hexdigest()
+        zielkontext = self._zielkontext(kontext, ziel_gruppen_id)
+        try:
+            (staging / "projektarchiv.zip").write_bytes(archiv)
+            (staging / "staging.json").write_bytes(
+                self._json_bytes(
+                    {
+                        "staging_id": str(staging_id),
+                        "archiv_sha256": archiv_sha256,
+                        "kontextbindung": self._kontextbindung(kontext, ziel_gruppen_id),
+                        "zielkontext": zielkontext,
+                    }
+                )
+            )
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        return ArchivStaging(staging_id, archiv_sha256, zielkontext, ziel_gruppen_id)
+
+    def gestagten_import_pruefen(
+        self,
+        kontext: Zugriffskontext,
+        staging_id: UUID,
+        archiv_sha256: str,
+        *,
+        ziel_gruppen_id: UUID | None = None,
+    ) -> GestagterProjektimport:
+        """Validiert das über einen Rerun erhaltene Archiv und bindet den Konfliktstatus."""
+        try:
+            archiv, zielkontext = self._gestagtes_archiv_laden(
+                kontext,
+                staging_id,
+                archiv_sha256,
+                ziel_gruppen_id=ziel_gruppen_id,
+            )
+            _, manifest = self._archiv_pruefen(archiv)
+            pruefung = self._import_pruefung_aus_manifest(
+                kontext,
+                manifest,
+                ziel_gruppen_id=ziel_gruppen_id,
+            )
+            return GestagterProjektimport(
+                staging_id=staging_id,
+                archiv_sha256=archiv_sha256,
+                archivversion=int(manifest["archive_version"]),
+                projekt_id=pruefung.projekt_id,
+                projektname=pruefung.projektname,
+                exportiert_am=pruefung.exportiert_am,
+                bereits_vorhanden=pruefung.bereits_vorhanden,
+                zielkontext=zielkontext,
+                ziel_gruppen_id=ziel_gruppen_id,
+            )
+        except ZugriffVerweigert:
+            raise
+        except Exception:
+            self._upload_staging_verwerfen(staging_id)
+            raise
+
+    def gestagten_importieren(
+        self,
+        kontext: Zugriffskontext,
+        staging_id: UUID,
+        archiv_sha256: str,
+        *,
+        erwartete_projekt_id: UUID,
+        ziel_gruppen_id: UUID | None = None,
+        vorhandenes_projekt_ersetzen: bool = False,
+    ) -> ImportErgebnis:
+        """Importiert nur den zuvor geprüften Stagingstand und räumt ihn stets auf."""
+        try:
+            archiv, _ = self._gestagtes_archiv_laden(
+                kontext,
+                staging_id,
+                archiv_sha256,
+                ziel_gruppen_id=ziel_gruppen_id,
+            )
+        except ZugriffVerweigert:
+            raise
+        except Exception:
+            self._upload_staging_verwerfen(staging_id)
+            raise
+        try:
+            pruefung = self.import_pruefen(
+                kontext,
+                archiv,
+                ziel_gruppen_id=ziel_gruppen_id,
+            )
+            if (
+                pruefung.projekt_id != erwartete_projekt_id
+                or pruefung.bereits_vorhanden != vorhandenes_projekt_ersetzen
+            ):
+                raise ArchivKonflikt(
+                    "Das Importziel wurde parallel verändert. Bitte erneut prüfen."
+                )
+            return self.importieren(
+                kontext,
+                archiv,
+                ziel_gruppen_id=ziel_gruppen_id,
+                vorhandenes_projekt_ersetzen=vorhandenes_projekt_ersetzen,
+            )
+        finally:
+            self._upload_staging_verwerfen(staging_id)
+
+    def archiv_staging_verwerfen(
+        self,
+        kontext: Zugriffskontext,
+        staging_id: UUID,
+        archiv_sha256: str,
+        *,
+        ziel_gruppen_id: UUID | None = None,
+    ) -> None:
+        """Verwirft ausschließlich ein nach Prüfsumme und Kontext gebundenes Uploadstaging."""
+        try:
+            self._gestagtes_archiv_laden(
+                kontext,
+                staging_id,
+                archiv_sha256,
+                ziel_gruppen_id=ziel_gruppen_id,
+            )
+        except ZugriffVerweigert:
+            raise
+        except Exception:
+            self._upload_staging_verwerfen(staging_id)
+            raise
+        self._upload_staging_verwerfen(staging_id)
+
+    def _import_pruefung_aus_manifest(
+        self,
+        kontext: Zugriffskontext,
+        manifest: dict[str, Any],
+        *,
+        ziel_gruppen_id: UUID | None,
+    ) -> ArchivImportPruefung:
         try:
             projekt_id = UUID(str(manifest["original_project_id"]))
         except (KeyError, TypeError, ValueError) as fehler:
@@ -218,6 +396,61 @@ class ProjektArchivService:
             str(manifest.get("exported_at_utc", "")),
             vorhanden,
         )
+
+    def _upload_staging_pfad(self, staging_id: UUID) -> Path:
+        basis = self._workspace.basisverzeichnis.resolve()
+        wurzel = (basis / ".import-staging").resolve()
+        pfad = (wurzel / f"upload-{staging_id}").resolve()
+        if pfad.parent != wurzel:
+            raise ArchivUngueltig("Die Import-Stagingkennung ist ungültig.")
+        return pfad
+
+    def _gestagtes_archiv_laden(
+        self,
+        kontext: Zugriffskontext,
+        staging_id: UUID,
+        archiv_sha256: str,
+        *,
+        ziel_gruppen_id: UUID | None,
+    ) -> tuple[bytes, str]:
+        staging = self._upload_staging_pfad(staging_id)
+        try:
+            metadaten = json.loads((staging / "staging.json").read_bytes())
+            archivpfad = staging / "projektarchiv.zip"
+            if archivpfad.stat().st_size > self._grenzen.maximale_archivgroesse_bytes:
+                raise ArchivUngueltig("Das gestagte Archiv überschreitet die zulässige Größe.")
+            archiv = archivpfad.read_bytes()
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as fehler:
+            raise ArchivUngueltig("Der gestagte Import ist nicht mehr verfügbar.") from fehler
+        if not isinstance(metadaten, dict):
+            raise ArchivUngueltig("Die Import-Stagingmetadaten sind ungültig.")
+        erwartete_bindung = self._kontextbindung(kontext, ziel_gruppen_id)
+        if (
+            metadaten.get("staging_id") != str(staging_id)
+            or not hmac_compare(str(metadaten.get("archiv_sha256", "")), archiv_sha256)
+            or not hmac_compare(str(metadaten.get("kontextbindung", "")), erwartete_bindung)
+        ):
+            raise ZugriffVerweigert(NICHT_VERFUEGBAR)
+        if not hmac_compare(hashlib.sha256(archiv).hexdigest(), archiv_sha256):
+            raise ArchivUngueltig("Das gestagte Projektarchiv wurde verändert.")
+        return archiv, str(metadaten.get("zielkontext", ""))
+
+    def _upload_staging_verwerfen(self, staging_id: UUID) -> None:
+        shutil.rmtree(self._upload_staging_pfad(staging_id), ignore_errors=True)
+
+    @staticmethod
+    def _kontextbindung(kontext: Zugriffskontext, ziel_gruppen_id: UUID | None) -> str:
+        if kontext.gast_geheimnis is not None:
+            identitaet = f"gast:{geheimnis_hash(kontext.gast_geheimnis)}"
+        else:
+            identitaet = f"benutzer:{kontext.benutzer_id}"
+        return hashlib.sha256(f"{identitaet}:gruppe:{ziel_gruppen_id}".encode()).hexdigest()
+
+    @staticmethod
+    def _zielkontext(kontext: Zugriffskontext, ziel_gruppen_id: UUID | None) -> str:
+        if kontext.gast_geheimnis is not None:
+            return "aktuelle Gastsitzung"
+        return f"Kursgruppe {ziel_gruppen_id}"
 
     def importieren(
         self,
@@ -259,28 +492,22 @@ class ProjektArchivService:
                     zuordnung.gruppen_id,
                     inhalt,
                     manifest,
+                    archiv_sha256=hashlib.sha256(archiv).hexdigest(),
+                    archivgroesse_bytes=len(archiv),
                     ersetzen=True,
                 )
-                archiv_gruppen_id = zuordnung.gruppen_id
             else:
                 self._importziel_pruefen(kontext, ziel_gruppen_id, manifest=manifest)
                 self._atomar_uebernehmen(
-                    kontext, projekt_id, ziel_gruppen_id, inhalt, manifest, ersetzen=False
+                    kontext,
+                    projekt_id,
+                    ziel_gruppen_id,
+                    inhalt,
+                    manifest,
+                    archiv_sha256=hashlib.sha256(archiv).hexdigest(),
+                    archivgroesse_bytes=len(archiv),
+                    ersetzen=False,
                 )
-                archiv_gruppen_id = ziel_gruppen_id
-            self._zugriff.archiv_metadaten_speichern(
-                archiv_id=uuid4(),
-                projekt_id=projekt_id,
-                gruppen_id=archiv_gruppen_id,
-                archivtyp="projekt_import",
-                archivversion=ARCHIVVERSION,
-                sha256=hashlib.sha256(archiv).hexdigest(),
-                groesse_bytes=len(archiv),
-                benutzer_id=kontext.benutzer_id,
-                status="erfolgreich",
-                details={"project_fingerprint": manifest["project_fingerprint"]},
-                zeitpunkt=datetime.now(UTC),
-            )
         return ImportErgebnis(
             projekt_id,
             bereits_vorhanden=vorhandener_fingerabdruck is not None,
@@ -531,6 +758,8 @@ class ProjektArchivService:
         inhalt: dict[str, bytes],
         manifest: dict[str, Any],
         *,
+        archiv_sha256: str,
+        archivgroesse_bytes: int,
         ersetzen: bool,
     ) -> None:
         basis = self._workspace.basisverzeichnis.resolve()
@@ -638,6 +867,31 @@ class ProjektArchivService:
                         """,
                         (str(projekt_id), str(kontext.benutzer_id), jetzt.isoformat()),
                     )
+                verbindung.execute(
+                    """
+                    INSERT INTO archivmetadaten (
+                        archiv_id, projekt_id, gruppen_id, archivtyp, archivversion,
+                        sha256, groesse_bytes, erstellt_von_benutzer_id,
+                        erstellt_am_utc, status, details_json
+                    ) VALUES (?, ?, ?, 'projekt_import', ?, ?, ?, ?, ?, 'erfolgreich', ?)
+                    """,
+                    (
+                        str(uuid4()),
+                        str(projekt_id),
+                        None if ziel_gruppen_id is None else str(ziel_gruppen_id),
+                        ARCHIVVERSION,
+                        archiv_sha256,
+                        archivgroesse_bytes,
+                        None if kontext.benutzer_id is None else str(kontext.benutzer_id),
+                        jetzt.isoformat(),
+                        json.dumps(
+                            {"project_fingerprint": manifest["project_fingerprint"]},
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    ),
+                )
                 ziel.parent.mkdir(parents=True, exist_ok=True)
                 if ziel.exists():
                     os.replace(ziel, backup_project)

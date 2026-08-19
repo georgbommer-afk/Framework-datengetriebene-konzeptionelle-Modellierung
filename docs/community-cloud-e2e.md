@@ -22,10 +22,26 @@
 2. Projektrahmen ändern und speichern. **Projekt exportieren** und anschließend
    **Projektarchiv herunterladen** wählen.
 3. **Demo beenden und Daten löschen**, Zielname im Dialog prüfen und **Löschen** wählen.
-4. Eine neue Gastdemo starten, das ZIP unter **Projekt importieren** wählen und
-   **Projektarchiv prüfen und importieren** ausführen.
+4. Eine neue Gastdemo starten, das ZIP unter **Projekt importieren** wählen,
+   **Projektarchiv prüfen** ausführen und danach **Projekt importieren** wählen.
 5. Projektname, gespeicherten Framework-Schritt und Artefakte prüfen. Ein zweiter Browser mit
    eigener Gastdemo darf das Projekt auch mit bekannter UUID nicht öffnen.
+
+### Tatsächlicher Projektlebenszyklus
+
+- Ein Gastprojekt bleibt serverseitig bis zum Ablauf seiner Aktivitäts-TTL erhalten. Das
+  Schließen eines Browser-Tabs ist weder Löschsignal noch verlässliche Wiederaufnahme; der nur
+  im Session-State gehaltene Besitznachweis geht dabei verloren. **Demo beenden und Daten
+  löschen** ist die einzige sofortige Löschaktion. Vorher steht der vollständige Projektexport
+  zur Verfügung; ein Import bindet das Projekt an die neue Gastsitzung.
+- Einen separaten Projekttyp „privates Einzelprojekt“ gibt es im aktuellen Datenmodell nicht.
+  Dauerhafte angemeldete Projekte liegen in privaten Kurs- oder Arbeitsgruppen. Sie überleben
+  Session-State-Bereinigung, Browser-Schließen und App-Neustart in SQLite und im Workspace und
+  bleiben bis zu einer berechtigten Löschung oder der Aufbewahrungsbereinigung erhalten.
+- Kursprojekte bleiben während Kurslaufzeit und Aufbewahrungsfrist wiederaufnehmbar. Erst nach
+  `aufbewahrung_bis` entfernt die kontrollierte Kursbereinigung die zugehörigen Projekte. Vor
+  Ablauf warnt die Seitenleiste und bietet den Kursgruppenexport an. Gast-TTL-Bereinigung darf
+  weder private Kursgruppen noch ihre Projekte erfassen.
 
 ### Systemadmin und Gruppenleitung
 

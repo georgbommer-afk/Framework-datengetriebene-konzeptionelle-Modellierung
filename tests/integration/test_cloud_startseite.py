@@ -1,5 +1,7 @@
 """Streamlit-AppTests für öffentlichen Einstieg und isolierten Gastmodus."""
 
+import hashlib
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -99,3 +101,149 @@ def test_projektimport_oeffnet_lokal_begrenzten_zip_upload(
     quelle = APP.read_text(encoding="utf-8")
     assert ".st-key-projektimport_bereich" in quelle
     assert '[data-testid="stFileUploaderDropzoneInstructions"]' in quelle
+
+
+def _gastarchiv_exportieren(app: AppTest) -> bytes:
+    app.radio[0].set_value("4 Event Log aufbauen").run()
+    next(
+        button for button in app.sidebar.button if button.label == "Projekt exportieren"
+    ).click().run()
+    archivzustand = app.session_state["projektarchiv"]
+    assert isinstance(archivzustand, dict)
+    archiv = archivzustand["daten"]
+    assert isinstance(archiv, bytes)
+    return archiv
+
+
+def _konfliktimport_oeffnen(app: AppTest, archiv: bytes) -> AppTest:
+    next(
+        button for button in app.sidebar.button if button.label == "Projekt importieren"
+    ).click().run()
+    next(wert for wert in app.file_uploader if wert.label == "ZIP-Projektarchiv auswählen").upload(
+        "projekt.zip", archiv, "application/zip"
+    ).run()
+    next(button for button in app.button if button.label == "Projektarchiv prüfen").click().run()
+    return app
+
+
+def test_konfliktaktionen_rendern_mit_eindeutigen_stabilen_keys_und_abbruch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _oeffentlich_starten(tmp_path, monkeypatch)
+    next(button for button in app.button if button.label == "Ohne Anmeldung testen").click().run()
+    projekt_id = str(app.session_state["aktuelles_projekt_id"])
+    archiv = _gastarchiv_exportieren(app)
+    archiv_hash = hashlib.sha256(archiv).hexdigest()
+    with sqlite3.connect(tmp_path / "cloud.sqlite") as verbindung:
+        verbindung.execute(
+            "UPDATE projekte SET bezeichnung='Nach Export geändert' WHERE projekt_id=?",
+            (projekt_id,),
+        )
+        verbindung.commit()
+
+    _konfliktimport_oeffnen(app, archiv)
+
+    assert not app.exception
+    aktionen = {
+        button.label: button.key
+        for button in app.button
+        if button.label
+        in {
+            "Projekt importieren",
+            "Projekt exportieren",
+            "Abbrechen",
+            "Vorhandenes Projekt ersetzen",
+            "Demo beenden und Daten löschen",
+        }
+    }
+    assert aktionen["Vorhandenes Projekt ersetzen"] == (
+        f"projektimport_ersetzen_{projekt_id}_{archiv_hash[:16]}"
+    )
+    assert aktionen["Abbrechen"] == f"projektimport_abbrechen_{projekt_id}_{archiv_hash[:16]}"
+    assert aktionen["Projekt exportieren"] == f"projektexport_erstellen_{projekt_id}"
+    assert aktionen["Demo beenden und Daten löschen"] == (f"projekt_loeschen_oeffnen_{projekt_id}")
+    assert len(set(aktionen.values())) == len(aktionen)
+    erste_keys = sorted(
+        key for key in aktionen.values() if key and key.startswith("projektimport_")
+    )
+
+    app.run()
+    zweite_keys = sorted(
+        button.key
+        for button in app.button
+        if button.key and button.key.startswith("projektimport_")
+    )
+    assert erste_keys == zweite_keys
+
+    next(button for button in app.button if button.label == "Abbrechen").click().run()
+    assert not app.exception
+    assert app.session_state["projektimport_offen"] is False
+    assert not list((tmp_path / "workspace" / ".import-staging").glob("upload-*"))
+    with sqlite3.connect(tmp_path / "cloud.sqlite") as verbindung:
+        assert verbindung.execute(
+            "SELECT bezeichnung FROM projekte WHERE projekt_id=?", (projekt_id,)
+        ).fetchone() == ("Nach Export geändert",)
+
+
+def test_neuimport_rendert_zwei_gleich_beschriftete_buttons_ohne_duplicate_element_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    quellpfad = tmp_path / "quelle"
+    zielpfad = tmp_path / "ziel"
+    quellpfad.mkdir()
+    zielpfad.mkdir()
+    quelle = _oeffentlich_starten(quellpfad, monkeypatch)
+    next(
+        button for button in quelle.button if button.label == "Ohne Anmeldung testen"
+    ).click().run()
+    quellprojekt_id = str(quelle.session_state["aktuelles_projekt_id"])
+    archiv = _gastarchiv_exportieren(quelle)
+    archiv_hash = hashlib.sha256(archiv).hexdigest()
+
+    ziel = _oeffentlich_starten(zielpfad, monkeypatch)
+    next(button for button in ziel.button if button.label == "Ohne Anmeldung testen").click().run()
+    _konfliktimport_oeffnen(ziel, archiv)
+
+    importbuttons = [button for button in ziel.button if button.label == "Projekt importieren"]
+    assert not ziel.exception
+    assert len(importbuttons) == 2
+    assert len({button.key for button in importbuttons}) == 2
+    assert all(button.key is not None for button in importbuttons)
+    assert any((button.key or "").startswith("projektimport_oeffnen_") for button in importbuttons)
+    assert any(
+        button.key == f"projektimport_ausfuehren_{quellprojekt_id}_{archiv_hash[:16]}"
+        for button in importbuttons
+    )
+
+
+def test_bestaetigter_konfliktimport_oeffnet_projekt_mit_importiertem_fortschritt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _oeffentlich_starten(tmp_path, monkeypatch)
+    next(button for button in app.button if button.label == "Ohne Anmeldung testen").click().run()
+    projekt_id = str(app.session_state["aktuelles_projekt_id"])
+    archiv = _gastarchiv_exportieren(app)
+    with sqlite3.connect(tmp_path / "cloud.sqlite") as verbindung:
+        verbindung.execute(
+            "UPDATE projekte SET bezeichnung='Zu ersetzender Stand' WHERE projekt_id=?",
+            (projekt_id,),
+        )
+        verbindung.commit()
+    _konfliktimport_oeffnen(app, archiv)
+
+    next(
+        button for button in app.button if button.label == "Vorhandenes Projekt ersetzen"
+    ).click().run()
+
+    assert not app.exception
+    assert app.session_state["aktuelles_projekt_id"] == projekt_id
+    assert app.session_state["framework_bereich"] == "4 Event Log aufbauen"
+    assert "projektimport_zustand" not in app.session_state
+    assert app.session_state["projektimport_offen"] is False
+    assert any("wurde ersetzt" in erfolg.value for erfolg in app.success)
+    assert any("Schritt 4" in wert.value for wert in app.markdown)
+    assert not list((tmp_path / "workspace" / ".import-staging").glob("upload-*"))
+    with sqlite3.connect(tmp_path / "cloud.sqlite") as verbindung:
+        assert verbindung.execute(
+            "SELECT bezeichnung FROM projekte WHERE projekt_id=?", (projekt_id,)
+        ).fetchone() == ("Temporäres Demoprojekt",)
