@@ -1,11 +1,16 @@
 """Verträge der zentralen fachlichen Fortschrittsanzeige."""
 
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from framework_mvp.ui.fortschritt import fortschrittsstand
+from framework_mvp.application.fortschritt_service import Fortschrittsanzeige
+from framework_mvp.ui.fortschritt import (
+    fortschrittsstand,
+    fortschrittszustand_aus_persistenz_setzen,
+)
 from framework_mvp.ui.navigation import FRAMEWORK_BEREICHE
 
 
@@ -50,3 +55,28 @@ zeige_gesamtfortschritt(fortschrittsstand(FRAMEWORK_BEREICHE[8], {}))
     assert len(app.get("progress")) == 1
     assert any("Phase 3" in wert.value for wert in app.caption)
     assert any("Schritt 9" in wert.value for wert in app.markdown)
+
+
+def test_import_initialisiert_navigation_mit_persistiertem_unterschritt() -> None:
+    projekt_id = uuid4()
+    anzeige = Fortschrittsanzeige(
+        projekt_id=projekt_id,
+        schritt=4,
+        unterschritt="Semantische Rollen und Attribute auswählen",
+        phase=1,
+        phasenname="Aufbereitung der Datenbasis",
+        zaehler=16,
+        nenner=31,
+        prozent=52,
+        status="in_bearbeitung",
+        gespeichert_am=datetime.now(UTC),
+        letzte_aktivitaet=datetime.now(UTC),
+    )
+    zustand = {"aktuelles_projekt_id": str(projekt_id)}
+
+    fortschrittszustand_aus_persistenz_setzen(zustand, anzeige)
+    stand = fortschrittsstand(FRAMEWORK_BEREICHE[3], zustand)
+
+    assert stand.framework_schritt == 4
+    assert stand.unterschritt == 3
+    assert stand.unterschritt_name == anzeige.unterschritt

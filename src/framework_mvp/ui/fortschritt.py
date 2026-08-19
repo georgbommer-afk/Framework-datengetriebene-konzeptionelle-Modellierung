@@ -1,6 +1,6 @@
 """Zentrale fachliche Fortschrittsdefinition für das gesamte Framework."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -124,6 +124,28 @@ def fortschrittsstand_aus_persistenz(anzeige: Fortschrittsanzeige) -> Fortschrit
         gesamt_position=anzeige.zaehler,
         gesamt_anzahl=anzeige.nenner,
     )
+
+
+def fortschrittszustand_aus_persistenz_setzen(
+    zustand: MutableMapping[str, Any], anzeige: Fortschrittsanzeige
+) -> None:
+    """Initialisiert nach einem Import exakt den persistierten fachlichen Unterschritt."""
+    unterschritte = FACHLICHE_UNTERSCHRITTE[anzeige.schritt]
+    try:
+        unterschritt = unterschritte.index(anzeige.unterschritt) + 1
+    except ValueError:
+        unterschritt = 1
+    if anzeige.schritt == 1:
+        zustand["wizard_schritt"] = unterschritt
+        return
+    sammlungsname = _ZUSTANDSSAMMLUNG.get(anzeige.schritt)
+    if sammlungsname is None:
+        return
+    sammlung = zustand.setdefault(sammlungsname, {})
+    if not isinstance(sammlung, dict):
+        sammlung = {}
+        zustand[sammlungsname] = sammlung
+    sammlung[str(anzeige.projekt_id)] = {"schritt": unterschritt}
 
 
 def zeige_gesamtfortschritt(stand: Fortschrittsstand) -> None:
