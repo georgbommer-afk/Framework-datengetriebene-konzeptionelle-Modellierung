@@ -401,6 +401,37 @@ Schritt 10 verwendet für HTML und PDF dieselbe formatneutrale Datenstruktur:
 
 Die Ausgaben entstehen temporär und werden nicht als neues fachliches Artefakt persistiert.
 
+## Synthetische Produktions-Testdaten
+
+`tests/Testdatagenerator.py` erzeugt einen reproduzierbaren, vollständig erfundenen
+Produktionsdatensatz mit genau 20 Aktivitäten, logischen Fertigungsvarianten, Ressourcen- und
+Kapazitätsbelegung, Soll-/Ist-Zeiten sowie getrennt konfigurierbaren Qualitätsauffälligkeiten.
+Die Parameter werden primär im gut sichtbaren Block `KONFIGURATION` am Dateianfang angepasst.
+
+```bash
+.venv/bin/python tests/Testdatagenerator.py
+```
+
+Der Lauf erzeugt `tests/datasets/Testdatensatz_Produktion.xlsx` und das statische, von Seed und
+Fallzahl unabhängige `tests/datasets/Sollprozess_Produktion.pnml`. In Schritt 2 wird das Blatt
+`Ereignisdaten` als Haupttabelle importiert und per LEFT JOIN über `Ressourcen_ID` mit dem Blatt
+`Ressourcenstamm` verknüpft. `Produktionsauftrag` wird kontrolliert in Text konvertiert.
+
+Für Schritt 4 wird folgende semantische Zuordnung empfohlen:
+
+- `Produktionsauftrag` → Fall-ID
+- `Vorgang` → Aktivität
+- `Buchungszeitpunkt` → Ereigniszeitpunkt
+- `Ist_Start` → Startzeitpunkt
+- `Ist_Ende` → Endzeitpunkt
+- `Ressourcenbezeichnung` → Ressource, erst nach dem Join
+- `Soll_Start` und `Soll_Ende` → zusätzliche Ereignisattribute für die Soll-Ist-Auswertung
+
+Die Arbeitsmappe enthält außerdem Aktivitäts- und Variantenkatalog, Vorschläge für den manuell
+zu bestätigenden Projektrahmen sowie Generierungs- und Datenqualitätsprotokolle. Das PNML bildet
+zulässige Routen, optionale Schweiß-/Lackpfade und beide Nacharbeitsschleifen ab und kann in
+Schritt 7 als komplexer Sollprozess importiert werden.
+
 ## Tests und statische Qualitätssicherung
 
 ```bash
