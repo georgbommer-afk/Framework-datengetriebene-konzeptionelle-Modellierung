@@ -31,6 +31,7 @@ from framework_mvp.domain.models.zugriff import (
     Gruppenaktion,
     Gruppenrolle,
     Projektaktion,
+    Projektzugriffsart,
     Zugriffskontext,
 )
 from framework_mvp.infrastructure.persistence.sqlite_schema import (
@@ -225,6 +226,7 @@ class ProjektArchivService:
         return self._import_pruefung_aus_manifest(
             kontext,
             manifest,
+            archiv_sha256=hashlib.sha256(archiv).hexdigest(),
             ziel_gruppen_id=ziel_gruppen_id,
         )
 
@@ -281,6 +283,7 @@ class ProjektArchivService:
             pruefung = self._import_pruefung_aus_manifest(
                 kontext,
                 manifest,
+                archiv_sha256=hashlib.sha256(archiv).hexdigest(),
                 ziel_gruppen_id=ziel_gruppen_id,
             )
             return GestagterProjektimport(
@@ -373,6 +376,7 @@ class ProjektArchivService:
         kontext: Zugriffskontext,
         manifest: dict[str, Any],
         *,
+        archiv_sha256: str,
         ziel_gruppen_id: UUID | None,
     ) -> ArchivImportPruefung:
         try:
@@ -384,10 +388,7 @@ class ProjektArchivService:
             raise ArchivUngueltig("Der Projektname fehlt im Manifest.")
         vorhanden = self._vorhandener_fingerabdruck(projekt_id) is not None
         if vorhanden:
-            self._autorisierung.projekt_zugriff_pruefen(
-                kontext, projekt_id, Projektaktion.IMPORTIEREN
-            )
-            self._autorisierung.projekt_zugriff_pruefen(kontext, projekt_id, Projektaktion.LOESCHEN)
+            self._ersetzungszugriff_pruefen(kontext, projekt_id, archiv_sha256)
         else:
             self._importziel_pruefen(kontext, ziel_gruppen_id, manifest=manifest)
         return ArchivImportPruefung(
@@ -396,6 +397,47 @@ class ProjektArchivService:
             str(manifest.get("exported_at_utc", "")),
             vorhanden,
         )
+
+    def _ersetzungszugriff_pruefen(
+        self, kontext: Zugriffskontext, projekt_id: UUID, archiv_sha256: str
+    ) -> bool:
+        """Erlaubt alternativ nur den exakt dokumentierten Gast-Export als Besitznachweis."""
+        try:
+            self._autorisierung.projekt_zugriff_pruefen(
+                kontext, projekt_id, Projektaktion.IMPORTIEREN
+            )
+            self._autorisierung.projekt_zugriff_pruefen(kontext, projekt_id, Projektaktion.LOESCHEN)
+            return False
+        except ZugriffVerweigert:
+            if self._passender_gast_exportnachweis(kontext, projekt_id, archiv_sha256):
+                return True
+            raise ZugriffVerweigert(NICHT_VERFUEGBAR) from None
+
+    def _passender_gast_exportnachweis(
+        self, kontext: Zugriffskontext, projekt_id: UUID, archiv_sha256: str
+    ) -> bool:
+        if kontext.gast_geheimnis is None:
+            return False
+        zuordnung = self._zugriff.projektzugehoerigkeit_laden(projekt_id)
+        if zuordnung is None or zuordnung.zugriffsart is not Projektzugriffsart.GAST:
+            return False
+        verbindung = sqlite3.connect(self._datenbankpfad, timeout=5.0)
+        try:
+            return (
+                verbindung.execute(
+                    """
+                    SELECT 1 FROM archivmetadaten
+                    WHERE projekt_id = ? AND gruppen_id IS NULL
+                      AND archivtyp = 'projekt_export' AND status = 'erfolgreich'
+                      AND sha256 = ?
+                    LIMIT 1
+                    """,
+                    (str(projekt_id), archiv_sha256),
+                ).fetchone()
+                is not None
+            )
+        finally:
+            verbindung.close()
 
     def _upload_staging_pfad(self, staging_id: UUID) -> Path:
         basis = self._workspace.basisverzeichnis.resolve()
@@ -462,6 +504,7 @@ class ProjektArchivService:
     ) -> ImportErgebnis:
         """Validiert vollständig, staged einzeln und übernimmt DB/Dateien gemeinsam."""
         inhalt, manifest = self._archiv_pruefen(archiv)
+        archiv_sha256 = hashlib.sha256(archiv).hexdigest()
         try:
             projekt_id = UUID(str(manifest["original_project_id"]))
         except (KeyError, TypeError, ValueError) as fehler:
@@ -471,12 +514,10 @@ class ProjektArchivService:
             raise ArchivUngueltig("Der Projektname fehlt im Manifest.")
         with self._sperren.sperren(projekt_id):
             vorhandener_fingerabdruck = self._vorhandener_fingerabdruck(projekt_id)
+            gast_neu_binden = False
             if vorhandener_fingerabdruck is not None:
-                self._autorisierung.projekt_zugriff_pruefen(
-                    kontext, projekt_id, Projektaktion.IMPORTIEREN
-                )
-                self._autorisierung.projekt_zugriff_pruefen(
-                    kontext, projekt_id, Projektaktion.LOESCHEN
+                gast_neu_binden = self._ersetzungszugriff_pruefen(
+                    kontext, projekt_id, archiv_sha256
                 )
                 if not vorhandenes_projekt_ersetzen:
                     raise ArchivKonflikt(
@@ -492,8 +533,9 @@ class ProjektArchivService:
                     zuordnung.gruppen_id,
                     inhalt,
                     manifest,
-                    archiv_sha256=hashlib.sha256(archiv).hexdigest(),
+                    archiv_sha256=archiv_sha256,
                     archivgroesse_bytes=len(archiv),
+                    gast_neu_binden=gast_neu_binden,
                     ersetzen=True,
                 )
             else:
@@ -504,8 +546,9 @@ class ProjektArchivService:
                     ziel_gruppen_id,
                     inhalt,
                     manifest,
-                    archiv_sha256=hashlib.sha256(archiv).hexdigest(),
+                    archiv_sha256=archiv_sha256,
                     archivgroesse_bytes=len(archiv),
+                    gast_neu_binden=False,
                     ersetzen=False,
                 )
         return ImportErgebnis(
@@ -760,6 +803,7 @@ class ProjektArchivService:
         *,
         archiv_sha256: str,
         archivgroesse_bytes: int,
+        gast_neu_binden: bool,
         ersetzen: bool,
     ) -> None:
         basis = self._workspace.basisverzeichnis.resolve()
@@ -805,6 +849,26 @@ class ProjektArchivService:
                 )
                 if projekt_vorhanden != ersetzen:
                     raise ArchivKonflikt("Das Projekt wurde parallel verändert.")
+                jetzt = datetime.now(UTC)
+                if gast_neu_binden:
+                    if kontext.gast_geheimnis is None:
+                        raise ZugriffVerweigert(NICHT_VERFUEGBAR)
+                    aktualisiert = verbindung.execute(
+                        """
+                        UPDATE projektzugehoerigkeiten SET
+                            gast_geheimnis_sha256 = ?, gast_ablauf_am_utc = ?,
+                            zuletzt_aktiv_am_utc = ?, revision = revision + 1
+                        WHERE projekt_id = ? AND zugriffsart = 'gast'
+                        """,
+                        (
+                            geheimnis_hash(kontext.gast_geheimnis),
+                            (jetzt + self._gast_ttl).isoformat(),
+                            jetzt.isoformat(),
+                            str(projekt_id),
+                        ),
+                    )
+                    if aktualisiert.rowcount != 1:
+                        raise ZugriffVerweigert(NICHT_VERFUEGBAR)
                 if ersetzen:
                     self._projektinhalt_aus_verbindung_loeschen(verbindung, projekt_id)
                     projektzeile = tabellendaten["projekte"][0]
@@ -825,7 +889,6 @@ class ProjektArchivService:
                             f"INSERT INTO {tabelle} ({spalten_sql}) VALUES ({platzhalter})",
                             [zeile[spalte] for spalte in spalten],
                         )
-                jetzt = datetime.now(UTC)
                 if not ersetzen and kontext.gast_geheimnis is not None:
                     verbindung.execute(
                         """

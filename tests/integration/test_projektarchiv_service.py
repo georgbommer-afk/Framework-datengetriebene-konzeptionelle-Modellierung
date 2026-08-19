@@ -18,6 +18,7 @@ from framework_mvp.application.projektarchiv_service import ArchivGrenzen, Proje
 from framework_mvp.domain.exceptions import ArchivKonflikt, ArchivUngueltig, ZugriffVerweigert
 from framework_mvp.domain.models import Systemtyp, Untersuchungsauftrag
 from framework_mvp.domain.models.zugriff import (
+    Projektaktion,
     Projektzugehoerigkeit,
     Projektzugriffsart,
     Zugriffskontext,
@@ -110,6 +111,41 @@ def test_gast_importiert_in_eigenen_neuen_mandanten_und_kann_wiederoeffnen(
     assert (
         ziel_workspace.basisverzeichnis / "projects" / str(projekt.projekt_id) / "raw" / "daten.csv"
     ).read_text() == "a,b\n1,2\n"
+
+
+def test_exportiertes_gastprojekt_wird_nach_verlust_des_gastkontexts_wiederhergestellt(
+    tmp_path: Path,
+) -> None:
+    projekt, gast_a, service_a = _quelle(tmp_path)
+    archiv = service_a.exportieren(gast_a, projekt.projekt_id)
+    db = tmp_path / "quelle.sqlite"
+    workspace = WorkspaceKonfiguration(tmp_path / "quelle-workspace")
+    raw = workspace.basisverzeichnis / "projects" / str(projekt.projekt_id) / "raw" / "daten.csv"
+    raw.write_text("zwischenzeitlich verändert", encoding="utf-8")
+    with sqlite3.connect(db) as verbindung:
+        verbindung.execute(
+            "UPDATE projekte SET bezeichnung='Zwischenstand' WHERE projekt_id=?",
+            (str(projekt.projekt_id),),
+        )
+        verbindung.commit()
+
+    repository = SQLiteZugriffsRepository(db)
+    service_b = ProjektArchivService(db, workspace, repository, AutorisierungsService(repository))
+    gast_b = Zugriffskontext.gast("n" * 40)
+    pruefung = service_b.import_pruefen(gast_b, archiv)
+    ergebnis = service_b.importieren(
+        gast_b, archiv, vorhandenes_projekt_ersetzen=pruefung.bereits_vorhanden
+    )
+
+    assert ergebnis.projekt_id == projekt.projekt_id
+    assert ergebnis.ersetzt
+    assert raw.read_text(encoding="utf-8") == "a,b\n1,2\n"
+    geladen = SQLiteProjektRepository(db).laden(projekt.projekt_id)
+    assert geladen is not None
+    assert geladen.bezeichnung == "Übungsprojekt"
+    AutorisierungsService(repository).projekt_zugriff_pruefen(
+        gast_b, projekt.projekt_id, Projektaktion.ANSEHEN
+    )
 
 
 def test_vorhandenes_projekt_wird_nach_rueckfrage_vollstaendig_ersetzt(
@@ -223,6 +259,12 @@ def test_import_verweigert_im_archiv_fehlende_manifestdatei(tmp_path: Path) -> N
 def test_bekannte_uuid_allein_erlaubt_keinen_identischen_import(tmp_path: Path) -> None:
     projekt, kontext, service = _quelle(tmp_path)
     archiv = service.exportieren(kontext, projekt.projekt_id)
+    with sqlite3.connect(tmp_path / "quelle.sqlite") as verbindung:
+        verbindung.execute(
+            "DELETE FROM archivmetadaten WHERE projekt_id=? AND archivtyp='projekt_export'",
+            (str(projekt.projekt_id),),
+        )
+        verbindung.commit()
     fremder_kontext = Zugriffskontext.gast("fremd" * 10)
     with pytest.raises(ZugriffVerweigert):
         service.import_pruefen(fremder_kontext, archiv)
