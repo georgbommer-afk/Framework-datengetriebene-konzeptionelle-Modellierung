@@ -5,61 +5,6 @@
       <text>Synthetischer_Sollprozess_Produktion</text>
     </name>
     <page id="n0">
-      <place id="p04_nach_drehen">
-        <name>
-          <text>p04_nach_drehen</text>
-        </name>
-      </place>
-      <place id="p03_zuschnitt">
-        <name>
-          <text>p03_zuschnitt</text>
-        </name>
-      </place>
-      <place id="p12_schweisspfad_fertig">
-        <name>
-          <text>p12_schweisspfad_fertig</text>
-        </name>
-      </place>
-      <place id="p02_material">
-        <name>
-          <text>p02_material</text>
-        </name>
-      </place>
-      <place id="p06_route_fertig">
-        <name>
-          <text>p06_route_fertig</text>
-        </name>
-      </place>
-      <place id="p13_lack_vorbereitet">
-        <name>
-          <text>p13_lack_vorbereitet</text>
-        </name>
-      </place>
-      <place id="p14_vor_lackieren">
-        <name>
-          <text>p14_vor_lackieren</text>
-        </name>
-      </place>
-      <place id="p15_lackiert">
-        <name>
-          <text>p15_lackiert</text>
-        </name>
-      </place>
-      <place id="p16_getrocknet">
-        <name>
-          <text>p16_getrocknet</text>
-        </name>
-      </place>
-      <place id="p18_oberflaeche_fertig">
-        <name>
-          <text>p18_oberflaeche_fertig</text>
-        </name>
-      </place>
-      <place id="p22_ende">
-        <name>
-          <text>p22_ende</text>
-        </name>
-      </place>
       <place id="p00_start">
         <name>
           <text>p00_start</text>
@@ -67,6 +12,41 @@
         <initialMarking>
           <text>1</text>
         </initialMarking>
+      </place>
+      <place id="p16_getrocknet">
+        <name>
+          <text>p16_getrocknet</text>
+        </name>
+      </place>
+      <place id="p10_mech_fertig">
+        <name>
+          <text>p10_mech_fertig</text>
+        </name>
+      </place>
+      <place id="p14_vor_lackieren">
+        <name>
+          <text>p14_vor_lackieren</text>
+        </name>
+      </place>
+      <place id="p20_endmontage">
+        <name>
+          <text>p20_endmontage</text>
+        </name>
+      </place>
+      <place id="p06_route_fertig">
+        <name>
+          <text>p06_route_fertig</text>
+        </name>
+      </place>
+      <place id="p09_mech_entscheidung">
+        <name>
+          <text>p09_mech_entscheidung</text>
+        </name>
+      </place>
+      <place id="p13_lack_vorbereitet">
+        <name>
+          <text>p13_lack_vorbereitet</text>
+        </name>
       </place>
       <place id="p07_gebohrt">
         <name>
@@ -78,9 +58,9 @@
           <text>p08_entgratet</text>
         </name>
       </place>
-      <place id="p09_mech_entscheidung">
+      <place id="p12_schweisspfad_fertig">
         <name>
-          <text>p09_mech_entscheidung</text>
+          <text>p12_schweisspfad_fertig</text>
         </name>
       </place>
       <place id="p17_lack_entscheidung">
@@ -88,24 +68,14 @@
           <text>p17_lack_entscheidung</text>
         </name>
       </place>
-      <place id="p21_funktionsgeprueft">
+      <place id="p02_material">
         <name>
-          <text>p21_funktionsgeprueft</text>
+          <text>p02_material</text>
         </name>
       </place>
-      <place id="p20_endmontage">
+      <place id="p03_zuschnitt">
         <name>
-          <text>p20_endmontage</text>
-        </name>
-      </place>
-      <place id="p01_freigegeben">
-        <name>
-          <text>p01_freigegeben</text>
-        </name>
-      </place>
-      <place id="p10_mech_fertig">
-        <name>
-          <text>p10_mech_fertig</text>
+          <text>p03_zuschnitt</text>
         </name>
       </place>
       <place id="p11_geschweisst">
@@ -113,9 +83,24 @@
           <text>p11_geschweisst</text>
         </name>
       </place>
-      <place id="p19_vormontage">
+      <place id="p21_funktionsgeprueft">
         <name>
-          <text>p19_vormontage</text>
+          <text>p21_funktionsgeprueft</text>
+        </name>
+      </place>
+      <place id="p04_nach_drehen">
+        <name>
+          <text>p04_nach_drehen</text>
+        </name>
+      </place>
+      <place id="p01_freigegeben">
+        <name>
+          <text>p01_freigegeben</text>
+        </name>
+      </place>
+      <place id="p18_oberflaeche_fertig">
+        <name>
+          <text>p18_oberflaeche_fertig</text>
         </name>
       </place>
       <place id="p05_vor_fraesen">
@@ -123,54 +108,36 @@
           <text>p05_vor_fraesen</text>
         </name>
       </place>
-      <transition id="t08">
+      <place id="p19_vormontage">
         <name>
-          <text>Mechanische Zwischenprüfung</text>
+          <text>p19_vormontage</text>
         </name>
-      </transition>
-      <transition id="t11">
+      </place>
+      <place id="p15_lackiert">
         <name>
-          <text>Schleifen</text>
+          <text>p15_lackiert</text>
         </name>
-      </transition>
-      <transition id="t13">
+      </place>
+      <place id="p22_ende">
         <name>
-          <text>Lackieren</text>
+          <text>p22_ende</text>
         </name>
-      </transition>
-      <transition id="tau_fraesroute">
-        <name>
-          <text>tau_fraesroute</text>
-        </name>
-        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="7b91f2ed-54cb-4b94-bac2-047a36af37b4"/>
-      </transition>
-      <transition id="tau_kombiroute">
-        <name>
-          <text>tau_kombiroute</text>
-        </name>
-        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="68a664a0-6418-45e0-a809-e0470103c17c"/>
-      </transition>
-      <transition id="tau_lack_freigabe">
-        <name>
-          <text>tau_lack_freigabe</text>
-        </name>
-        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="d026fc9a-ce31-4444-b74e-9833178f45ef"/>
-      </transition>
-      <transition id="t19">
-        <name>
-          <text>Funktionsprüfung</text>
-        </name>
-      </transition>
+      </place>
       <transition id="t09">
         <name>
           <text>Mechanische Nacharbeit</text>
+        </name>
+      </transition>
+      <transition id="t01">
+        <name>
+          <text>Auftrag freigegeben</text>
         </name>
       </transition>
       <transition id="tau_drehroute_ende">
         <name>
           <text>tau_drehroute_ende</text>
         </name>
-        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="2b47b99d-ec2f-4d63-abc5-2285fc07a40a"/>
+        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="7b896855-47c2-4b0e-8c9d-faf2ac00f68a"/>
       </transition>
       <transition id="t05">
         <name>
@@ -181,7 +148,7 @@
         <name>
           <text>tau_schweissen_ueberspringen</text>
         </name>
-        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="c664dd69-32d4-4a7c-8f59-4b63541cd4f9"/>
+        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="9c3f9fa1-7232-4abb-a014-d50043a9a731"/>
       </transition>
       <transition id="t14">
         <name>
@@ -192,23 +159,23 @@
         <name>
           <text>tau_lackieren_ueberspringen</text>
         </name>
-        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="cfcf0f9d-6987-4f7b-9c98-92ad679a92f7"/>
+        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="1de32fcb-6c64-4282-bbd9-24bcaffeb0d2"/>
       </transition>
       <transition id="t20">
         <name>
           <text>Auftrag abgeschlossen</text>
         </name>
       </transition>
-      <transition id="t12">
-        <name>
-          <text>Oberflächenvorbereitung</text>
-        </name>
-      </transition>
       <transition id="tau_mech_freigabe">
         <name>
           <text>tau_mech_freigabe</text>
         </name>
-        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="4845d492-5e34-4eac-a7a7-72096973bfc1"/>
+        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="01bd0397-7665-4129-91ed-5ff4ef38f879"/>
+      </transition>
+      <transition id="t12">
+        <name>
+          <text>Oberflächenvorbereitung</text>
+        </name>
       </transition>
       <transition id="t03">
         <name>
@@ -235,15 +202,9 @@
           <text>Vormontage</text>
         </name>
       </transition>
-      <transition id="tau_zur_lackierung">
+      <transition id="t10">
         <name>
-          <text>tau_zur_lackierung</text>
-        </name>
-        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="2432a61e-e8ea-4f4d-af20-bffabdc3d18a"/>
-      </transition>
-      <transition id="t01">
-        <name>
-          <text>Auftrag freigegeben</text>
+          <text>Schweißen</text>
         </name>
       </transition>
       <transition id="t04">
@@ -256,10 +217,11 @@
           <text>Entgraten</text>
         </name>
       </transition>
-      <transition id="t10">
+      <transition id="tau_zur_lackierung">
         <name>
-          <text>Schweißen</text>
+          <text>tau_zur_lackierung</text>
         </name>
+        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="e4b71e4d-c235-4a39-8dc3-9975dc2b351b"/>
       </transition>
       <transition id="t16">
         <name>
@@ -271,62 +233,100 @@
           <text>Endmontage</text>
         </name>
       </transition>
-      <arc id="4710610944" source="p03_zuschnitt" target="tau_fraesroute"/>
-      <arc id="4710607488" source="t06" target="p07_gebohrt"/>
-      <arc id="4710609792" source="p11_geschweisst" target="t11"/>
-      <arc id="4710604032" source="p16_getrocknet" target="t15"/>
-      <arc id="4710602880" source="p12_schweisspfad_fertig" target="tau_lackieren_ueberspringen"/>
-      <arc id="4710601728" source="p19_vormontage" target="t18"/>
-      <arc id="4710605328" source="t02" target="p02_material"/>
-      <arc id="4710607632" source="p06_route_fertig" target="t06"/>
-      <arc id="4710608784" source="t08" target="p09_mech_entscheidung"/>
-      <arc id="4710606480" source="p09_mech_entscheidung" target="tau_mech_freigabe"/>
-      <arc id="4710611088" source="p13_lack_vorbereitet" target="tau_zur_lackierung"/>
-      <arc id="4710604176" source="p15_lackiert" target="t14"/>
-      <arc id="4710603024" source="t14" target="p16_getrocknet"/>
-      <arc id="4710601872" source="t17" target="p19_vormontage"/>
-      <arc id="4710610080" source="p02_material" target="t03"/>
-      <arc id="4710606624" source="tau_fraesroute" target="p05_vor_fraesen"/>
-      <arc id="4710612384" source="p05_vor_fraesen" target="t05"/>
-      <arc id="4710608928" source="t05" target="p06_route_fertig"/>
-      <arc id="4710611232" source="t07" target="p08_entgratet"/>
-      <arc id="4710607776" source="tau_mech_freigabe" target="p10_mech_fertig"/>
-      <arc id="4710605472" source="t10" target="p11_geschweisst"/>
-      <arc id="4710604320" source="p14_vor_lackieren" target="t13"/>
-      <arc id="4710603168" source="t13" target="p15_lackiert"/>
-      <arc id="4710602016" source="p18_oberflaeche_fertig" target="t17"/>
-      <arc id="4710605616" source="p00_start" target="t01"/>
-      <arc id="4710606768" source="tau_schweissen_ueberspringen" target="p12_schweisspfad_fertig"/>
-      <arc id="4710603312" source="tau_lack_freigabe" target="p18_oberflaeche_fertig"/>
-      <arc id="4710604608" source="t04" target="p04_nach_drehen"/>
-      <arc id="4710610368" source="t12" target="p13_lack_vorbereitet"/>
-      <arc id="4710603456" source="p17_lack_entscheidung" target="tau_lack_freigabe"/>
-      <arc id="4710601152" source="p21_funktionsgeprueft" target="t20"/>
-      <arc id="4710611664" source="tau_drehroute_ende" target="p06_route_fertig"/>
-      <arc id="4710604752" source="tau_kombiroute" target="p05_vor_fraesen"/>
-      <arc id="4710610512" source="p07_gebohrt" target="t07"/>
-      <arc id="4710605904" source="p08_entgratet" target="t08"/>
-      <arc id="4710607056" source="p09_mech_entscheidung" target="t09"/>
-      <arc id="4710612816" source="t09" target="p08_entgratet"/>
-      <arc id="4710608208" source="t11" target="p12_schweisspfad_fertig"/>
-      <arc id="4710609360" source="tau_zur_lackierung" target="p14_vor_lackieren"/>
-      <arc id="4710603600" source="t16" target="p14_vor_lackieren"/>
-      <arc id="4710601296" source="t19" target="p21_funktionsgeprueft"/>
-      <arc id="4710604896" source="t03" target="p03_zuschnitt"/>
-      <arc id="4710609504" source="p04_nach_drehen" target="tau_kombiroute"/>
-      <arc id="4710608352" source="p10_mech_fertig" target="t10"/>
-      <arc id="4710603744" source="p17_lack_entscheidung" target="t16"/>
-      <arc id="4710601440" source="p20_endmontage" target="t19"/>
-      <arc id="4710610800" source="p01_freigegeben" target="t02"/>
-      <arc id="4710606192" source="t01" target="p01_freigegeben"/>
-      <arc id="4710608496" source="p03_zuschnitt" target="t04"/>
-      <arc id="4710607344" source="p04_nach_drehen" target="tau_drehroute_ende"/>
-      <arc id="4710609648" source="p10_mech_fertig" target="tau_schweissen_ueberspringen"/>
-      <arc id="4710611952" source="p12_schweisspfad_fertig" target="t12"/>
-      <arc id="4710603888" source="t15" target="p17_lack_entscheidung"/>
-      <arc id="4710602736" source="tau_lackieren_ueberspringen" target="p18_oberflaeche_fertig"/>
-      <arc id="4710601584" source="t18" target="p20_endmontage"/>
-      <arc id="4710598128" source="t20" target="p22_ende"/>
+      <transition id="t13">
+        <name>
+          <text>Lackieren</text>
+        </name>
+      </transition>
+      <transition id="tau_fraesroute">
+        <name>
+          <text>tau_fraesroute</text>
+        </name>
+        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="b91e155c-497c-472e-831b-4333422be5c3"/>
+      </transition>
+      <transition id="tau_kombiroute">
+        <name>
+          <text>tau_kombiroute</text>
+        </name>
+        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="d4e41f61-29a8-44fc-a363-41f2814abc25"/>
+      </transition>
+      <transition id="t11">
+        <name>
+          <text>Schleifen</text>
+        </name>
+      </transition>
+      <transition id="t08">
+        <name>
+          <text>Mechanische Zwischenprüfung</text>
+        </name>
+      </transition>
+      <transition id="tau_lack_freigabe">
+        <name>
+          <text>tau_lack_freigabe</text>
+        </name>
+        <toolspecific tool="ProM" version="6.4" activity="$invisible$" localNodeID="6c7a4675-ae66-4ab4-af62-66bc68a1da3a"/>
+      </transition>
+      <transition id="t19">
+        <name>
+          <text>Funktionsprüfung</text>
+        </name>
+      </transition>
+      <arc id="4809274240" source="tau_drehroute_ende" target="p06_route_fertig"/>
+      <arc id="4809275392" source="tau_kombiroute" target="p05_vor_fraesen"/>
+      <arc id="4809273088" source="p06_route_fertig" target="t06"/>
+      <arc id="4809271936" source="p09_mech_entscheidung" target="t09"/>
+      <arc id="4809270784" source="p11_geschweisst" target="t11"/>
+      <arc id="4827372800" source="p17_lack_entscheidung" target="t16"/>
+      <arc id="4809276688" source="t03" target="p03_zuschnitt"/>
+      <arc id="4809275536" source="p03_zuschnitt" target="t04"/>
+      <arc id="4809274384" source="tau_fraesroute" target="p05_vor_fraesen"/>
+      <arc id="4809272080" source="t08" target="p09_mech_entscheidung"/>
+      <arc id="4809270928" source="t10" target="p11_geschweisst"/>
+      <arc id="4809268624" source="p12_schweisspfad_fertig" target="t12"/>
+      <arc id="4827369488" source="t14" target="p16_getrocknet"/>
+      <arc id="4827366032" source="t16" target="p14_vor_lackieren"/>
+      <arc id="4809274528" source="p00_start" target="t01"/>
+      <arc id="4809272224" source="p08_entgratet" target="t08"/>
+      <arc id="4809271072" source="p10_mech_fertig" target="t10"/>
+      <arc id="4827370784" source="p17_lack_entscheidung" target="tau_lack_freigabe"/>
+      <arc id="4827366176" source="tau_lack_freigabe" target="p18_oberflaeche_fertig"/>
+      <arc id="4827367328" source="t20" target="p22_ende"/>
+      <arc id="4809276976" source="t01" target="p01_freigegeben"/>
+      <arc id="4809275824" source="p04_nach_drehen" target="tau_kombiroute"/>
+      <arc id="4809267760" source="p13_lack_vorbereitet" target="tau_zur_lackierung"/>
+      <arc id="4806067120" source="p14_vor_lackieren" target="t13"/>
+      <arc id="4827367472" source="p18_oberflaeche_fertig" target="t17"/>
+      <arc id="4827366320" source="t18" target="p20_endmontage"/>
+      <arc id="4827370928" source="t19" target="p21_funktionsgeprueft"/>
+      <arc id="4809277120" source="p04_nach_drehen" target="tau_drehroute_ende"/>
+      <arc id="4809273664" source="p05_vor_fraesen" target="t05"/>
+      <arc id="4809272512" source="t05" target="p06_route_fertig"/>
+      <arc id="4809267904" source="tau_zur_lackierung" target="p14_vor_lackieren"/>
+      <arc id="4827368768" source="p16_getrocknet" target="t15"/>
+      <arc id="4827372224" source="p19_vormontage" target="t18"/>
+      <arc id="4809273808" source="p01_freigegeben" target="t02"/>
+      <arc id="4809272656" source="t07" target="p08_entgratet"/>
+      <arc id="4809271504" source="tau_mech_freigabe" target="p10_mech_fertig"/>
+      <arc id="4809270352" source="tau_schweissen_ueberspringen" target="p12_schweisspfad_fertig"/>
+      <arc id="4764531408" source="t13" target="p15_lackiert"/>
+      <arc id="4827368912" source="p21_funktionsgeprueft" target="t20"/>
+      <arc id="4809275104" source="p02_material" target="t03"/>
+      <arc id="4809276256" source="p03_zuschnitt" target="tau_fraesroute"/>
+      <arc id="4809272800" source="p07_gebohrt" target="t07"/>
+      <arc id="4809271648" source="p09_mech_entscheidung" target="tau_mech_freigabe"/>
+      <arc id="4809270496" source="p10_mech_fertig" target="tau_schweissen_ueberspringen"/>
+      <arc id="4809268192" source="t12" target="p13_lack_vorbereitet"/>
+      <arc id="4827370208" source="tau_lackieren_ueberspringen" target="p18_oberflaeche_fertig"/>
+      <arc id="4827366752" source="t17" target="p19_vormontage"/>
+      <arc id="4827369056" source="p20_endmontage" target="t19"/>
+      <arc id="4809274096" source="t02" target="p02_material"/>
+      <arc id="4809276400" source="t04" target="p04_nach_drehen"/>
+      <arc id="4809272944" source="t06" target="p07_gebohrt"/>
+      <arc id="4809271792" source="t09" target="p08_entgratet"/>
+      <arc id="4809270640" source="t11" target="p12_schweisspfad_fertig"/>
+      <arc id="4764531696" source="p15_lackiert" target="t14"/>
+      <arc id="4827365744" source="t15" target="p17_lack_entscheidung"/>
+      <arc id="4827370352" source="p12_schweisspfad_fertig" target="tau_lackieren_ueberspringen"/>
     </page>
     <finalmarkings>
       <marking>
