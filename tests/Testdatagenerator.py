@@ -55,18 +55,15 @@ class GeneratorKonfiguration:
     pnml_pfad: Path = STANDARD_PNML_PFAD
 
 
-# -----------------------------------------------------------------------------
-# Primärer Konfigurationsblock für die lokale Ausführung in VS Code
-# -----------------------------------------------------------------------------
-
+# Konfigurationsblock für die lokale Ausführung in VS Code
 KONFIGURATION = GeneratorKonfiguration(
-    anzahl_faelle=1000,
-    seed=20260819,
-    fehlwerte_prozent=0.5,
-    platzhalter_prozent=0.5,
+    anzahl_faelle=100, #Zeilenanzahl
+    seed=20260819, #das Startdatum
+    fehlwerte_prozent=0.0,
+    platzhalter_prozent=0.0,
     ausreisser_prozent=1.0,
-    duplikate_prozent=0.2,
-    unbekannte_ressourcen_prozent=0.2,
+    duplikate_prozent=0.0,
+    unbekannte_ressourcen_prozent=0.0,
     nichtkonforme_faelle_prozent=5.0,
     variantenanteile={
         "DREH_BASIS": 10.0,
