@@ -150,6 +150,7 @@ def _abhaengige_zustaende_verwerfen(zustand: dict[str, Any]) -> None:
         "vorschau_schluessel",
         "profil",
         "profil_schluessel",
+        "indikatorbedingungen",
         "bestaetigter_import",
         "transformationsplan",
         "transformationsergebnis",
@@ -182,8 +183,14 @@ def _gespeicherten_import_wiederherstellen(
     zusaetzliche_platzhalter = tuple(
         geladen.profil.gesamtprofil.get("bestaetigte_zusaetzliche_platzhalter", ())
     )
+    indikatorbedingungen = geladen.profil.indikatorbedingungen
     profil = datenimport_service.profil_erstellen(
-        vorschau.vollstaendige_tabelle, zusaetzliche_platzhalter
+        vorschau.vollstaendige_tabelle,
+        zusaetzliche_platzhalter,
+        indikatorbedingungen,
+    )
+    vorschau_schluessel = datenimport_service.cache_schluessel(
+        metadaten, importvorgang.importparameter
     )
     _abhaengige_zustaende_verwerfen(zustand)
     zustand.update(
@@ -193,17 +200,18 @@ def _gespeicherten_import_wiederherstellen(
             "dateiinhalt": dateiinhalt,
             "datei_metadaten": metadaten,
             "vorschau": vorschau,
-            "vorschau_schluessel": datenimport_service.cache_schluessel(
-                metadaten, importvorgang.importparameter
-            ),
+            "vorschau_schluessel": vorschau_schluessel,
             "profil": profil,
-            "profil_schluessel": datenimport_service.cache_schluessel(
-                metadaten, importvorgang.importparameter
+            "profil_schluessel": (
+                vorschau_schluessel,
+                zusaetzliche_platzhalter,
+                indikatorbedingungen,
             ),
             "import_id": importvorgang.import_id,
             "bestaetigter_import": importvorgang,
             "gespeichertes_profil": geladen.profil,
             "zusaetzliche_platzhalter": zusaetzliche_platzhalter,
+            "indikatorbedingungen": indikatorbedingungen,
         }
     )
     if isinstance(importvorgang.importparameter, CsvImportparameter):
@@ -655,6 +663,7 @@ def _datenprofil_und_bestaetigung(
     st.subheader("Datenprofil")
     vorschau: Datenvorschau = zustand["vorschau"]
     vorhandene_platzhalter = tuple(zustand.get("zusaetzliche_platzhalter", ()))
+    bearbeitbar = zustand.get("bestaetigter_import") is None
     with st.container(border=True):
         st.markdown("**Fehlwertplatzhalter bestätigen**")
         platzhaltertext = st.text_input(
@@ -664,24 +673,59 @@ def _datenprofil_und_bestaetigung(
                 "Beispiele: -, n/a oder unbekannt. Die Kennzeichnung verändert den "
                 "Quelldatensatz nicht. Bestätigen Sie die Eingabe mit Enter."
             ),
+            disabled=not bearbeitbar,
             key=(f"etl_platzhalter_{projekt_id}_{zustand['datei_metadaten'].sha256}"),
         )
     zusaetzliche_platzhalter = tuple(
         dict.fromkeys(wert.strip() for wert in platzhaltertext.split(",") if wert.strip())
     )
     zustand["zusaetzliche_platzhalter"] = zusaetzliche_platzhalter
-    profilschluessel = (zustand["vorschau_schluessel"], zusaetzliche_platzhalter)
+    indikatorbedingungen = tuple(zustand.get("indikatorbedingungen", ()))
+    profilschluessel = (
+        zustand["vorschau_schluessel"],
+        zusaetzliche_platzhalter,
+        indikatorbedingungen,
+    )
     if zustand.get("profil_schluessel") != profilschluessel:
         zustand["profil"] = datenimport_service.profil_erstellen(
-            vorschau.vollstaendige_tabelle, zusaetzliche_platzhalter
+            vorschau.vollstaendige_tabelle,
+            zusaetzliche_platzhalter,
+            indikatorbedingungen,
         )
         zustand["profil_schluessel"] = profilschluessel
     ergebnis: Profilierungsergebnis = zustand["profil"]
-    zeige_datenprofil(
+    indikatoraktion = zeige_datenprofil(
         ergebnis,
         session_key=f"etl_profildetail_{projekt_id}_{zustand['datei_metadaten'].sha256}",
         daten=vorschau.vollstaendige_tabelle,
+        indikator_bearbeitbar=bearbeitbar,
     )
+    if indikatoraktion is not None and indikatoraktion.entfernen is not None:
+        zu_entfernen = indikatoraktion.entfernen
+        entfernt = False
+        verbleibend = []
+        for bedingung in indikatorbedingungen:
+            if not entfernt and bedingung == zu_entfernen:
+                entfernt = True
+                continue
+            verbleibend.append(bedingung)
+        zustand["indikatorbedingungen"] = tuple(verbleibend)
+        zustand.pop("profil_schluessel", None)
+        st.rerun()
+    if indikatoraktion is not None and indikatoraktion.hinzufuegen is not None:
+        neue_bedingungen = (*indikatorbedingungen, indikatoraktion.hinzufuegen)
+        try:
+            datenimport_service.profil_erstellen(
+                vorschau.vollstaendige_tabelle,
+                zusaetzliche_platzhalter,
+                neue_bedingungen,
+            )
+        except Domaenenfehler as fehler:
+            st.error(str(fehler))
+        else:
+            zustand["indikatorbedingungen"] = neue_bedingungen
+            zustand.pop("profil_schluessel", None)
+            st.rerun()
     if zustand.get("bestaetigter_import") is not None:
         st.success("Diese Tabelle ist als Ausgangsdaten bestätigt.")
         return
@@ -967,6 +1011,25 @@ def _profilzeilen(gesamtprofil: dict[str, Any]) -> list[dict[str, Any]]:
     return zeilen
 
 
+def _indikatorzeilen(gesamtprofil: dict[str, Any]) -> list[dict[str, Any]]:
+    """Projiziert die in R gespeicherten unabhängigen Indikatorauswertungen."""
+    zeilen: list[dict[str, Any]] = []
+    for spalte in gesamtprofil.get("spaltenprofile", []):
+        for auswertung in spalte.get("indikatorauswertungen", []):
+            zeilen.append(
+                {
+                    "Spalte": auswertung.get("spaltenname"),
+                    "Operator": auswertung.get("operator"),
+                    "Vergleichswert": auswertung.get("vergleichswert"),
+                    "Absolute Häufigkeit (n_B)": auswertung.get("absolute_haeufigkeit"),
+                    "Auswertbare reguläre Beobachtungen": auswertung.get(
+                        "auswertbare_beobachtungen"
+                    ),
+                }
+            )
+    return zeilen
+
+
 def _zeige_datenprofile_r(
     *,
     importe: list[Importvorgang],
@@ -992,6 +1055,10 @@ def _zeige_datenprofile_r(
                 + (", ".join(zusaetzliche) if zusaetzliche else "keine")
             )
             st.dataframe(pd.DataFrame(_profilzeilen(profil)), hide_index=True, width="stretch")
+            indikatorzeilen = _indikatorzeilen(profil)
+            if indikatorzeilen:
+                st.write("**Absolute Häufigkeit eines Indikators**")
+                st.dataframe(pd.DataFrame(indikatorzeilen), hide_index=True, width="stretch")
 
 
 def _zeige_zwischendatensatz_t(

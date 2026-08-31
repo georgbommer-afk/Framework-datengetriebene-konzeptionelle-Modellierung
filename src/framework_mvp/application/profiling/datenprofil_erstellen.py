@@ -2,7 +2,10 @@
 
 import warnings
 from collections import Counter
-from datetime import timedelta
+from dataclasses import replace
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal, InvalidOperation
+from math import isfinite
 from typing import cast
 
 import numpy as np
@@ -15,9 +18,13 @@ from pandas.api.types import (
     is_numeric_dtype,
 )
 
+from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     Datenprofil,
     Fehlwertprofil,
+    Indikatorauswertung,
+    Indikatorbedingung,
+    Indikatoroperator,
     KategorialesSpaltenprofil,
     KategorieHaeufigkeit,
     NumerischesSpaltenprofil,
@@ -42,6 +49,31 @@ _PLATZHALTER = {
     "NA": "NA",
     "-": "-",
 }
+
+_NUMERISCHE_INDIKATOROPERATOREN = (
+    Indikatoroperator.GLEICH,
+    Indikatoroperator.UNGLEICH,
+    Indikatoroperator.KLEINER,
+    Indikatoroperator.KLEINER_GLEICH,
+    Indikatoroperator.GROESSER,
+    Indikatoroperator.GROESSER_GLEICH,
+)
+_ALLGEMEINE_INDIKATOROPERATOREN = (
+    Indikatoroperator.GLEICH,
+    Indikatoroperator.UNGLEICH,
+)
+
+
+def zulaessige_indikatoroperatoren(
+    technischer_datentyp: TechnischerDatentyp,
+) -> tuple[Indikatoroperator, ...]:
+    """Liefert die für einen technischen Datentyp fachlich zulässigen Operatoren."""
+    if technischer_datentyp in {
+        TechnischerDatentyp.GANZZAHL,
+        TechnischerDatentyp.FLIESSKOMMAZAHL,
+    }:
+        return _NUMERISCHE_INDIKATOROPERATOREN
+    return _ALLGEMEINE_INDIKATOROPERATOREN
 
 
 def _platzhalterklasse(wert: object, zusaetzliche_platzhalter: tuple[str, ...]) -> str | None:
@@ -242,15 +274,125 @@ def _fachlicher_datentyp(spalte: pd.Series, profiltyp: Profiltyp) -> Technischer
     return TechnischerDatentyp.TEXT
 
 
+def _zeitwert_typisieren(wert: object, datentyp: TechnischerDatentyp) -> object:
+    if datentyp is TechnischerDatentyp.DATUM and isinstance(wert, date):
+        return wert.date() if isinstance(wert, datetime) else wert
+    if datentyp is TechnischerDatentyp.UHRZEIT and isinstance(wert, time):
+        return wert
+    if datentyp is TechnischerDatentyp.DATUM_UND_UHRZEIT and isinstance(wert, datetime):
+        return wert
+    text = str(wert).strip()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        if datentyp is TechnischerDatentyp.UHRZEIT:
+            return cast(pd.Timestamp, pd.Timestamp(f"1970-01-01 {text}")).time()
+        zeitwert = cast(pd.Timestamp, pd.Timestamp(text))
+    if datentyp is TechnischerDatentyp.DATUM:
+        return zeitwert.date()
+    return zeitwert.to_pydatetime()
+
+
+def _vergleichswert_typisieren(wert: str, datentyp: TechnischerDatentyp) -> object:
+    try:
+        if datentyp is TechnischerDatentyp.TEXT:
+            return wert
+        if datentyp is TechnischerDatentyp.GANZZAHL:
+            dezimalwert = Decimal(wert.strip().replace(",", "."))
+            if not dezimalwert.is_finite() or dezimalwert != dezimalwert.to_integral_value():
+                raise ValueError
+            return int(dezimalwert)
+        if datentyp is TechnischerDatentyp.FLIESSKOMMAZAHL:
+            gleitkommawert = float(wert.strip().replace(",", "."))
+            if not isfinite(gleitkommawert):
+                raise ValueError
+            return gleitkommawert
+        if datentyp is TechnischerDatentyp.BOOLEAN:
+            normalisiert = wert.strip().casefold()
+            if normalisiert == "true":
+                return True
+            if normalisiert == "false":
+                return False
+            raise ValueError
+        return _zeitwert_typisieren(wert, datentyp)
+    except (InvalidOperation, TypeError, ValueError, OverflowError) as fehler:
+        raise Domaenenfehler(
+            f"Der Vergleichswert „{wert}“ ist kein gültiger Wert für den "
+            f"technischen Datentyp {datentyp.value}."
+        ) from fehler
+
+
+def _regulaeren_wert_typisieren(wert: object, datentyp: TechnischerDatentyp) -> object:
+    if datentyp is TechnischerDatentyp.TEXT:
+        return str(wert)
+    if datentyp is TechnischerDatentyp.GANZZAHL:
+        return int(Decimal(str(wert)))
+    if datentyp is TechnischerDatentyp.FLIESSKOMMAZAHL:
+        return float(str(wert))
+    if datentyp is TechnischerDatentyp.BOOLEAN:
+        if isinstance(wert, (bool, np.bool_)):
+            return bool(wert)
+        raise ValueError
+    return _zeitwert_typisieren(wert, datentyp)
+
+
+def _bedingung_erfuellt(wert: object, vergleichswert: object, operator: Indikatoroperator) -> bool:
+    if operator is Indikatoroperator.GLEICH:
+        return bool(wert == vergleichswert)
+    if operator is Indikatoroperator.UNGLEICH:
+        return bool(wert != vergleichswert)
+    if operator is Indikatoroperator.KLEINER:
+        return bool(wert < vergleichswert)  # type: ignore[operator]
+    if operator is Indikatoroperator.KLEINER_GLEICH:
+        return bool(wert <= vergleichswert)  # type: ignore[operator]
+    if operator is Indikatoroperator.GROESSER:
+        return bool(wert > vergleichswert)  # type: ignore[operator]
+    return bool(wert >= vergleichswert)  # type: ignore[operator]
+
+
+def _indikatorauswertung(
+    *,
+    spaltenname: str,
+    spalte: pd.Series,
+    regulaer: pd.Series,
+    technischer_datentyp: TechnischerDatentyp,
+    bedingung: Indikatorbedingung,
+) -> Indikatorauswertung:
+    if bedingung.operator not in zulaessige_indikatoroperatoren(technischer_datentyp):
+        raise Domaenenfehler(
+            f"Der Operator „{bedingung.operator.value}“ ist für den technischen Datentyp "
+            f"{technischer_datentyp.value} nicht zulässig."
+        )
+    vergleichswert = _vergleichswert_typisieren(bedingung.vergleichswert, technischer_datentyp)
+    auswertbare_werte: list[object] = []
+    for wert in spalte[regulaer]:
+        try:
+            auswertbare_werte.append(_regulaeren_wert_typisieren(wert, technischer_datentyp))
+        except (TypeError, ValueError, OverflowError):
+            continue
+    absolute_haeufigkeit = sum(
+        _bedingung_erfuellt(wert, vergleichswert, bedingung.operator) for wert in auswertbare_werte
+    )
+    return Indikatorauswertung(
+        spaltenname=spaltenname,
+        operator=bedingung.operator,
+        vergleichswert=bedingung.vergleichswert,
+        absolute_haeufigkeit=absolute_haeufigkeit,
+        auswertbare_beobachtungen=len(auswertbare_werte),
+    )
+
+
 def _spaltenprofil(
-    name: object, spalte: pd.Series, zusaetzliche_platzhalter: tuple[str, ...]
+    name: object,
+    spalte: pd.Series,
+    zusaetzliche_platzhalter: tuple[str, ...],
+    indikatorbedingungen: tuple[Indikatorbedingung, ...],
 ) -> Spaltenprofil:
     fehlwerte, regulaer = _fehlwertprofil(spalte, zusaetzliche_platzhalter)
     regulaere_spalte = pd.Series(spalte[regulaer])
     eindeutige = int(regulaere_spalte.nunique(dropna=True))
     if is_datetime64_any_dtype(spalte.dtype):
         zeitprofil = _zeitprofil(spalte, regulaer)
-        return Spaltenprofil(
+        basisprofil = Spaltenprofil(
             str(name),
             str(spalte.dtype),
             _fachlicher_datentyp(spalte, Profiltyp.ZEITBEZOGEN),
@@ -259,9 +401,9 @@ def _spaltenprofil(
             eindeutige,
             zeitbezogen=zeitprofil,
         )
-    if is_numeric_dtype(spalte.dtype) and not is_bool_dtype(spalte.dtype):
+    elif is_numeric_dtype(spalte.dtype) and not is_bool_dtype(spalte.dtype):
         numerisch = _numerisches_profil(spalte, regulaer)
-        return Spaltenprofil(
+        basisprofil = Spaltenprofil(
             str(name),
             str(spalte.dtype),
             _fachlicher_datentyp(spalte, Profiltyp.NUMERISCH),
@@ -270,51 +412,86 @@ def _spaltenprofil(
             eindeutige,
             numerisch=numerisch,
         )
-    zeitprofil = _zeitprofil(spalte, regulaer)
-    if (
-        fehlwerte.gueltige_regulaere_werte
-        and zeitprofil.erfolgsquote >= ZEIT_ERKENNUNG_MINDESTANTEIL
-    ):
-        return Spaltenprofil(
-            str(name),
-            str(spalte.dtype),
-            _fachlicher_datentyp(spalte, Profiltyp.ZEITBEZOGEN),
-            Profiltyp.ZEITBEZOGEN,
-            fehlwerte,
-            eindeutige,
-            zeitbezogen=zeitprofil,
+    else:
+        zeitprofil = _zeitprofil(spalte, regulaer)
+        if (
+            fehlwerte.gueltige_regulaere_werte
+            and zeitprofil.erfolgsquote >= ZEIT_ERKENNUNG_MINDESTANTEIL
+        ):
+            basisprofil = Spaltenprofil(
+                str(name),
+                str(spalte.dtype),
+                _fachlicher_datentyp(spalte, Profiltyp.ZEITBEZOGEN),
+                Profiltyp.ZEITBEZOGEN,
+                fehlwerte,
+                eindeutige,
+                zeitbezogen=zeitprofil,
+            )
+        elif (
+            spalte.dtype == "object"
+            or isinstance(spalte.dtype, pd.StringDtype)
+            or str(spalte.dtype) in {"category", "bool"}
+        ):
+            kategorial = _kategoriales_profil(spalte, regulaer)
+            basisprofil = Spaltenprofil(
+                str(name),
+                str(spalte.dtype),
+                _fachlicher_datentyp(spalte, Profiltyp.KATEGORIAL),
+                Profiltyp.KATEGORIAL,
+                fehlwerte,
+                eindeutige,
+                kategorial=kategorial,
+            )
+        else:
+            basisprofil = Spaltenprofil(
+                str(name),
+                str(spalte.dtype),
+                _fachlicher_datentyp(spalte, Profiltyp.SONSTIG),
+                Profiltyp.SONSTIG,
+                fehlwerte,
+                eindeutige,
+            )
+    auswertungen = tuple(
+        _indikatorauswertung(
+            spaltenname=str(name),
+            spalte=spalte,
+            regulaer=regulaer,
+            technischer_datentyp=basisprofil.technischer_datentyp,
+            bedingung=bedingung,
         )
-    if (
-        spalte.dtype == "object"
-        or isinstance(spalte.dtype, pd.StringDtype)
-        or str(spalte.dtype) in {"category", "bool"}
-    ):
-        kategorial = _kategoriales_profil(spalte, regulaer)
-        return Spaltenprofil(
-            str(name),
-            str(spalte.dtype),
-            _fachlicher_datentyp(spalte, Profiltyp.KATEGORIAL),
-            Profiltyp.KATEGORIAL,
-            fehlwerte,
-            eindeutige,
-            kategorial=kategorial,
-        )
-    return Spaltenprofil(
-        str(name),
-        str(spalte.dtype),
-        _fachlicher_datentyp(spalte, Profiltyp.SONSTIG),
-        Profiltyp.SONSTIG,
-        fehlwerte,
-        eindeutige,
+        for bedingung in indikatorbedingungen
     )
+    return replace(basisprofil, indikatorauswertungen=auswertungen)
 
 
 def erstelle_datenprofil(
-    daten: pd.DataFrame, zusaetzliche_platzhalter: tuple[str, ...] = ()
+    daten: pd.DataFrame,
+    zusaetzliche_platzhalter: tuple[str, ...] = (),
+    indikatorbedingungen: tuple[Indikatorbedingung, ...] = (),
 ) -> Datenprofil:
     """Berechnet ein nachvollziehbares Profil ohne Mutation des DataFrames."""
+    spaltennamen = {str(name) for name in daten.columns}
+    unbekannte_spalten = {
+        bedingung.spaltenname
+        for bedingung in indikatorbedingungen
+        if bedingung.spaltenname not in spaltennamen
+    }
+    if unbekannte_spalten:
+        raise Domaenenfehler(
+            "Indikatorbedingungen verweisen auf unbekannte Spalten: "
+            + ", ".join(sorted(unbekannte_spalten))
+        )
     profile = tuple(
-        _spaltenprofil(name, daten.iloc[:, position], zusaetzliche_platzhalter)
+        _spaltenprofil(
+            name,
+            daten.iloc[:, position],
+            zusaetzliche_platzhalter,
+            tuple(
+                bedingung
+                for bedingung in indikatorbedingungen
+                if bedingung.spaltenname == str(name)
+            ),
+        )
         for position, name in enumerate(daten.columns)
     )
     typen = Counter(profil.profiltyp for profil in profile)

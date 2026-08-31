@@ -1,5 +1,6 @@
 """Framework-Schritt 9: K mit Domänenwissen ergänzen und fachlich validieren."""
 
+from collections import defaultdict
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -7,6 +8,7 @@ import streamlit as st
 
 from framework_mvp.application.modellvalidierung_service import (
     ModellvalidierungService,
+    Validierungsarbeitsfassung,
 )
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.domain.exceptions import Domaenenfehler
@@ -34,134 +36,215 @@ def _aktive_ids() -> tuple[UUID, UUID, UUID, UUID] | None:
         return None
 
 
-def _bestandteile_anzeigen(k: dict[str, Any]) -> None:
-    st.subheader("2. Übersicht der elf Modellbestandteile")
+def _bestandteile_anzeigen(k: dict[str, Any], o: dict[str, Any]) -> None:
+    st.subheader("2. Übersicht der 16 Modellbestandteile")
+    st.markdown("**Vorläufiges Modell K**")
     st.caption(
-        "Die datengetrieben übernommenen Informationen aus K bleiben unverändert und "
-        "schreibgeschützt sichtbar."
+        "K ist schreibgeschützt. Die Detailbearbeitung konzentriert sich anschließend auf O."
     )
-    for index, bestandteil in enumerate(k["modellbestandteile"], 1):
-        with st.expander(f"{index}. {bestandteil['bezeichnung']}"):
-            st.write(f"**Status in K:** {bestandteil['status']}")
-            st.write(
-                "**Quellen:** " + (", ".join(bestandteil.get("verwendete_quellen", [])) or "keine")
-            )
-            if not bestandteil.get("informationen"):
-                st.info("Keine direkt aus den Eingangsartefakten übernommene Information.")
-            for information in bestandteil.get("informationen", []):
-                st.markdown(
-                    f"**{information['herkunftsartefakt']} · `{information['strukturreferenz']}`**"
-                )
-                st.json(information["wert"], expanded=False)
-
-
-def _technische_details(basis: Any) -> None:
-    with st.expander("Technische Details", expanded=False):
-        st.json(
+    offene_anzahl: dict[str, int] = defaultdict(int)
+    for offen in o.get("offene_eintraege", []):
+        offene_anzahl[str(offen["bestandteil_id"])] += 1
+    st.dataframe(
+        [
             {
-                "modellableitungs_id": str(basis.ableitung.modellableitungs_id),
-                "projekt_id": str(basis.ableitung.projekt_id),
-                "k_id": str(basis.ableitung.k_id),
-                "k_sha256": basis.ableitung.k_sha256,
-                "o_id": str(basis.ableitung.o_id),
-                "o_sha256": basis.ableitung.o_sha256,
-                "eingabefingerabdruck": basis.eingabefingerabdruck,
-            },
-            expanded=False,
-        )
-
-
-def _menschliche_eingaben(
-    k: dict[str, Any], o: dict[str, Any], *, widget_praefix: str
-) -> tuple[
-    tuple[BehandlungOffenerEintrag, ...],
-    tuple[ZusaetzlicheModellanpassung, ...],
-    Gesamtvalidierungsstatus,
-    str,
-    dict[str, Any],
-]:
-    st.subheader("3. Offene oder fachlich unsichere Punkte bearbeiten")
-    behandlungen: list[BehandlungOffenerEintrag] = []
-    roh_behandlungen: list[dict[str, str]] = []
-    entscheidungsoptionen = [
-        "noch_nicht_behandelt",
-        *[wert.value for wert in Offenheitsentscheidung],
-    ]
-    for index, offen in enumerate(o.get("offene_eintraege", []), 1):
-        st.markdown(
-            f"**{index}. {offen['bestandteil_id']} · {offen['kategorie']}**  \n"
-            f"{offen['begruendung']}"
-        )
-        entscheidung = st.selectbox(
-            "Fachliche Entscheidung",
-            entscheidungsoptionen,
-            key=(f"{widget_praefix}_schritt9_entscheidung_{offen['offener_eintrag_id']}"),
-            format_func=lambda wert: {
-                "noch_nicht_behandelt": "Noch nicht behandelt",
-                "bestätigt": "bestätigt",
-                "ergänzt_oder_angepasst": "ergänzt oder angepasst",
-                "nicht_anwendbar": "nicht anwendbar",
-            }[wert],
-        )
-        ergaenzung = st.text_area(
-            "Fachliche Ergänzung beziehungsweise Begründung",
-            key=(f"{widget_praefix}_schritt9_ergaenzung_{offen['offener_eintrag_id']}"),
-        ).strip()
-        roh_behandlungen.append(
-            {
-                "offener_eintrag_id": offen["offener_eintrag_id"],
-                "entscheidung": entscheidung,
-                "ergaenzung": ergaenzung,
+                "Modellbestandteil": wert["bezeichnung"],
+                "Status in K": wert["status"],
+                "Informationen": len(wert.get("informationen", [])),
+                "Offene Punkte in O": offene_anzahl[wert["bestandteil_id"]],
             }
+            for wert in k["modellbestandteile"]
+        ],
+        hide_index=True,
+        width="stretch",
+    )
+    with st.expander("Schreibgeschützte Details aus K", expanded=False):
+        bezeichnungen = {wert["bestandteil_id"]: wert for wert in k["modellbestandteile"]}
+        auswahl = st.selectbox(
+            "Modellbestandteil anzeigen",
+            list(bezeichnungen),
+            format_func=lambda wert: bezeichnungen[wert]["bezeichnung"],
+            key="schritt9_k_detailauswahl",
         )
-        if entscheidung != "noch_nicht_behandelt" and ergaenzung:
-            behandlungen.append(
-                BehandlungOffenerEintrag(
-                    offen["offener_eintrag_id"],
-                    ModellbestandteilId(offen["bestandteil_id"]),
-                    Offenheitskategorie(offen["kategorie"]),
-                    offen["begruendung"],
-                    Offenheitsentscheidung(entscheidung),
-                    ergaenzung,
-                )
+        bestandteil = bezeichnungen[auswahl]
+        st.write(f"Status in K: {bestandteil['status']}")
+        for information in bestandteil.get("informationen", []):
+            st.write(
+                f"{information['herkunftsartefakt']} · {information['strukturreferenz']}: "
+                f"{information['wert']}"
             )
-    if not o.get("offene_eintraege"):
-        st.success("O enthält keine offenen Einträge; es ist keine Einzelbehandlung erforderlich.")
+        if not bestandteil.get("informationen"):
+            st.info("Keine direkt aus den Eingangsartefakten übernommene Information.")
 
-    st.subheader("4. Fachliche Gesamtvalidierung")
+
+def _technische_details(basis: Any, arbeitsfassung: Validierungsarbeitsfassung | None) -> None:
+    with st.expander("Technische Details", expanded=False):
+        details = {
+            "modellableitungs_id": str(basis.ableitung.modellableitungs_id),
+            "projekt_id": str(basis.ableitung.projekt_id),
+            "k_id": str(basis.ableitung.k_id),
+            "k_sha256": basis.ableitung.k_sha256,
+            "o_id": str(basis.ableitung.o_id),
+            "o_sha256": basis.ableitung.o_sha256,
+            "eingabefingerabdruck": basis.eingabefingerabdruck,
+        }
+        if arbeitsfassung is not None:
+            details["entscheidungsfingerabdruck"] = arbeitsfassung.entscheidungsfingerabdruck
+        st.json(details, expanded=False)
+
+
+def _entscheidungsoptionen(kategorie: Offenheitskategorie) -> list[str]:
+    optionen = [
+        "noch_nicht_behandelt",
+        Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST.value,
+        Offenheitsentscheidung.NICHT_ANWENDBAR.value,
+    ]
+    if kategorie is Offenheitskategorie.FACHLICH_UNSICHER:
+        optionen.insert(1, Offenheitsentscheidung.BESTAETIGT.value)
+    return optionen
+
+
+def _offene_punkte_bearbeiten(
+    k: dict[str, Any], o: dict[str, Any], *, widget_praefix: str
+) -> tuple[tuple[BehandlungOffenerEintrag, ...], list[dict[str, str]]]:
+    st.subheader("3. Offene und fachlich unsichere Punkte bearbeiten")
+    st.caption(
+        "O bleibt unverändert. Jede Behandlung wird separat als menschliche Entscheidung geführt."
+    )
+    behandlungen: list[BehandlungOffenerEintrag] = []
+    roh: list[dict[str, str]] = []
+    offene_nach_bestandteil: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for offen in o.get("offene_eintraege", []):
+        offene_nach_bestandteil[str(offen["bestandteil_id"])].append(offen)
     bezeichnungen = {
         wert["bestandteil_id"]: wert["bezeichnung"] for wert in k["modellbestandteile"]
     }
-    angepasste_ids = st.multiselect(
-        "Zusätzlich fachlich anzupassende Bestandteile",
-        list(bezeichnungen),
-        format_func=lambda wert: bezeichnungen[wert],
-        key=f"{widget_praefix}_zusaetzliche_bestandteile",
-        help=(
-            "Hier können bei Anpassungsbedarf auch zuvor nicht offene Bestandteile ergänzt "
-            "werden. K selbst wird dadurch nicht überschrieben."
-        ),
-    )
-    anpassungen: list[ZusaetzlicheModellanpassung] = []
-    roh_anpassungen: list[dict[str, str]] = []
-    for bestandteil_id in angepasste_ids:
-        inhalt = st.text_area(
-            f"Fachlicher Inhalt · {bezeichnungen[bestandteil_id]}",
-            key=f"schritt9_anpassung_inhalt_{bestandteil_id}",
-        ).strip()
-        begruendung = st.text_input(
-            f"Begründung · {bezeichnungen[bestandteil_id]}",
-            key=f"schritt9_anpassung_begruendung_{bestandteil_id}",
-        ).strip()
-        roh_anpassungen.append(
-            {"bestandteil_id": bestandteil_id, "inhalt": inhalt, "begruendung": begruendung}
-        )
-        if inhalt and begruendung:
-            anpassungen.append(
-                ZusaetzlicheModellanpassung(
-                    ModellbestandteilId(bestandteil_id), inhalt, begruendung
+    nummer = 0
+    for bestandteil_id, bezeichnung in bezeichnungen.items():
+        offene = offene_nach_bestandteil.get(bestandteil_id, [])
+        if not offene:
+            continue
+        with st.expander(f"{bezeichnung} · {len(offene)} offene Punkte", expanded=False):
+            for offen in offene:
+                nummer += 1
+                kategorie = Offenheitskategorie(offen["kategorie"])
+                st.markdown(f"**Offener Punkt {nummer} · {kategorie.value}**")
+                st.write(offen["begruendung"])
+                belege = offen.get("belegreferenzen", [])
+                st.caption(
+                    f"Herkunft: {offen.get('kennzeichnungsherkunft', 'nicht angegeben')} · "
+                    f"Belege: {', '.join(map(str, belege)) if belege else 'keine'}"
                 )
+                entscheidung = st.selectbox(
+                    "Fachliche Entscheidung",
+                    _entscheidungsoptionen(kategorie),
+                    key=f"{widget_praefix}_entscheidung_{offen['offener_eintrag_id']}",
+                    format_func=lambda wert: {
+                        "noch_nicht_behandelt": "Noch nicht behandelt",
+                        "bestätigt": "bestätigt",
+                        "ergänzt_oder_angepasst": "ergänzt oder angepasst",
+                        "nicht_anwendbar": "nicht anwendbar",
+                    }[wert],
+                )
+                inhalt = ""
+                if entscheidung == Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST.value:
+                    inhalt = st.text_area(
+                        "Fachlicher Inhalt für K*",
+                        key=f"{widget_praefix}_inhalt_{offen['offener_eintrag_id']}",
+                    ).strip()
+                begruendung = ""
+                if entscheidung != "noch_nicht_behandelt":
+                    begruendung = st.text_area(
+                        "Begründung der fachlichen Entscheidung",
+                        key=f"{widget_praefix}_begruendung_{offen['offener_eintrag_id']}",
+                    ).strip()
+                roh.append(
+                    {
+                        "offener_eintrag_id": offen["offener_eintrag_id"],
+                        "bestandteil_id": bestandteil_id,
+                        "entscheidung": entscheidung,
+                        "fachlicher_inhalt": inhalt,
+                        "begruendung": begruendung,
+                    }
+                )
+                vollstaendig = bool(begruendung) and (
+                    entscheidung != Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST.value
+                    or bool(inhalt)
+                )
+                if entscheidung != "noch_nicht_behandelt" and vollstaendig:
+                    behandlungen.append(
+                        BehandlungOffenerEintrag(
+                            offen["offener_eintrag_id"],
+                            ModellbestandteilId(bestandteil_id),
+                            kategorie,
+                            offen["begruendung"],
+                            Offenheitsentscheidung(entscheidung),
+                            inhalt,
+                            begruendung,
+                        )
+                    )
+    if not o.get("offene_eintraege"):
+        st.success(
+            "O enthält keine offenen Einträge; eine Einzelbehandlung ist nicht erforderlich."
+        )
+    return tuple(behandlungen), roh
+
+
+def _gesamtvalidierung(
+    k: dict[str, Any], *, widget_praefix: str
+) -> tuple[
+    tuple[ZusaetzlicheModellanpassung, ...],
+    list[dict[str, str]],
+    Gesamtvalidierungsstatus,
+    str,
+    bool,
+]:
+    st.subheader("4. Fachliche Gesamtvalidierung")
+    st.markdown("**Weitere fachliche Anpassung (optional)**")
+    anzahl = int(
+        st.number_input(
+            "Anzahl zusätzlicher Modellanpassungen",
+            min_value=0,
+            max_value=50,
+            value=0,
+            step=1,
+            key=f"{widget_praefix}_anpassungsanzahl",
+            help="Mehrere Einträge je Modellbestandteil sind möglich.",
+        )
+    )
+    bezeichnungen = {
+        wert["bestandteil_id"]: wert["bezeichnung"] for wert in k["modellbestandteile"]
+    }
+    anpassungen: list[ZusaetzlicheModellanpassung] = []
+    roh: list[dict[str, str]] = []
+    for index in range(anzahl):
+        with st.expander(f"Zusätzliche Anpassung {index + 1}", expanded=True):
+            bestandteil_id = st.selectbox(
+                "Modellbestandteil",
+                list(bezeichnungen),
+                format_func=lambda wert: bezeichnungen[wert],
+                key=f"{widget_praefix}_anpassung_{index}_bestandteil",
             )
+            assert bestandteil_id is not None
+            inhalt = st.text_area(
+                "Fachlicher Inhalt", key=f"{widget_praefix}_anpassung_{index}_inhalt"
+            ).strip()
+            begruendung = st.text_area(
+                "Begründung", key=f"{widget_praefix}_anpassung_{index}_begruendung"
+            ).strip()
+            roh.append(
+                {
+                    "bestandteil_id": bestandteil_id,
+                    "fachlicher_inhalt": inhalt,
+                    "begruendung": begruendung,
+                }
+            )
+            if inhalt and begruendung:
+                anpassungen.append(
+                    ZusaetzlicheModellanpassung(
+                        ModellbestandteilId(bestandteil_id), inhalt, begruendung
+                    )
+                )
     status = Gesamtvalidierungsstatus(
         st.radio(
             "Status der fachlichen Gesamtvalidierung",
@@ -170,64 +253,142 @@ def _menschliche_eingaben(
                 Gesamtvalidierungsstatus.FACHLICH_VALIDIERT.value,
             ],
             format_func=lambda wert: {
-                "anpassungsbedarf": "Anpassungsbedarf",
+                "anpassungsbedarf": "Anpassungsbedarf – Arbeitsstand fortsetzen",
                 "fachlich_validiert": "fachlich validiert",
             }[wert],
+            key=f"{widget_praefix}_gesamtstatus",
         )
     )
-    vermerk = st.text_area("Optionaler Validierungsvermerk").strip()
-    roh = {
-        "behandlungen": roh_behandlungen,
-        "anpassungen": roh_anpassungen,
-        "gesamtvalidierungsstatus": status.value,
-        "validierungsvermerk": vermerk,
-    }
-    return tuple(behandlungen), tuple(anpassungen), status, vermerk, roh
+    vermerk = st.text_area(
+        "Optionaler Validierungsvermerk", key=f"{widget_praefix}_validierungsvermerk"
+    ).strip()
+    bestaetigt = st.checkbox(
+        "Ich habe das vollständige konzeptionelle Modell einschließlich der ergänzten "
+        "und angepassten Inhalte fachlich geprüft.",
+        key=f"{widget_praefix}_gesamtbestaetigung",
+    )
+    return tuple(anpassungen), roh, status, vermerk, bestaetigt
+
+
+def _fehlende_pflichtentscheidungen(
+    o: dict[str, Any],
+    roh_behandlungen: list[dict[str, str]],
+    roh_anpassungen: list[dict[str, str]],
+    status: Gesamtvalidierungsstatus,
+    bestaetigt: bool,
+) -> list[str]:
+    fehlend: list[str] = []
+    for index, (offen, behandlung) in enumerate(
+        zip(o.get("offene_eintraege", []), roh_behandlungen, strict=True), 1
+    ):
+        bezug = f"Offener Punkt {index} ({offen['bestandteil_id']})"
+        if behandlung["entscheidung"] == "noch_nicht_behandelt":
+            fehlend.append(f"{bezug}: Fachliche Entscheidung")
+            continue
+        if (
+            behandlung["entscheidung"] == Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST.value
+            and not behandlung["fachlicher_inhalt"]
+        ):
+            fehlend.append(f"{bezug}: Fachlicher Inhalt für K*")
+        if not behandlung["begruendung"]:
+            fehlend.append(f"{bezug}: Begründung der fachlichen Entscheidung")
+    for index, anpassung in enumerate(roh_anpassungen, 1):
+        if not anpassung["fachlicher_inhalt"]:
+            fehlend.append(f"Zusätzliche Anpassung {index}: Fachlicher Inhalt")
+        if not anpassung["begruendung"]:
+            fehlend.append(f"Zusätzliche Anpassung {index}: Begründung")
+    if status is not Gesamtvalidierungsstatus.FACHLICH_VALIDIERT:
+        fehlend.append("Status der fachlichen Gesamtvalidierung: fachlich validiert")
+    if not bestaetigt:
+        fehlend.append("Ausdrückliche fachliche Gesamtbestätigung")
+    return fehlend
+
+
+def _bereitschaft_und_vorschau(
+    k: dict[str, Any],
+    o: dict[str, Any],
+    behandlungen: tuple[BehandlungOffenerEintrag, ...],
+    anpassungen: tuple[ZusaetzlicheModellanpassung, ...],
+    fehlend: list[str],
+) -> None:
+    offene_insgesamt = len(o.get("offene_eintraege", []))
+    st.write(
+        f"Bereitschaft: Offene Punkte insgesamt: {offene_insgesamt} · "
+        f"vollständig behandelt: {len(behandlungen)} · "
+        f"noch zu behandeln: {offene_insgesamt - len(behandlungen)} · "
+        f"zusätzliche Anpassungen: {len(anpassungen)}"
+    )
+    if fehlend:
+        st.info("Status: Noch nicht finalisierbar.")
+        with st.expander("Noch offene Pflichtangaben", expanded=False):
+            for feld in fehlend:
+                st.write(f"- {feld}")
+    else:
+        st.success(
+            "Alle offenen Punkte sind behandelt. Die fachliche Gesamtvalidierung kann "
+            "abgeschlossen werden."
+        )
+    st.caption("K*-Vorschau: ursprüngliches K plus separat ausgewiesene menschliche Einträge")
+    behandlungen_nach_id: dict[ModellbestandteilId, list[BehandlungOffenerEintrag]] = defaultdict(
+        list
+    )
+    anpassungen_nach_id: dict[ModellbestandteilId, list[ZusaetzlicheModellanpassung]] = defaultdict(
+        list
+    )
+    for wert in behandlungen:
+        behandlungen_nach_id[wert.bestandteil_id].append(wert)
+    for wert in anpassungen:
+        anpassungen_nach_id[wert.bestandteil_id].append(wert)
+
+    def menschliche_vorschau(bestandteil_id: ModellbestandteilId) -> str:
+        texte = [
+            (f"{wert.entscheidung.value}: {wert.fachlicher_inhalt or wert.begruendung}")
+            for wert in behandlungen_nach_id[bestandteil_id]
+        ]
+        texte.extend(
+            f"weitere Anpassung: {wert.fachlicher_inhalt}"
+            for wert in anpassungen_nach_id[bestandteil_id]
+        )
+        return " · ".join(texte) or "keine"
+
+    st.dataframe(
+        [
+            {
+                "Modellbestandteil": wert["bezeichnung"],
+                "Original K": f"{len(wert.get('informationen', []))} Informationen",
+                "O-Behandlungen": len(
+                    behandlungen_nach_id[ModellbestandteilId(wert["bestandteil_id"])]
+                ),
+                "Weitere Anpassungen": len(
+                    anpassungen_nach_id[ModellbestandteilId(wert["bestandteil_id"])]
+                ),
+                "Menschlicher Inhalt / Entscheidung": menschliche_vorschau(
+                    ModellbestandteilId(wert["bestandteil_id"])
+                ),
+            }
+            for wert in k["modellbestandteile"]
+        ],
+        hide_index=True,
+        width="stretch",
+    )
 
 
 def _gespeichertes_k_stern(
-    service: ModellvalidierungService,
-    validierungslauf_id: UUID,
-    projekt_id: UUID,
+    service: ModellvalidierungService, validierungslauf_id: UUID, projekt_id: UUID
 ) -> None:
     validierung, k_stern = service.laden(validierungslauf_id)
     if validierung.projekt_id != projekt_id:
         raise Domaenenfehler("Der aktive Validierungslauf gehört nicht zum aktiven Projekt.")
-    st.success("K* ist fachlich validiert und gespeichert.")
+    if k_stern.get("historischer_lesemodus"):
+        st.warning("Dieses historische K* ist nur lesbar und keine aktuelle Schritt-10-Grundlage.")
+    else:
+        st.success("K* ist fachlich validiert und gespeichert.")
     st.download_button(
         "Validiertes konzeptionelles Modell K* herunterladen",
         service.k_stern_download_laden(validierungslauf_id),
         "validiertes-konzeptionelles-modell-k-stern.json",
         "application/json",
     )
-
-
-def _fehlende_pflichtentscheidungen(
-    k: dict[str, Any], o: dict[str, Any], roh: dict[str, Any]
-) -> list[str]:
-    """Benennt unvollständige fachliche Eingaben mit ihrem sichtbaren Feldnamen."""
-    fehlend: list[str] = []
-    offene_eintraege = o.get("offene_eintraege", [])
-    for index, (offen, behandlung) in enumerate(
-        zip(offene_eintraege, roh["behandlungen"], strict=True), 1
-    ):
-        bezug = f"Offener Punkt {index} ({offen['bestandteil_id']})"
-        if behandlung["entscheidung"] == "noch_nicht_behandelt":
-            fehlend.append(f"{bezug}: Fachliche Entscheidung")
-        if not behandlung["ergaenzung"]:
-            fehlend.append(f"{bezug}: Fachliche Ergänzung beziehungsweise Begründung")
-    bezeichnungen = {
-        wert["bestandteil_id"]: wert["bezeichnung"] for wert in k["modellbestandteile"]
-    }
-    for anpassung in roh["anpassungen"]:
-        bezeichnung = bezeichnungen.get(anpassung["bestandteil_id"], anpassung["bestandteil_id"])
-        if not anpassung["inhalt"]:
-            fehlend.append(f"{bezeichnung}: Fachlicher Inhalt")
-        if not anpassung["begruendung"]:
-            fehlend.append(f"{bezeichnung}: Begründung")
-    if roh["gesamtvalidierungsstatus"] != Gesamtvalidierungsstatus.FACHLICH_VALIDIERT.value:
-        fehlend.append("Status der fachlichen Gesamtvalidierung: fachlich validiert")
-    return fehlend
 
 
 def zeige_modellvalidierung_seite(
@@ -269,51 +430,51 @@ def zeige_modellvalidierung_seite(
         "K und O wurden einschließlich Projektbindung, Versionen, Prüfsummen und "
         "gegenseitiger Referenz erneut validiert."
     )
-    _bestandteile_anzeigen(basis.k)
-    _technische_details(basis)
-    behandlungen, anpassungen, status, vermerk, roh = _menschliche_eingaben(
-        basis.k,
-        basis.o,
-        widget_praefix=f"schritt9_{projekt_id}_{modellableitungs_id}",
+    _bestandteile_anzeigen(basis.k, basis.o)
+    praefix = f"schritt9_{projekt_id}_{modellableitungs_id}"
+    behandlungen, roh_behandlungen = _offene_punkte_bearbeiten(
+        basis.k, basis.o, widget_praefix=praefix
     )
-    st.subheader("5. K* speichern und zu Schritt 10")
-    if st.button(
-        "Eingaben validieren, K* speichern und zu Schritt 10",
-        type="primary",
-    ):
-        fehlend = _fehlende_pflichtentscheidungen(basis.k, basis.o, roh)
-        if fehlend:
-            st.error("Bitte vervollständigen Sie folgende Pflichtentscheidungen:")
-            for feld in fehlend:
-                st.write(f"- {feld}")
-            return
+    anpassungen, roh_anpassungen, status, vermerk, bestaetigt = _gesamtvalidierung(
+        basis.k, widget_praefix=praefix
+    )
+    fehlend = _fehlende_pflichtentscheidungen(
+        basis.o, roh_behandlungen, roh_anpassungen, status, bestaetigt
+    )
+    arbeitsfassung: Validierungsarbeitsfassung | None = None
+    if not fehlend:
         try:
-            arbeitsfassung = service.arbeitsfassung_erstellen(
-                projekt_id=projekt_id,
-                modellableitungs_id=modellableitungs_id,
-                erwartete_k_id=k_id,
-                erwartete_o_id=o_id,
+            arbeitsfassung = service.arbeitsfassung_aus_grundlage(
+                basis,
                 behandlungen=behandlungen,
                 zusaetzliche_anpassungen=anpassungen,
                 gesamtvalidierungsstatus=status,
                 validierungsvermerk=vermerk,
+                gesamtpruefung_bestaetigt=bestaetigt,
             )
-            if not arbeitsfassung.finalisierbar:
-                st.error(
-                    "Die Eingaben sind noch nicht finalisierbar. Prüfen Sie alle offenen "
-                    "Punkte und den Status der fachlichen Gesamtvalidierung."
-                )
-                return
+        except (ValueError, Domaenenfehler, Importintegritaetsfehler, KeyError) as fehler:
+            fehlend.append(str(fehler))
+    _bereitschaft_und_vorschau(basis.k, basis.o, behandlungen, anpassungen, fehlend)
+    _technische_details(basis, arbeitsfassung)
+    st.subheader("5. K* speichern und zu Schritt 10")
+    if st.button(
+        "K* fachlich validieren und zu Schritt 10",
+        type="primary",
+        disabled=bool(fehlend) or arbeitsfassung is None,
+    ):
+        assert arbeitsfassung is not None
+        try:
             validierung = service.speichern(
-                arbeitsfassung,
-                validierungslauf_id=uuid4(),
-                k_stern_id=uuid4(),
-                fachlich_bestaetigt=True,
+                arbeitsfassung, validierungslauf_id=uuid4(), k_stern_id=uuid4()
             )
             st.session_state.aktuelle_validierungslauf_id = str(validierung.validierungslauf_id)
             st.session_state.aktuelle_k_stern_id = str(validierung.k_stern_id)
-            st.session_state.pop("schritt10_ausgabe", None)
-            st.session_state.pop("schritt10_ausgabe_signatur", None)
+            for schluessel in (
+                "schritt10_ausgabe",
+                "schritt10_ausgabe_signatur",
+                "schritt10_html_medienreferenz",
+            ):
+                st.session_state.pop(schluessel, None)
             framework_bereich_oeffnen(schritt=10, projekt_id=projekt_id)
         except (ValueError, Domaenenfehler, Importintegritaetsfehler, KeyError) as fehler:
             st.error(f"K* konnte nicht gespeichert werden: {fehler}")

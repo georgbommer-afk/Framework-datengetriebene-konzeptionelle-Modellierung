@@ -32,7 +32,8 @@ from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
 
 K_STERN_ARTEFAKTART = "validiertes_konzeptionelles_modell_k_stern"
-K_STERN_ARTEFAKTVERSION = 1
+K_STERN_ARTEFAKTVERSION = 2
+HISTORISCHE_K_STERN_ARTEFAKTVERSIONEN = frozenset({1})
 
 
 def _normalisieren(wert: Any) -> Any:
@@ -62,6 +63,19 @@ def _sha(wert: Any) -> str:
     return hashlib.sha256(_json_bytes(wert, eingerueckt=False)).hexdigest()
 
 
+def _wirkung_auf_k(entscheidung: Offenheitsentscheidung | str) -> str:
+    entscheidungswert = Offenheitsentscheidung(entscheidung)
+    return {
+        Offenheitsentscheidung.BESTAETIGT: "fachliche_bestaetigung_des_bestehenden_k_inhalts",
+        Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST: (
+            "menschliche_ergaenzung_oder_korrektur_fuer_k_stern"
+        ),
+        Offenheitsentscheidung.NICHT_ANWENDBAR: (
+            "offener_punkt_ohne_neuen_modellinhalt_abgeschlossen"
+        ),
+    }[entscheidungswert]
+
+
 @dataclass(frozen=True, slots=True)
 class Modellvalidierungsgrundlage:
     """Erneut validiertes, tief kopiertes und untrennbares K/O-Paar."""
@@ -81,6 +95,7 @@ class Validierungsarbeitsfassung:
     zusaetzliche_anpassungen: tuple[ZusaetzlicheModellanpassung, ...]
     gesamtvalidierungsstatus: Gesamtvalidierungsstatus
     validierungsvermerk: str
+    gesamtpruefung_bestaetigt: bool
     entscheidungsfingerabdruck: str
     unbehandelte_offene_eintrag_ids: tuple[str, ...]
 
@@ -89,6 +104,7 @@ class Validierungsarbeitsfassung:
         return (
             not self.unbehandelte_offene_eintrag_ids
             and self.gesamtvalidierungsstatus is Gesamtvalidierungsstatus.FACHLICH_VALIDIERT
+            and self.gesamtpruefung_bestaetigt
         )
 
 
@@ -145,6 +161,7 @@ class ModellvalidierungService:
         zusaetzliche_anpassungen: tuple[ZusaetzlicheModellanpassung, ...],
         gesamtvalidierungsstatus: Gesamtvalidierungsstatus,
         validierungsvermerk: str,
+        gesamtpruefung_bestaetigt: bool = False,
     ) -> str:
         behandlungen_normalisiert = sorted(
             (_normalisieren(wert) for wert in behandlungen),
@@ -164,6 +181,7 @@ class ModellvalidierungService:
                 "zusaetzliche_anpassungen": anpassungen_normalisiert,
                 "gesamtvalidierungsstatus": gesamtvalidierungsstatus,
                 "validierungsvermerk": validierungsvermerk.strip(),
+                "gesamtpruefung_bestaetigt": gesamtpruefung_bestaetigt,
             }
         )
 
@@ -178,6 +196,7 @@ class ModellvalidierungService:
         zusaetzliche_anpassungen: tuple[ZusaetzlicheModellanpassung, ...] = (),
         gesamtvalidierungsstatus: Gesamtvalidierungsstatus,
         validierungsvermerk: str = "",
+        gesamtpruefung_bestaetigt: bool = False,
     ) -> Validierungsarbeitsfassung:
         """Prüft menschliche Eingaben, ohne K, O oder ein K*-Artefakt zu verändern."""
         grundlage = self.grundlage_laden(
@@ -186,6 +205,26 @@ class ModellvalidierungService:
             erwartete_k_id=erwartete_k_id,
             erwartete_o_id=erwartete_o_id,
         )
+        return self.arbeitsfassung_aus_grundlage(
+            grundlage,
+            behandlungen=behandlungen,
+            zusaetzliche_anpassungen=zusaetzliche_anpassungen,
+            gesamtvalidierungsstatus=gesamtvalidierungsstatus,
+            validierungsvermerk=validierungsvermerk,
+            gesamtpruefung_bestaetigt=gesamtpruefung_bestaetigt,
+        )
+
+    def arbeitsfassung_aus_grundlage(
+        self,
+        grundlage: Modellvalidierungsgrundlage,
+        *,
+        behandlungen: tuple[BehandlungOffenerEintrag, ...],
+        zusaetzliche_anpassungen: tuple[ZusaetzlicheModellanpassung, ...] = (),
+        gesamtvalidierungsstatus: Gesamtvalidierungsstatus,
+        validierungsvermerk: str = "",
+        gesamtpruefung_bestaetigt: bool = False,
+    ) -> Validierungsarbeitsfassung:
+        """Prüft Eingaben gegen eine bereits validierte K/O-Grundlage."""
         offene_nach_id = {
             str(wert["offener_eintrag_id"]): wert
             for wert in grundlage.o.get("offene_eintraege", [])
@@ -211,13 +250,14 @@ class ModellvalidierungService:
             anpassung.bestandteil_id not in gueltige_bestandteile
             for anpassung in zusaetzliche_anpassungen
         ):
-            raise Domaenenfehler("Eine Anpassung gehört zu keinem der elf Modellbestandteile.")
+            raise Domaenenfehler("Eine Anpassung gehört zu keinem der 16 Modellbestandteile.")
         unbehandelt = tuple(wert for wert in offene_nach_id if wert not in behandelte_ids)
         fingerabdruck = self.entscheidungsfingerabdruck(
             behandlungen,
             zusaetzliche_anpassungen,
             gesamtvalidierungsstatus,
             validierungsvermerk,
+            gesamtpruefung_bestaetigt,
         )
         return Validierungsarbeitsfassung(
             grundlage,
@@ -225,6 +265,7 @@ class ModellvalidierungService:
             zusaetzliche_anpassungen,
             gesamtvalidierungsstatus,
             validierungsvermerk.strip(),
+            gesamtpruefung_bestaetigt,
             fingerabdruck,
             unbehandelt,
         )
@@ -241,9 +282,14 @@ class ModellvalidierungService:
                         "eintragstyp": MenschlicherEintragstyp.BEHANDLUNG_OFFENER_EINTRAG,
                         "offener_eintrag_id": behandlung.offener_eintrag_id,
                         "entscheidung": behandlung.entscheidung,
+                        "fachlicher_inhalt": behandlung.fachlicher_inhalt,
+                        "begruendung": behandlung.begruendung,
                         "fachliche_ergaenzung_oder_begruendung": (
-                            behandlung.fachliche_ergaenzung_oder_begruendung
+                            behandlung.fachlicher_inhalt or behandlung.begruendung
                         ),
+                        "modellinhalt_erzeugt": behandlung.entscheidung
+                        is Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST,
+                        "wirkung_auf_k": _wirkung_auf_k(behandlung.entscheidung),
                         "menschliche_entscheidung": True,
                     }
                 )
@@ -255,6 +301,8 @@ class ModellvalidierungService:
                         "anpassungsnummer": index,
                         "fachlicher_inhalt": anpassung.fachlicher_inhalt,
                         "begruendung": anpassung.begruendung,
+                        "wirkung_auf_k": "menschliche_ergaenzung_oder_korrektur_fuer_k_stern",
+                        "fuer_k_stern_massgeblich": True,
                         "menschliche_entscheidung": True,
                     }
                 )
@@ -266,10 +314,9 @@ class ModellvalidierungService:
         *,
         validierungslauf_id: UUID,
         k_stern_id: UUID,
-        fachlich_bestaetigt: bool,
     ) -> Modellvalidierung:
         """Erzeugt und speichert K* erst nach vollständiger fachlicher Validierung."""
-        if not fachlich_bestaetigt:
+        if not arbeitsfassung.gesamtpruefung_bestaetigt:
             raise Domaenenfehler("K* erfordert eine bewusste fachliche Bestätigung.")
         if arbeitsfassung.unbehandelte_offene_eintrag_ids:
             raise Domaenenfehler("Vor K* müssen alle Einträge aus O behandelt werden.")
@@ -286,13 +333,32 @@ class ModellvalidierungService:
         )
         if basis.eingabefingerabdruck != arbeitsfassung.grundlage.eingabefingerabdruck:
             raise Domaenenfehler("K oder O wurde verändert; die Arbeitsfassung ist ungültig.")
-        aktuell = self.entscheidungsfingerabdruck(
+        erneut_geprueft = self.arbeitsfassung_aus_grundlage(
+            basis,
+            behandlungen=arbeitsfassung.behandlungen,
+            zusaetzliche_anpassungen=arbeitsfassung.zusaetzliche_anpassungen,
+            gesamtvalidierungsstatus=arbeitsfassung.gesamtvalidierungsstatus,
+            validierungsvermerk=arbeitsfassung.validierungsvermerk,
+            gesamtpruefung_bestaetigt=arbeitsfassung.gesamtpruefung_bestaetigt,
+        )
+        aktuell = erneut_geprueft.entscheidungsfingerabdruck
+        if (
+            erneut_geprueft.unbehandelte_offene_eintrag_ids
+            != arbeitsfassung.unbehandelte_offene_eintrag_ids
+        ):
+            raise Domaenenfehler(
+                "Die Vollständigkeit der O-Behandlungen in der Arbeitsfassung ist ungültig."
+            )
+        if not erneut_geprueft.finalisierbar:
+            raise Domaenenfehler("Die erneut geprüfte Arbeitsfassung ist nicht finalisierbar.")
+        erwartet = self.entscheidungsfingerabdruck(
             arbeitsfassung.behandlungen,
             arbeitsfassung.zusaetzliche_anpassungen,
             arbeitsfassung.gesamtvalidierungsstatus,
             arbeitsfassung.validierungsvermerk,
+            arbeitsfassung.gesamtpruefung_bestaetigt,
         )
-        if aktuell != arbeitsfassung.entscheidungsfingerabdruck:
+        if erwartet != aktuell or aktuell != arbeitsfassung.entscheidungsfingerabdruck:
             raise Domaenenfehler(
                 "Menschliche Eingaben wurden verändert; die Arbeitsfassung ist ungültig."
             )
@@ -314,6 +380,7 @@ class ModellvalidierungService:
             "k_stern_id": str(k_stern_id),
             "validierungslauf_id": str(validierungslauf_id),
             "projekt_id": str(basis.ableitung.projekt_id),
+            "mappingversion": basis.ableitung.mappingversion,
             "k_referenz": {
                 "k_id": str(basis.ableitung.k_id),
                 "gesamtpruefsumme": basis.k["gesamtpruefsumme"],
@@ -342,7 +409,7 @@ class ModellvalidierungService:
             "gesamtvalidierung": {
                 "status": Gesamtvalidierungsstatus.FACHLICH_VALIDIERT,
                 "validierungsvermerk": arbeitsfassung.validierungsvermerk,
-                "menschlich_bestaetigt": True,
+                "menschlich_bestaetigt": arbeitsfassung.gesamtpruefung_bestaetigt,
             },
             "eingabefingerabdruck": basis.eingabefingerabdruck,
             "entscheidungsfingerabdruck": aktuell,
@@ -391,9 +458,10 @@ class ModellvalidierungService:
             pruefsumme = struktur.pop("gesamtpruefsumme")
         except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError) as fehler:
             raise Importintegritaetsfehler("K* ist kein gültiges JSON-Artefakt.") from fehler
+        version = struktur.get("artefaktversion")
         if (
             struktur.get("artefaktart") != K_STERN_ARTEFAKTART
-            or struktur.get("artefaktversion") != K_STERN_ARTEFAKTVERSION
+            or version not in HISTORISCHE_K_STERN_ARTEFAKTVERSIONEN | {K_STERN_ARTEFAKTVERSION}
             or _sha(struktur) != pruefsumme
         ):
             raise Importintegritaetsfehler(
@@ -411,6 +479,24 @@ class ModellvalidierungService:
         if hashlib.sha256(inhalt).hexdigest() != validierung.k_stern_sha256:
             raise Importintegritaetsfehler("Die Dateiprüfsumme von K* ist ungültig.")
         k_stern = self._k_stern_json_pruefen(inhalt)
+        if k_stern.get("artefaktversion") in HISTORISCHE_K_STERN_ARTEFAKTVERSIONEN:
+            k_referenz = k_stern.get("k_referenz")
+            o_referenz = k_stern.get("o_referenz")
+            if (
+                not isinstance(k_referenz, dict)
+                or not isinstance(o_referenz, dict)
+                or k_stern.get("k_stern_id") != str(validierung.k_stern_id)
+                or k_stern.get("validierungslauf_id") != str(validierung.validierungslauf_id)
+                or k_stern.get("projekt_id") != str(validierung.projekt_id)
+                or k_referenz.get("k_id") != str(validierung.k_id)
+                or o_referenz.get("o_id") != str(validierung.o_id)
+            ):
+                raise Importintegritaetsfehler(
+                    "Referenzen eines historischen K*-Artefakts sind inkonsistent."
+                )
+            historische_darstellung = copy.deepcopy(k_stern)
+            historische_darstellung["historischer_lesemodus"] = True
+            return validierung, historische_darstellung
         basis = self.grundlage_laden(
             validierung.projekt_id,
             validierung.modellableitungs_id,
@@ -424,6 +510,7 @@ class ModellvalidierungService:
             or k_stern.get("k_stern_id") != str(validierung.k_stern_id)
             or k_stern.get("validierungslauf_id") != str(validierung.validierungslauf_id)
             or k_stern.get("projekt_id") != str(validierung.projekt_id)
+            or k_stern.get("mappingversion") != basis.ableitung.mappingversion
             or k_stern.get("k_referenz")
             != {
                 "k_id": str(validierung.k_id),
@@ -439,25 +526,49 @@ class ModellvalidierungService:
         ):
             raise Importintegritaetsfehler("Referenzen oder Lineage von K* sind inkonsistent.")
         bestandteile = k_stern.get("modellbestandteile", [])
+        if not isinstance(bestandteile, list) or any(
+            not isinstance(wert, dict) for wert in bestandteile
+        ):
+            raise Importintegritaetsfehler("Die Modellbestandteile in K* sind ungültig.")
         erwartete_ids = [wert.bestandteil_id.value for wert in MODELLBESTANDTEILE]
         if [wert.get("bestandteil_id") for wert in bestandteile] != erwartete_ids:
             raise Importintegritaetsfehler(
-                "K* enthält nicht exakt die elf Modellbestandteile in stabiler Reihenfolge."
+                "K* enthält nicht exakt die 16 Modellbestandteile in stabiler Reihenfolge."
             )
-        for original, validiert in zip(basis.k["modellbestandteile"], bestandteile, strict=True):
+        for definition, original, validiert in zip(
+            MODELLBESTANDTEILE,
+            basis.k["modellbestandteile"],
+            bestandteile,
+            strict=True,
+        ):
+            menschliche_eintraege = validiert.get("menschliche_eintraege")
+            if (
+                validiert.get("bezeichnung") != definition.bezeichnung
+                or validiert.get("validierungsstatus")
+                != Gesamtvalidierungsstatus.FACHLICH_VALIDIERT.value
+                or not isinstance(menschliche_eintraege, list)
+                or any(not isinstance(wert, dict) for wert in menschliche_eintraege)
+            ):
+                raise Importintegritaetsfehler(
+                    "Ein Modellbestandteil in K* ist nicht eindeutig fachlich validiert."
+                )
             if validiert.get("urspruenglicher_bestandteil") != original:
                 raise Importintegritaetsfehler("Ein ursprünglicher Inhalt aus K wurde verändert.")
-            if any(
-                not wert.get("menschliche_entscheidung")
-                for wert in validiert.get("menschliche_eintraege", [])
-            ):
+            if any(not wert.get("menschliche_entscheidung") for wert in menschliche_eintraege):
                 raise Importintegritaetsfehler(
                     "Eine Ergänzung in K* ist nicht als menschliche Entscheidung gekennzeichnet."
                 )
         offene_nach_id = {wert["offener_eintrag_id"]: wert for wert in basis.o["offene_eintraege"]}
         behandlungen = k_stern.get("behandlungen_offener_eintraege", [])
-        if {wert.get("offener_eintrag_id") for wert in behandlungen} != set(offene_nach_id):
+        if not isinstance(behandlungen, list) or any(
+            not isinstance(wert, dict) for wert in behandlungen
+        ):
+            raise Importintegritaetsfehler("Die O-Behandlungen in K* sind ungültig.")
+        if len(behandlungen) != len(offene_nach_id) or {
+            wert.get("offener_eintrag_id") for wert in behandlungen
+        } != set(offene_nach_id):
             raise Importintegritaetsfehler("K* behandelt nicht exakt alle Einträge aus O.")
+        behandlungsobjekte_liste: list[BehandlungOffenerEintrag] = []
         for behandlung in behandlungen:
             original = offene_nach_id[behandlung["offener_eintrag_id"]]
             if (
@@ -466,29 +577,36 @@ class ModellvalidierungService:
                 or behandlung.get("urspruengliche_begruendung") != original.get("begruendung")
                 or behandlung.get("entscheidung")
                 not in {wert.value for wert in Offenheitsentscheidung}
-                or not behandlung.get("fachliche_ergaenzung_oder_begruendung", "").strip()
                 or not behandlung.get("menschliche_entscheidung")
             ):
                 raise Importintegritaetsfehler("Eine O-Behandlung in K* ist inkonsistent.")
+            try:
+                behandlungsobjekte_liste.append(
+                    BehandlungOffenerEintrag(
+                        behandlung["offener_eintrag_id"],
+                        ModellbestandteilId(behandlung["bestandteil_id"]),
+                        Offenheitskategorie(behandlung["urspruengliche_kategorie"]),
+                        behandlung["urspruengliche_begruendung"],
+                        Offenheitsentscheidung(behandlung["entscheidung"]),
+                        str(behandlung.get("fachlicher_inhalt", "")),
+                        str(behandlung.get("begruendung", "")),
+                        behandlung["menschliche_entscheidung"],
+                    )
+                )
+            except (Domaenenfehler, TypeError, ValueError) as fehler:
+                raise Importintegritaetsfehler(
+                    "Eine O-Behandlung verletzt die fachlichen Entscheidungsregeln."
+                ) from fehler
         gesamt = k_stern.get("gesamtvalidierung", {})
+        if not isinstance(gesamt, dict):
+            raise Importintegritaetsfehler("Die Gesamtvalidierung in K* ist ungültig.")
         if (
             gesamt.get("status") != Gesamtvalidierungsstatus.FACHLICH_VALIDIERT.value
             or gesamt.get("menschlich_bestaetigt") is not True
             or validierung.status is not Modellvalidierungsstatus.FACHLICH_VALIDIERT
         ):
             raise Importintegritaetsfehler("K* ist nicht ausdrücklich fachlich validiert.")
-        behandlungsobjekte = tuple(
-            BehandlungOffenerEintrag(
-                wert["offener_eintrag_id"],
-                ModellbestandteilId(wert["bestandteil_id"]),
-                Offenheitskategorie(wert["urspruengliche_kategorie"]),
-                wert["urspruengliche_begruendung"],
-                Offenheitsentscheidung(wert["entscheidung"]),
-                wert["fachliche_ergaenzung_oder_begruendung"],
-                wert["menschliche_entscheidung"],
-            )
-            for wert in behandlungen
-        )
+        behandlungsobjekte = tuple(behandlungsobjekte_liste)
         zusaetzliche_roh: list[dict[str, Any]] = []
         behandlungs_eintraege = 0
         for bestandteil in bestandteile:
@@ -510,8 +628,21 @@ class ModellvalidierungService:
                         zugehoerig is None
                         or zugehoerig["bestandteil_id"] != bestandteil_id.value
                         or eintrag.get("entscheidung") != zugehoerig["entscheidung"]
+                        or eintrag.get("fachlicher_inhalt", "")
+                        != zugehoerig.get("fachlicher_inhalt", "")
+                        or eintrag.get("begruendung", "") != zugehoerig.get("begruendung", "")
                         or eintrag.get("fachliche_ergaenzung_oder_begruendung")
-                        != zugehoerig["fachliche_ergaenzung_oder_begruendung"]
+                        != (
+                            zugehoerig.get("fachlicher_inhalt", "")
+                            or zugehoerig.get("begruendung", "")
+                        )
+                        or eintrag.get("modellinhalt_erzeugt")
+                        is not (
+                            zugehoerig["entscheidung"]
+                            == Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST.value
+                        )
+                        or eintrag.get("wirkung_auf_k")
+                        != _wirkung_auf_k(zugehoerig["entscheidung"])
                     ):
                         raise Importintegritaetsfehler(
                             "Eine O-Behandlung ist dem falschen Bestandteil zugeordnet."
@@ -519,6 +650,14 @@ class ModellvalidierungService:
                 elif eintrag.get("eintragstyp") == (
                     MenschlicherEintragstyp.ZUSAETZLICHE_ANPASSUNG.value
                 ):
+                    if (
+                        eintrag.get("wirkung_auf_k")
+                        != "menschliche_ergaenzung_oder_korrektur_fuer_k_stern"
+                        or eintrag.get("fuer_k_stern_massgeblich") is not True
+                    ):
+                        raise Importintegritaetsfehler(
+                            "Eine zusätzliche Anpassung ist in K* nicht fachlich eindeutig."
+                        )
                     zusaetzliche_roh.append(
                         {
                             "anpassungsnummer": eintrag.get("anpassungsnummer"),
@@ -543,20 +682,26 @@ class ModellvalidierungService:
                 "Die Reihenfolge zusätzlicher menschlicher Anpassungen ist inkonsistent."
             )
         zusaetzliche_roh.sort(key=lambda wert: wert["anpassungsnummer"])
-        zusaetzliche_objekte = tuple(
-            ZusaetzlicheModellanpassung(
-                wert["bestandteil_id"],
-                wert["fachlicher_inhalt"],
-                wert["begruendung"],
+        try:
+            zusaetzliche_objekte = tuple(
+                ZusaetzlicheModellanpassung(
+                    wert["bestandteil_id"],
+                    wert["fachlicher_inhalt"],
+                    wert["begruendung"],
+                )
+                for wert in zusaetzliche_roh
             )
-            for wert in zusaetzliche_roh
-        )
+        except (Domaenenfehler, TypeError, ValueError) as fehler:
+            raise Importintegritaetsfehler(
+                "Eine zusätzliche Anpassung in K* ist fachlich ungültig."
+            ) from fehler
         if (
             self.entscheidungsfingerabdruck(
                 behandlungsobjekte,
                 zusaetzliche_objekte,
                 Gesamtvalidierungsstatus.FACHLICH_VALIDIERT,
                 str(gesamt.get("validierungsvermerk", "")),
+                True,
             )
             != validierung.entscheidungsfingerabdruck
         ):
@@ -576,4 +721,9 @@ class ModellvalidierungService:
         validierung, k_stern = self.laden(validierungslauf_id)
         if validierung.projekt_id != projekt_id or validierung.k_stern_id != k_stern_id:
             raise Domaenenfehler("Das aktive K* gehört nicht zum aktiven Projekt oder Lauf.")
+        if k_stern.get("artefaktversion") != K_STERN_ARTEFAKTVERSION:
+            raise Domaenenfehler(
+                "Ein historisches K* ist lesbar, aber nicht als aktuelle "
+                "Schritt-10-Übergabe gültig."
+            )
         return k_stern

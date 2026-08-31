@@ -1,12 +1,28 @@
 """Streamlit-Darstellung bereits berechneter Profil- und Diagrammdaten."""
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 
 import pandas as pd
 import streamlit as st
 
 from framework_mvp.application.datenimport_service import Profilierungsergebnis
-from framework_mvp.domain.models import Profiltyp, SpaltenDiagrammdaten, Spaltenprofil
+from framework_mvp.application.profiling import zulaessige_indikatoroperatoren
+from framework_mvp.domain.models import (
+    Indikatorbedingung,
+    Indikatoroperator,
+    Profiltyp,
+    SpaltenDiagrammdaten,
+    Spaltenprofil,
+    TechnischerDatentyp,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class IndikatorUiAktion:
+    """Vom Profiling-Formular ausgelöste, noch nicht bestätigte UI-Aktion."""
+
+    hinzufuegen: Indikatorbedingung | None = None
+    entfernen: Indikatorbedingung | None = None
 
 
 def _zahl(wert: float | None) -> str:
@@ -280,17 +296,103 @@ def _zeit_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) -> None
     )
 
 
+def _operatorbezeichnung(operator: Indikatoroperator) -> str:
+    return {
+        Indikatoroperator.GLEICH: "gleich (=)",
+        Indikatoroperator.UNGLEICH: "ungleich (≠)",
+        Indikatoroperator.KLEINER: "kleiner als (<)",
+        Indikatoroperator.KLEINER_GLEICH: "kleiner oder gleich (<=)",
+        Indikatoroperator.GROESSER: "größer als (>)",
+        Indikatoroperator.GROESSER_GLEICH: "größer oder gleich (>=)",
+    }[operator]
+
+
+def _indikatorbereich(
+    profil: Spaltenprofil,
+    *,
+    session_key: str,
+    bearbeitbar: bool,
+) -> IndikatorUiAktion | None:
+    st.subheader("Absolute Häufigkeit eines Indikators")
+    st.caption(
+        "Zählt die Beobachtungen dieser Spalte, welche die definierte Bedingung erfüllen. "
+        "Fehlwerte und bestätigte Fehlwertplatzhalter werden nicht ausgewertet."
+    )
+    for index, auswertung in enumerate(profil.indikatorauswertungen):
+        with st.container(border=True):
+            inhalt, aktion = st.columns((5, 1))
+            inhalt.write(
+                f"**Bedingung:** {auswertung.spaltenname} "
+                f"{_operatorbezeichnung(auswertung.operator)} "
+                f"{auswertung.vergleichswert}"
+            )
+            inhalt.write(f"**Ergebnis:** {auswertung.absolute_haeufigkeit:,} Beobachtungen")
+            inhalt.caption(
+                f"Auswertbare reguläre Beobachtungen: {auswertung.auswertbare_beobachtungen:,}"
+            )
+            if bearbeitbar and aktion.button(
+                "Entfernen",
+                key=f"{session_key}_indikator_entfernen_{index}",
+                width="stretch",
+            ):
+                return IndikatorUiAktion(
+                    entfernen=Indikatorbedingung(
+                        spaltenname=auswertung.spaltenname,
+                        operator=auswertung.operator,
+                        vergleichswert=auswertung.vergleichswert,
+                    )
+                )
+    if not bearbeitbar:
+        st.caption(
+            "Das bestätigte Datenprofil ist unveränderlich. Für andere Bedingungen "
+            "muss ein neuer Import bestätigt werden."
+        )
+        return None
+    with st.form(f"{session_key}_indikator_neu", clear_on_submit=True, border=True):
+        st.markdown("**Neue Bedingung**")
+        operator = st.selectbox(
+            "Operator",
+            zulaessige_indikatoroperatoren(profil.technischer_datentyp),
+            format_func=_operatorbezeichnung,
+        )
+        if profil.technischer_datentyp is TechnischerDatentyp.BOOLEAN:
+            vergleichswert = st.selectbox(
+                "Vergleichswert",
+                ("true", "false"),
+                format_func=lambda wert: "Wahr" if wert == "true" else "Falsch",
+            )
+        else:
+            vergleichswert = st.text_input(
+                "Vergleichswert",
+                help=(
+                    "Der Wert wird gemäß dem erkannten technischen Datentyp interpretiert. "
+                    "Textvergleiche unterscheiden Groß- und Kleinschreibung."
+                ),
+            )
+        hinzufuegen = st.form_submit_button("Bedingung hinzufügen", type="primary")
+    if hinzufuegen:
+        return IndikatorUiAktion(
+            hinzufuegen=Indikatorbedingung(
+                spaltenname=profil.spaltenname,
+                operator=operator,
+                vergleichswert=vergleichswert,
+            )
+        )
+    return None
+
+
 def zeige_datenprofil(
     ergebnis: Profilierungsergebnis,
     *,
     session_key: str,
     daten: pd.DataFrame | None = None,
-) -> None:
+    indikator_bearbeitbar: bool = False,
+) -> IndikatorUiAktion | None:
     """Zeigt Gesamtübersicht, Fehlwerte und genau eine Spaltendetailanalyse."""
     profil = ergebnis.profil
     if profil.spalten == 0:
         st.warning("Die Tabelle enthält keine Spalten und kann nicht profiliert werden.")
-        return
+        return None
     if profil.zeilen == 0:
         st.warning("Die Tabelle enthält keine Datenzeilen; dargestellt wird nur ihre Struktur.")
     _gesamtuebersicht(ergebnis)
@@ -303,8 +405,7 @@ def zeige_datenprofil(
     diagramm = _spaltendiagramm(ergebnis, auswahl)
     if spaltenprofil.fehlwerte.gueltige_regulaere_werte == 0:
         st.info("Diese Spalte ist vollständig leer oder enthält ausschließlich Platzhalter.")
-        return
-    if spaltenprofil.profiltyp is Profiltyp.NUMERISCH:
+    elif spaltenprofil.profiltyp is Profiltyp.NUMERISCH:
         _numerische_details(spaltenprofil, diagramm)
     elif spaltenprofil.profiltyp is Profiltyp.KATEGORIAL:
         _kategoriale_details(spaltenprofil, diagramm)
@@ -312,6 +413,11 @@ def zeige_datenprofil(
         _zeit_details(spaltenprofil, diagramm)
     else:
         st.info("Für den erkannten Datentyp ist keine technische Detailanalyse verfügbar.")
+    return _indikatorbereich(
+        spaltenprofil,
+        session_key=session_key,
+        bearbeitbar=indikator_bearbeitbar,
+    )
 
 
 def zeige_gespeichertes_datenprofil(struktur: dict[str, object]) -> None:
@@ -333,6 +439,7 @@ def zeige_gespeichertes_datenprofil(struktur: dict[str, object]) -> None:
         return
     tabellendaten = []
     diagrammdaten = []
+    indikatorzeilen = []
     for spaltenprofil in spaltenprofile:
         if not isinstance(spaltenprofil, dict):
             continue
@@ -366,7 +473,24 @@ def zeige_gespeichertes_datenprofil(struktur: dict[str, object]) -> None:
                 },
             )
         )
+        for auswertung in spaltenprofil.get("indikatorauswertungen", []):
+            if not isinstance(auswertung, dict):
+                continue
+            indikatorzeilen.append(
+                {
+                    "Spalte": auswertung.get("spaltenname"),
+                    "Operator": auswertung.get("operator"),
+                    "Vergleichswert": auswertung.get("vergleichswert"),
+                    "Absolute Häufigkeit (n_B)": auswertung.get("absolute_haeufigkeit"),
+                    "Auswertbare reguläre Beobachtungen": auswertung.get(
+                        "auswertbare_beobachtungen"
+                    ),
+                }
+            )
     st.dataframe(pd.DataFrame(tabellendaten), hide_index=True)
+    if indikatorzeilen:
+        st.subheader("Absolute Häufigkeit eines Indikators")
+        st.dataframe(pd.DataFrame(indikatorzeilen), hide_index=True)
     st.vega_lite_chart(
         {"values": diagrammdaten},
         {

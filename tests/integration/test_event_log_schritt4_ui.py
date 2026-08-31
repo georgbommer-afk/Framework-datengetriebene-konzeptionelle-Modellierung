@@ -182,17 +182,30 @@ def test_rollenschritt_zeigt_optionale_rollen_und_kanonische_vorschau() -> None:
     labels = {wert.label for wert in app.selectbox}
     assert {
         "Ressourcenspalte → resource",
-        "Startzeitstempel → start_timestamp",
-        "Endzeitstempel → end_timestamp",
+        "Ist-Startzeitpunkt → start_timestamp",
+        "Ist-Endzeitpunkt → end_timestamp",
         "Lifecycle-/Statusspalte → lifecycle",
     } <= labels
+    startauswahl = next(
+        w for w in app.selectbox if w.label == "Ist-Startzeitpunkt → start_timestamp"
+    )
+    endauswahl = next(w for w in app.selectbox if w.label == "Ist-Endzeitpunkt → end_timestamp")
+    assert "zeit" in startauswahl.options
+    assert "zeit" in endauswahl.options
+    assert any("Ereigniszeitstempel ordnet" in wert.value for wert in app.caption)
     next(w for w in app.selectbox if w.label == "Ressourcenspalte → resource").set_value(
         "ressource"
     ).run()
-    next(w for w in app.selectbox if w.label == "Startzeitstempel → start_timestamp").set_value(
-        "startzeit"
+    next(w for w in app.selectbox if w.label == "Ist-Startzeitpunkt → start_timestamp").set_value(
+        "zeit"
     ).run()
-    next(w for w in app.selectbox if w.label == "Endzeitstempel → end_timestamp").set_value(
+    assert (
+        "zeit"
+        not in next(
+            w for w in app.selectbox if w.label == "Ist-Endzeitpunkt → end_timestamp"
+        ).options
+    )
+    next(w for w in app.selectbox if w.label == "Ist-Endzeitpunkt → end_timestamp").set_value(
         "endzeit"
     ).run()
     next(w for w in app.selectbox if w.label == "Lifecycle-/Statusspalte → lifecycle").set_value(
@@ -206,6 +219,11 @@ def test_rollenschritt_zeigt_optionale_rollen_und_kanonische_vorschau() -> None:
     _button(app, "Weiter").click().run()
 
     assert not app.exception
+    gespeicherte_konfiguration = app.session_state["test_konfiguration"]
+    assert gespeicherte_konfiguration.konfigurationsversion == 4
+    assert gespeicherte_konfiguration.zeitstempelspalte == "zeit"
+    assert gespeicherte_konfiguration.startzeitstempelspalte == "zeit"
+    assert gespeicherte_konfiguration.endzeitstempelspalte == "endzeit"
     herkunft = next(
         wert
         for wert in app.dataframe
@@ -217,6 +235,10 @@ def test_rollenschritt_zeigt_optionale_rollen_und_kanonische_vorschau() -> None:
     assert (
         herkunft.loc[herkunft["Spalte in E"] == "resource", "Quellspalte(n) in T"].iloc[0]
         == "ressource"
+    )
+    assert (
+        herkunft.loc[herkunft["Spalte in E"] == "start_timestamp", "Quellspalte(n) in T"].iloc[0]
+        == "zeit"
     )
 
 
@@ -247,8 +269,8 @@ def test_breiter_rollenschritt_bietet_ressource_und_status_je_zeitzuordnung() ->
 
     assert sum(w.label == "Ressourcenspalte → resource" for w in app.selectbox) == 2
     assert sum(w.label == "Lifecycle-/Statusspalte → lifecycle" for w in app.selectbox) == 2
-    assert not any("Startzeitstempel →" in w.label for w in app.selectbox)
-    assert not any("Endzeitstempel →" in w.label for w in app.selectbox)
+    assert not any("Ist-Startzeitpunkt →" in w.label for w in app.selectbox)
+    assert not any("Ist-Endzeitpunkt →" in w.label for w in app.selectbox)
 
 
 def test_ereignisorientierter_ablauf_speichert_e_und_setzt_aktiven_kontext() -> None:

@@ -15,10 +15,14 @@ Event-Log-Konfiguration aus Schritt 4 bindet sich an genau ein Projekt und T und
 die ID von M, die Strukturart, genau eine Fallidentifikationsspalte, die Aktivitätsdefinition,
 die Zeitstempelquellen, optionale semantische Rollen und die ausdrücklich ausgewählten
 zusätzlichen Attribute. Konfigurationsversion 3 erlaubt in ereignisorientierten Daten die
-kanonischen Rollen `resource`, `start_timestamp`, `end_timestamp` und `lifecycle`. In breiten
-Daten werden Ressource und Lifecycle ausschließlich je Zeitstempelzuordnung verwendet; eine
-nicht eindeutig begründete Start-/Endpaarung wird nicht erzeugt. Version 1 und 2 behalten ihre
-bisherige Semantik.
+kanonischen Rollen `resource`, `start_timestamp`, `end_timestamp` und `lifecycle` bei eindeutiger
+technischer Belegung. Version 4 unterscheidet den verpflichtenden Ereigniszeitstempel `timestamp`
+von den optionalen tatsächlichen Zeitpunkten `start_timestamp` und `end_timestamp`. Eine
+Quellspalte darf in Version 4 zusätzlich zum Ereigniszeitstempel genau eine dieser beiden
+Zeitrollen erfüllen; dieselbe Quelle darf nicht zugleich Start und Ende sein. Fehlende Start-
+oder Endzeitpunkte werden niemals konstruiert. In breiten Daten werden Ressource und Lifecycle
+ausschließlich je Zeitstempelzuordnung verwendet; eine nicht eindeutig begründete
+Start-/Endpaarung wird nicht erzeugt. Version 1 bis 3 behalten ihre bisherige Semantik.
 
 Das kanonische Event Log besitzt mindestens `case_id`, `activity`, `timestamp` und eine stabile
 technische `event_id`. Bei ereignisorientierten Daten wird jede Zeile von T zu genau einem
@@ -27,16 +31,18 @@ geordneten Attributen mit optionalem Verknüpfungselement. Breite Zeitstempeldat
 ausgewählte Zeitstempelspalten unpivotiert; jeder vorhandene Wert erzeugt ein Ereignis mit der
 für diese Spalte konfigurierten Aktivitätsbeschreibung. Nur ausdrücklich ausgewählte zusätzliche
 Attribute werden übernommen. Eine technische Quellspalte darf in Version 3 nicht mehreren
-Standardrollen oder zusätzlich einem allgemeinen Attribut zugeordnet sein.
+Standardrollen oder zusätzlich einem allgemeinen Attribut zugeordnet sein. Version 4 lockert
+diese Regel ausschließlich für `timestamp` zusammen mit `start_timestamp` oder `end_timestamp`.
 
 Fachliche Spalten- und Wertzuordnungen aus M werden auf einer tiefen Arbeitskopie angewandt. T und
 M werden nicht verändert. Nicht gemappte Werte bleiben erhalten, Wertzuordnungen sind an
 Quellspalte und Datentyp gebunden und gleiche fachliche Spaltennamen werden kollisionssicher
-aufgelöst. Technische Herkunftsspalten sichern Rohwerte, Quellzeile und bei breiten Datensätzen
-die ursprüngliche Zeitstempelspalte. Innerhalb eines Falls wird chronologisch sowie bei
+aufgelöst. Technische Herkunftsspalten und die zielrollenbezogene Lineage sichern Rohwerte,
+Quellzeile und bei breiten Datensätzen die ursprüngliche Zeitstempelspalte. Innerhalb eines Falls
+wird anhand von `timestamp` chronologisch sowie bei
 Gleichständen stabil nach Quellzeile und Zeitstempelspaltenreihenfolge geordnet. Der allgemeine
 Ereigniszeitstempel erhält weiterhin keine stillschweigende UTC-Annahme; konfigurierte Start- und
-Endzeitstempel der Version 3 werden als UTC-kompatible kanonische Spalten normalisiert.
+Endzeitstempel ab Version 3 werden als UTC-kompatible kanonische Spalten normalisiert.
 
 CSV.GZ ist das führende Event-Log-Artefakt. Schema-JSON dokumentiert fachliche und technische
 Spalten, Typen, Zeitformat und Prüfsumme. Lineage-JSON enthält Projekt, T, optionale M-ID, die

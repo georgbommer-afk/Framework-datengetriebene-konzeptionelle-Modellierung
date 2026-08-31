@@ -7,8 +7,8 @@ from uuid import UUID
 
 from framework_mvp.domain.exceptions import Domaenenfehler
 
-AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION = 3
-UNTERSTUETZTE_EVENT_LOG_KONFIGURATIONSVERSIONEN = frozenset({1, 2, 3})
+AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION = 4
+UNTERSTUETZTE_EVENT_LOG_KONFIGURATIONSVERSIONEN = frozenset({1, 2, 3, 4})
 
 
 class MappingModus(StrEnum):
@@ -300,6 +300,8 @@ class SemantischesMapping:
                 raise Domaenenfehler("Eine Zeitstempelspalte darf nur einmal ausgewählt werden.")
         if self.konfigurationsversion == 3:
             self._rollen_der_version_drei_pruefen()
+        elif self.konfigurationsversion == 4:
+            self._rollen_der_version_vier_pruefen()
 
     def _rollen_der_version_drei_pruefen(self) -> None:
         """Stellt die eindeutige technische Belegung der Rollen von Version 3 sicher."""
@@ -349,6 +351,52 @@ class SemantischesMapping:
         for zuordnung in self.spaltenzuordnungen:
             if zuordnung.rolle is not Attributrolle.IGNORIERT:
                 belegen(zuordnung.spaltenname, "allgemeines Attribut")
+
+    def _rollen_der_version_vier_pruefen(self) -> None:
+        """Erlaubt ausschließlich die fachlich kontrollierte Doppelrolle des Zeitstempels."""
+        if self.mapping_modus is MappingModus.BREITER_ZEITSTEMPELDATENSATZ:
+            self._rollen_der_version_drei_pruefen()
+            return
+        if self.startzeitstempelspalte and self.startzeitstempelspalte == self.endzeitstempelspalte:
+            raise Domaenenfehler(
+                "Ist-Startzeitpunkt und Ist-Endzeitpunkt dürfen nicht aus derselben "
+                f"Quellspalte stammen: {self.startzeitstempelspalte}."
+            )
+        rollen_nach_spalte: dict[str, list[str]] = {}
+
+        def belegen(spalte: str, rolle: str) -> None:
+            if spalte:
+                rollen_nach_spalte.setdefault(spalte, []).append(rolle)
+
+        for spalte in self.fall_id.spalten:
+            belegen(spalte, "case_id")
+        definition = self.wirksame_aktivitaetsdefinition
+        if definition is not None:
+            for spalte in definition.quellspalten:
+                belegen(spalte, "activity")
+        belegen(self.zeitstempelspalte, "timestamp")
+        belegen(self.startzeitstempelspalte, "start_timestamp")
+        belegen(self.endzeitstempelspalte, "end_timestamp")
+        belegen(self.lifecycle_spalte, "lifecycle")
+        belegen(self.ressourcen_spalte, "resource")
+        for zuordnung in self.spaltenzuordnungen:
+            if zuordnung.rolle is not Attributrolle.IGNORIERT:
+                belegen(zuordnung.spaltenname, "allgemeines Attribut")
+
+        erlaubte_doppelrollen = {
+            frozenset(("timestamp", "start_timestamp")),
+            frozenset(("timestamp", "end_timestamp")),
+        }
+        for spalte, rollen in rollen_nach_spalte.items():
+            if len(rollen) == 1:
+                continue
+            if len(rollen) == 2 and frozenset(rollen) in erlaubte_doppelrollen:
+                continue
+            raise Domaenenfehler(
+                "Eine technische Quellspalte darf in Version 4 nur den "
+                "Ereigniszeitstempel und zusätzlich genau den Ist-Startzeitpunkt oder "
+                f"Ist-Endzeitpunkt belegen: {spalte}."
+            )
 
     @property
     def wirksame_aktivitaetsdefinition(self) -> Aktivitaetsdefinition | None:

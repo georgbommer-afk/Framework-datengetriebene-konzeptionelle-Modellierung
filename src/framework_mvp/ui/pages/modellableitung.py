@@ -1,5 +1,6 @@
-"""Framework-Schritt 8: Ergebnisse aus Schritt 1 bis 7 den elf Bestandteilen zuordnen."""
+"""Framework-Schritt 8: 16 Vorschläge fachlich prüfen und als K/O übernehmen."""
 
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid5
 
@@ -13,7 +14,12 @@ from framework_mvp.application.modellableitung_service import (
 from framework_mvp.application.process_mining.svg import validiere_svg_text
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.domain.exceptions import Domaenenfehler
-from framework_mvp.domain.models import Bestandteilstatus
+from framework_mvp.domain.models import (
+    Bestandteilstatus,
+    FachlicheBestandteilentscheidung,
+    FachlicheEntscheidungsart,
+    ModellbestandteilId,
+)
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.ui.navigation import framework_bereich_oeffnen
 
@@ -62,34 +68,69 @@ def _eingangsuebersicht(basis: Any) -> None:
             st.warning(f"P kann nicht grafisch dargestellt werden: {fehler}")
 
 
+def _wert_text(wert: Any) -> str:
+    if isinstance(wert, str):
+        return wert
+    if isinstance(wert, (tuple, list)):
+        if not wert:
+            return "Keine Einträge"
+        if all(isinstance(eintrag, (str, int, float)) for eintrag in wert):
+            return ", ".join(str(eintrag) for eintrag in wert)
+        return f"{len(wert)} strukturierte Einträge"
+    if isinstance(wert, dict):
+        for schluessel in (
+            "beobachtete_instanzanzahl",
+            "fallanzahl",
+            "ereignisanzahl",
+            "bezeichnung",
+            "notation",
+            "status",
+        ):
+            if wert.get(schluessel) not in (None, "", []):
+                return f"{schluessel.replace('_', ' ').capitalize()}: {wert[schluessel]}"
+        return f"Strukturierte Angaben ({len(wert)} Felder)"
+    return str(wert)
+
+
 def _ergebnistext(bestandteil: Any) -> str:
     if not bestandteil.informationen:
         return "Keine belastbare Information übernehmbar"
-    referenzen = [str(wert.strukturreferenz) for wert in bestandteil.informationen]
-    if len(referenzen) > 3:
-        return ", ".join(referenzen[:3]) + f" sowie {len(referenzen) - 3} weitere"
-    return ", ".join(referenzen)
+    texte = [_wert_text(wert.wert) for wert in bestandteil.informationen]
+    if len(texte) > 2:
+        return "; ".join(texte[:2]) + f"; sowie {len(texte) - 2} weitere"
+    return "; ".join(texte)
 
 
-def _haupttabelle(vorschau: Modellableitungsvorschau) -> None:
+def _haupttabelle(
+    vorschlag: Modellableitungsvorschau,
+    ergebnis: Modellableitungsvorschau,
+    entscheidungen: dict[ModellbestandteilId, FachlicheBestandteilentscheidung],
+) -> None:
     st.subheader("Zuordnung der Ergebnisse aus Schritt 1 bis 7")
+    status_nach_id = {wert.bestandteil_id: wert.status for wert in ergebnis.bestandteile}
     st.dataframe(
         pd.DataFrame(
             [
                 {
                     "Bestandteil": wert.bezeichnung,
-                    "Übernommene Ergebnisse": _ergebnistext(wert),
+                    "Vorgeschlagene Information": _ergebnistext(wert),
                     "Quelle/Schritt": ", ".join(quelle.value for quelle in wert.verwendete_quellen)
                     or "–",
-                    "Status": _status_text(wert.status),
+                    "Status": _status_text(status_nach_id[wert.bestandteil_id]),
+                    "Fachliche Entscheidung": (
+                        entscheidungen[wert.bestandteil_id].entscheidung.value
+                        if wert.bestandteil_id in entscheidungen
+                        else "noch nicht entschieden"
+                    ),
                 }
-                for wert in vorschau.bestandteile
+                for wert in vorschlag.vorgeschlagene_bestandteile
             ],
             columns=[
                 "Bestandteil",
-                "Übernommene Ergebnisse",
+                "Vorgeschlagene Information",
                 "Quelle/Schritt",
                 "Status",
+                "Fachliche Entscheidung",
             ],
         ),
         hide_index=True,
@@ -97,24 +138,83 @@ def _haupttabelle(vorschau: Modellableitungsvorschau) -> None:
     )
 
 
-def _fachliche_details(vorschau: Modellableitungsvorschau) -> None:
-    st.subheader("Fachliche Details")
+_ENTSCHEIDUNGSOPTIONEN = {
+    "Noch nicht entschieden": None,
+    "Vorschlag übernehmen": FachlicheEntscheidungsart.UEBERNEHMEN,
+    "Offen / fachlich unsicher": FachlicheEntscheidungsart.OFFEN_UNSICHER,
+    "Vorschlag nicht übernehmen": FachlicheEntscheidungsart.NICHT_UEBERNEHMEN,
+}
+
+
+def _fachliche_details(
+    vorschau: Modellableitungsvorschau, fingerabdruck: str
+) -> tuple[FachlicheBestandteilentscheidung, ...]:
+    st.subheader("Fachliche Vorschläge und Übernahmeentscheidungen")
     offene_nach_bestandteil: dict[str, list[Any]] = {}
-    for eintrag in vorschau.offene_eintraege:
+    for eintrag in vorschau.systematische_offene_eintraege:
         offene_nach_bestandteil.setdefault(eintrag.bestandteil_id.value, []).append(eintrag)
-    for index, bestandteil in enumerate(vorschau.bestandteile, 1):
+    entscheidungen: list[FachlicheBestandteilentscheidung] = []
+    for index, bestandteil in enumerate(vorschau.vorgeschlagene_bestandteile, 1):
+        basis_key = f"schritt8_{fingerabdruck}_{bestandteil.bestandteil_id.value}"
         with st.expander(
             f"{index}. {bestandteil.bezeichnung} · {_status_text(bestandteil.status)}"
         ):
             if not bestandteil.informationen:
                 st.info("Keine fachlich belastbare Information direkt übernehmbar.")
             for information in bestandteil.informationen:
-                st.markdown(
-                    f"**{information.herkunftsartefakt.value} · {information.strukturreferenz}**"
+                st.markdown(f"**Vorgeschlagene Information:** {_wert_text(information.wert)}")
+                st.caption(
+                    f"Quelle: {information.herkunftsartefakt.value} · "
+                    f"{information.strukturreferenz}"
                 )
-                st.json(information.wert, expanded=False)
             for eintrag in offene_nach_bestandteil.get(bestandteil.bestandteil_id.value, []):
-                st.warning(f"{eintrag.kategorie.value}: {eintrag.begruendung}")
+                st.warning(f"Offener Punkt ({eintrag.kategorie.value}): {eintrag.begruendung}")
+            auswahl = st.radio(
+                "Fachliche Entscheidung",
+                tuple(_ENTSCHEIDUNGSOPTIONEN),
+                key=f"{basis_key}_auswahl",
+            )
+            art = _ENTSCHEIDUNGSOPTIONEN[auswahl]
+            begruendung = ""
+            if art in {
+                FachlicheEntscheidungsart.OFFEN_UNSICHER,
+                FachlicheEntscheidungsart.NICHT_UEBERNEHMEN,
+            }:
+                begruendung = st.text_area(
+                    "Begründung (erforderlich)",
+                    key=f"{basis_key}_begruendung",
+                    placeholder="Warum bleibt der Vorschlag offen oder wird nicht übernommen?",
+                ).strip()
+            if art is not None and (art is FachlicheEntscheidungsart.UEBERNEHMEN or begruendung):
+                signatur = f"{art.value}:{begruendung}"
+                if st.session_state.get(f"{basis_key}_signatur") != signatur:
+                    st.session_state[f"{basis_key}_signatur"] = signatur
+                    st.session_state[f"{basis_key}_zeitpunkt"] = datetime.now(UTC).isoformat()
+                entscheidungen.append(
+                    FachlicheBestandteilentscheidung(
+                        bestandteil.bestandteil_id,
+                        art,
+                        begruendung,
+                        datetime.fromisoformat(st.session_state[f"{basis_key}_zeitpunkt"]),
+                    )
+                )
+    return tuple(entscheidungen)
+
+
+def _ergebnisuebersicht(vorschau: Modellableitungsvorschau) -> None:
+    st.subheader("Ergebnisübersicht vor dem Speichern")
+    zaehler = {status: 0 for status in Bestandteilstatus}
+    for bestandteil in vorschau.bestandteile:
+        zaehler[bestandteil.status] += 1
+    spalten = st.columns(4)
+    spalten[0].metric("Vollständig übernommen", zaehler[Bestandteilstatus.VOLLSTAENDIG_ZUGEORDNET])
+    spalten[1].metric("Teilweise offen", zaehler[Bestandteilstatus.TEILWEISE_OFFEN])
+    spalten[2].metric("Offen", zaehler[Bestandteilstatus.OFFEN])
+    spalten[3].metric("Fachlich unsicher", zaehler[Bestandteilstatus.FACHLICH_UNSICHER])
+    st.caption(
+        f"16 Modellbestandteile · {len(vorschau.offene_eintraege)} O-Einträge · "
+        f"{len(vorschau.entscheidungen)} explizite Entscheidungen"
+    )
 
 
 def _technische_details(vorschau: Modellableitungsvorschau) -> None:
@@ -127,7 +227,10 @@ def _technische_details(vorschau: Modellableitungsvorschau) -> None:
                 "o_id": str(vorschau.o_id),
                 "o_sha256": vorschau.o_sha256,
                 "eingabefingerabdruck": vorschau.grundlage.eingabefingerabdruck,
+                "entscheidungsfingerabdruck": vorschau.entscheidungsfingerabdruck,
+                "mappingversion": 3,
                 "artefaktlineage": vorschau.grundlage.lineage,
+                "vorschlaege": vorschau.vorgeschlagene_bestandteile,
             },
             expanded=False,
         )
@@ -158,7 +261,7 @@ def _gespeicherte_ableitung(
 def zeige_modellableitung_seite(
     projekt_service: ProjektService, service: ModellableitungService
 ) -> None:
-    """Ordnet die validierten Ergebnisse automatisch und ohne fachliche Eingabefelder zu."""
+    """Lässt alle 16 Zuordnungsvorschläge prüfen und erzeugt daraus gemeinsam K und O."""
     st.header("8 Modellbestandteile ableiten")
     ids = _aktive_ids()
     if ids is None:
@@ -182,14 +285,13 @@ def zeige_modellableitung_seite(
         return
     try:
         basis = service.grundlage_laden(projekt_id, aggregations_id)
-        modellableitungs_id = uuid5(aggregations_id, basis.eingabefingerabdruck)
-        vorschau = service.vorschau(
+        vorschlags_id = uuid5(aggregations_id, basis.eingabefingerabdruck)
+        vorschlag = service.vorschau(
             projekt_id=projekt_id,
             aggregations_id=aggregations_id,
-            modellableitungs_id=modellableitungs_id,
-            k_id=uuid5(modellableitungs_id, "K"),
-            o_id=uuid5(modellableitungs_id, "O"),
-            fachlich_unsichere_bestandteile=frozenset(),
+            modellableitungs_id=vorschlags_id,
+            k_id=uuid5(vorschlags_id, "K"),
+            o_id=uuid5(vorschlags_id, "O"),
         )
     except (Domaenenfehler, Importintegritaetsfehler, KeyError, TypeError) as fehler:
         st.error(f"K und O konnten nicht automatisch abgeleitet werden: {fehler}")
@@ -198,12 +300,40 @@ def zeige_modellableitung_seite(
         return
 
     _eingangsuebersicht(basis)
-    _haupttabelle(vorschau)
-    _fachliche_details(vorschau)
+    entscheidungen = _fachliche_details(vorschlag, basis.eingabefingerabdruck)
+    entscheidungsfingerabdruck = service.entscheidungsfingerabdruck(entscheidungen)
+    modellableitungs_id = uuid5(
+        aggregations_id, f"{basis.eingabefingerabdruck}:{entscheidungsfingerabdruck}"
+    )
+    try:
+        vorschau = service.vorschau(
+            projekt_id=projekt_id,
+            aggregations_id=aggregations_id,
+            modellableitungs_id=modellableitungs_id,
+            k_id=uuid5(modellableitungs_id, "K"),
+            o_id=uuid5(modellableitungs_id, "O"),
+            entscheidungen=entscheidungen,
+        )
+    except (Domaenenfehler, Importintegritaetsfehler, KeyError, TypeError) as fehler:
+        st.error(f"Die entscheidungsabhängige K/O-Vorschau konnte nicht erzeugt werden: {fehler}")
+        return
+    entscheidungen_nach_id = {wert.bestandteil_id: wert for wert in entscheidungen}
+    _haupttabelle(vorschlag, vorschau, entscheidungen_nach_id)
+    _ergebnisuebersicht(vorschau)
     _technische_details(vorschau)
-    if st.button("K und O speichern und zu Schritt 9", type="primary"):
+    fehlend = len(vorschlag.vorgeschlagene_bestandteile) - len(entscheidungen)
+    if fehlend:
+        st.warning(
+            f"Bitte prüfen Sie noch {fehlend} Modellbestandteil"
+            f"{'e' if fehlend != 1 else ''}, bevor K und O gespeichert werden können."
+        )
+    if st.button(
+        "K und O speichern und zu Schritt 9",
+        type="primary",
+        disabled=fehlend > 0,
+    ):
         try:
-            ableitung = service.speichern(vorschau, menschlich_bestaetigt=True)
+            ableitung = service.speichern(vorschau)
             st.session_state.aktuelle_modellableitungs_id = str(ableitung.modellableitungs_id)
             st.session_state.aktuelle_k_id = str(ableitung.k_id)
             st.session_state.aktuelle_o_id = str(ableitung.o_id)

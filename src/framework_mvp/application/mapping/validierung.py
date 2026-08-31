@@ -214,8 +214,19 @@ def validiere_mapping(daten: pd.DataFrame, mapping: SemantischesMapping) -> Mapp
         for wert in mapping.spaltenzuordnungen:
             if wert.rolle is not Attributrolle.IGNORIERT:
                 rolle_erfassen(wert.spaltenname, "allgemeines Attribut")
+        erlaubte_doppelrollen = {
+            frozenset(("timestamp", "start_timestamp")),
+            frozenset(("timestamp", "end_timestamp")),
+        }
         doppelte_belegungen = sum(
-            len(rollen) - 1 for rollen in rollen_nach_spalte.values() if len(rollen) > 1
+            len(rollen) - 1
+            for rollen in rollen_nach_spalte.values()
+            if len(rollen) > 1
+            and not (
+                mapping.konfigurationsversion >= 4
+                and mapping.mapping_modus is MappingModus.EREIGNISORIENTIERT
+                and frozenset(rollen) in erlaubte_doppelrollen
+            )
         )
     else:
         belegte_spalten = [wert for wert in rollenbelegungen if wert]

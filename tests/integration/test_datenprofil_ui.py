@@ -18,7 +18,7 @@ from framework_mvp.ui.pages.etl import _datenprofil_und_bestaetigung
 
 zustand = st.session_state.setdefault("zustand", {})
 if not zustand:
-    daten = pd.DataFrame({"Status": ["ok", "unbekannt"]})
+    daten = pd.DataFrame({"Status": ["A", "B", "A", "unbekannt", None]})
     zustand.update({
         "vorschau": bereite_vorschau_auf(
             daten, CsvImportparameter(erkanntes_trennzeichen=",")
@@ -33,6 +33,37 @@ _datenprofil_und_bestaetigung(
     datenimport_service=DatenimportService(),
     importvorgang_service=object(),
     projekt_id=UUID("11111111-1111-1111-1111-111111111111"),
+    zustand=zustand,
+)
+"""
+
+NUMERISCH_APP = r"""
+from uuid import UUID
+
+import pandas as pd
+import streamlit as st
+
+from framework_mvp.application.datenimport_service import DatenimportService, bereite_vorschau_auf
+from framework_mvp.domain.models import CsvImportparameter, DateiMetadaten, Dateityp
+from framework_mvp.ui.pages.etl import _datenprofil_und_bestaetigung
+
+zustand = st.session_state.setdefault("zustand", {})
+if not zustand:
+    daten = pd.DataFrame({"Wert": [1, 5, 10, 15]})
+    zustand.update({
+        "vorschau": bereite_vorschau_auf(
+            daten, CsvImportparameter(erkanntes_trennzeichen=",")
+        ),
+        "vorschau_schluessel": "vorschau-1",
+        "datei_metadaten": DateiMetadaten(
+            "daten.csv", "daten.csv", 10, Dateityp.CSV, "b" * 64
+        ),
+    })
+
+_datenprofil_und_bestaetigung(
+    datenimport_service=DatenimportService(),
+    importvorgang_service=object(),
+    projekt_id=UUID("22222222-2222-2222-2222-222222222222"),
     zustand=zustand,
 )
 """
@@ -115,3 +146,26 @@ def test_fehlwertplatzhalter_bleiben_ueber_reruns_erhalten() -> None:
         ).value
         == "-, n/a, unbekannt"
     )
+
+
+def test_indikatorbedingung_wird_hinzugefuegt_angezeigt_und_entfernt() -> None:
+    anwendung = AppTest.from_string(PLATZHALTER_APP).run()
+    next(wert for wert in anwendung.text_input if wert.label == "Vergleichswert").set_value("A")
+    next(wert for wert in anwendung.button if wert.label == "Bedingung hinzufügen").click().run()
+
+    bedingungen = anwendung.session_state["zustand"]["indikatorbedingungen"]
+    assert len(bedingungen) == 1
+    assert bedingungen[0].vergleichswert == "A"
+    assert any("2 Beobachtungen" in wert.value for wert in anwendung.markdown)
+
+    next(wert for wert in anwendung.button if wert.label == "Entfernen").click().run()
+    assert anwendung.session_state["zustand"]["indikatorbedingungen"] == ()
+
+
+def test_ungueltiger_indikatorvergleichswert_wird_verstaendlich_abgelehnt() -> None:
+    anwendung = AppTest.from_string(NUMERISCH_APP).run()
+    next(wert for wert in anwendung.text_input if wert.label == "Vergleichswert").set_value("abc")
+    next(wert for wert in anwendung.button if wert.label == "Bedingung hinzufügen").click().run()
+
+    assert any("kein gültiger Wert" in wert.value for wert in anwendung.error)
+    assert "indikatorbedingungen" not in anwendung.session_state["zustand"]

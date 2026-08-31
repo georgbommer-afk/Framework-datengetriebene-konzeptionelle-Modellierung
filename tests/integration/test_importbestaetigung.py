@@ -15,6 +15,8 @@ from framework_mvp.domain.models import (
     CsvImportparameter,
     ExcelImportparameter,
     Importvorgang,
+    Indikatorbedingung,
+    Indikatoroperator,
     Quellenart,
     Quellsystemtyp,
     Systemtyp,
@@ -130,7 +132,11 @@ def test_gespeicherter_import_stellt_raw_parameter_vorschau_und_profil_wieder_he
     metadaten = datenimport.datei_pruefen("wiederaufnahme.csv", inhalt)
     parameter = CsvImportparameter(trennzeichenwahl=Trennzeichenwahl.SEMIKOLON)
     vorschau = datenimport.vorschau_erstellen(inhalt, parameter)
-    profil = datenimport.profil_erstellen(vorschau.vollstaendige_tabelle).profil
+    bedingung = Indikatorbedingung("wert", Indikatoroperator.GLEICH, "A")
+    profil = datenimport.profil_erstellen(
+        vorschau.vollstaendige_tabelle,
+        indikatorbedingungen=(bedingung,),
+    ).profil
     bestaetigt = service.import_bestaetigen(
         import_id=uuid4(),
         projekt_id=projekt.projekt_id,
@@ -154,6 +160,9 @@ def test_gespeicherter_import_stellt_raw_parameter_vorschau_und_profil_wieder_he
     assert zustand["bestaetigter_import"] == bestaetigt
     assert zustand["vorschau"].gesamtzeilen == 2  # type: ignore[union-attr]
     assert zustand["profil"].profil.zeilen == 2  # type: ignore[union-attr]
+    assert zustand["indikatorbedingungen"] == (bedingung,)
+    auswertung = zustand["profil"].profil.spaltenprofile[1].indikatorauswertungen[0]  # type: ignore[union-attr]
+    assert auswertung.absolute_haeufigkeit == 1
 
 
 def test_doppelte_ausfuehrung_erzeugt_keinen_zweiten_import(tmp_path: Path) -> None:

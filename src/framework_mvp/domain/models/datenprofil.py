@@ -26,6 +26,37 @@ class TechnischerDatentyp(StrEnum):
     DATUM_UND_UHRZEIT = "Datum und Uhrzeit"
 
 
+class Indikatoroperator(StrEnum):
+    """Zulässige Vergleichsoperatoren einer Indikatorbedingung."""
+
+    GLEICH = "gleich"
+    UNGLEICH = "ungleich"
+    KLEINER = "<"
+    KLEINER_GLEICH = "<="
+    GROESSER = ">"
+    GROESSER_GLEICH = ">="
+
+
+@dataclass(frozen=True, slots=True)
+class Indikatorbedingung:
+    """Vom Anwender bestätigte Definition einer einzelnen Indikatorfunktion."""
+
+    spaltenname: str
+    operator: Indikatoroperator
+    vergleichswert: str
+
+
+@dataclass(frozen=True, slots=True)
+class Indikatorauswertung:
+    """Definition und Ergebnis der absoluten Häufigkeit eines Indikators."""
+
+    spaltenname: str
+    operator: Indikatoroperator
+    vergleichswert: str
+    absolute_haeufigkeit: int
+    auswertbare_beobachtungen: int
+
+
 class Zeitgranularitaet(StrEnum):
     """Deterministische Granularität einer zeitlichen Aggregation."""
 
@@ -127,6 +158,7 @@ class Spaltenprofil:
     numerisch: NumerischesSpaltenprofil | None = None
     kategorial: KategorialesSpaltenprofil | None = None
     zeitbezogen: ZeitbezogenesSpaltenprofil | None = None
+    indikatorauswertungen: tuple[Indikatorauswertung, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

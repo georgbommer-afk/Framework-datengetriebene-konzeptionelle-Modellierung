@@ -244,8 +244,8 @@ def _ereignisorientiert(
         "activity": aktivitaetsherkunft,
         "timestamp": konfiguration.zeitstempelspalte,
     }
-    # Version 1 bleibt im bisherigen Rohwertpfad; Version 3 nutzt dieselbe fachliche
-    # Wertabbildung wie die übrigen expliziten Rollen.
+    # Version 1 bleibt im bisherigen Rohwertpfad; ab Version 3 gilt dieselbe fachliche
+    # Wertabbildung für alle expliziten Rollen.
     if konfiguration.konfigurationsversion != 2:
         for ziel, quelle in {
             "start_timestamp": konfiguration.startzeitstempelspalte,

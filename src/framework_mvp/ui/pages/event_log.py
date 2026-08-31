@@ -282,7 +282,8 @@ def _attribute(
         *zustand.get("aktivitaetsquellen", ()),
         *(w.zeitstempelspalte for w in zustand.get("zeitstempelzuordnungen", ())),
     }
-    alle_optionen = [str(w) for w in daten.columns if str(w) not in kern]
+    alle_spalten = [str(w) for w in daten.columns]
+    alle_optionen = [wert for wert in alle_spalten if wert not in kern]
     datensatz_id = zustand["datensatz_id"]
 
     def label(wert: str) -> str:
@@ -292,10 +293,16 @@ def _attribute(
     st.caption("Jede gewählte T-Spalte wird als benannte kanonische Spalte in E übernommen.")
     semantische_spalten: set[str] = set()
     if zustand["mapping_modus"] is MappingModus.EREIGNISORIENTIERT:
+        st.caption(
+            "Der Ereigniszeitstempel ordnet das Ereignis zeitlich im Event Log ein. "
+            "Ist-Start und Ist-Ende beschreiben optional die zeitliche Ausdehnung einer "
+            "Aktivitätsausführung. Der Ereigniszeitstempel darf derselben Quellspalte wie "
+            "Start oder Ende entsprechen."
+        )
         rollendefinitionen = (
             ("ressourcen_spalte", "Ressourcenspalte", "resource"),
-            ("startzeitstempelspalte", "Startzeitstempel", "start_timestamp"),
-            ("endzeitstempelspalte", "Endzeitstempel", "end_timestamp"),
+            ("startzeitstempelspalte", "Ist-Startzeitpunkt", "start_timestamp"),
+            ("endzeitstempelspalte", "Ist-Endzeitpunkt", "end_timestamp"),
             ("lifecycle_spalte", "Lifecycle-/Statusspalte", "lifecycle"),
         )
         for zustandsschluessel, rollenlabel, zielname in rollendefinitionen:
@@ -304,7 +311,20 @@ def _attribute(
                 for anderer_schluessel, _, _ in rollendefinitionen
                 if anderer_schluessel != zustandsschluessel and zustand.get(anderer_schluessel)
             }
-            optionen = [wert for wert in alle_optionen if wert not in andere]
+            optionenbasis = alle_optionen
+            if zustandsschluessel in {
+                "startzeitstempelspalte",
+                "endzeitstempelspalte",
+            }:
+                optionenbasis = list(
+                    dict.fromkeys(
+                        (
+                            str(zustand.get("zeitstempelspalte", "")),
+                            *alle_optionen,
+                        )
+                    )
+                )
+            optionen = [wert for wert in optionenbasis if wert and wert not in andere]
             wert = fachliche_auswahl(
                 f"{rollenlabel} → {zielname}",
                 optionen,

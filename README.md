@@ -170,9 +170,10 @@ Bestätigungscheckbox mit einem primären Button gespeichert und an Schritt 8 ü
 
 ### 8. Modellbestandteile ableiten
 
-Ordnet Informationen aus U, S, Q, R, T, E*, P und A_G anhand einer festen Quellenmatrix elf
-Modellbestandteilen zu. Belegte Informationen bilden das vorläufige Modell K; fehlende oder
-nicht ableitbare Punkte werden getrennt in O dokumentiert.
+Ordnet Informationen aus U, S, Q, R, T, E*, P und A_G anhand der festen Quellenmatrix aus
+Tabelle 3.15 exakt 16 getrennten Modellbestandteilen zu. Erst fachlich bestätigte Vorschläge
+bilden das vorläufige Modell K; fehlende, nicht ableitbare, unsichere oder nicht bestätigte
+Punkte werden getrennt in O dokumentiert.
 
 Schritt 8 führt keine neue fachliche Berechnung durch. Ressourcen-, Übergangswartezeit- und
 Zeitdatenergebnisse werden ausschließlich aus der strukturierten A_G-Sektion übernommen. Bei
@@ -180,8 +181,10 @@ A_G-Version 1 bleiben diese Inhalte nachvollziehbar offen, statt aus E* nachbere
 Eine `case_id` wird nicht automatisch zum Entitätstyp und Zeitlücken werden nicht automatisch
 zu Warteschlangen.
 
-Die Vorschau entsteht beim Öffnen automatisch. Ein einzelner primärer Button speichert K und O
-und navigiert zu Schritt 9; redundante Vorschau- oder Lineage-Bestätigungen entfallen.
+Die Vorschläge entstehen beim Öffnen automatisch. Für jeden Bestandteil ist ausdrücklich
+`Vorschlag übernehmen`, `Offen / fachlich unsicher` oder `Vorschlag nicht übernehmen` zu
+entscheiden; offene und abgelehnte Vorschläge benötigen eine Begründung. Erst nach allen 16
+Entscheidungen speichert der primäre Button K und O und navigiert zu Schritt 9.
 
 ### 9. Modell ergänzen und validieren
 

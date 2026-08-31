@@ -2,17 +2,23 @@
 """Fachliche End-to-End-Verträge der Algorithmen 9 und 10."""
 
 import copy
+import hashlib
 import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
 
 from framework_mvp.application.modellableitung import MODELLBESTANDTEILE
 from framework_mvp.application.modellausgabe_service import ModellausgabeService
-from framework_mvp.application.modellvalidierung_service import ModellvalidierungService
+from framework_mvp.application.modellvalidierung_service import (
+    ModellvalidierungService,
+    _json_bytes,
+    _sha,
+)
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     BehandlungOffenerEintrag,
@@ -105,7 +111,7 @@ def _umgebung(tmp_path):  # type: ignore[no-untyped-def]
     k = {
         "artefaktart": "vorlaeufiges_konzeptionelles_modell_k",
         "artefaktversion": 1,
-        "mappingversion": 1,
+        "mappingversion": 3,
         "k_id": str(k_id),
         "modellableitungs_id": str(modellableitungs_id),
         "projekt_id": str(projekt_id),
@@ -147,7 +153,7 @@ def _umgebung(tmp_path):  # type: ignore[no-untyped-def]
         uuid4(),
         uuid4(),
         "4" * 64,
-        1,
+        3,
         "5" * 64,
         "k.json",
         "6" * 64,
@@ -183,10 +189,13 @@ def _behandlungen(o):  # type: ignore[no-untyped-def]
             MODELLBESTANDTEILE[index].bestandteil_id,
             Offenheitskategorie(wert["kategorie"]),
             wert["begruendung"],
+            Offenheitsentscheidung.BESTAETIGT
+            if wert["kategorie"] == Offenheitskategorie.FACHLICH_UNSICHER.value
+            else Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST,
             (
-                Offenheitsentscheidung.BESTAETIGT
-                if index == 0
-                else Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST
+                ""
+                if wert["kategorie"] == Offenheitskategorie.FACHLICH_UNSICHER.value
+                else f"Fachliche Ergänzung {index + 1}"
             ),
             f"Menschliche Begründung {index + 1}",
         )
@@ -211,6 +220,7 @@ def _arbeitsfassung(service, modellableitungen, **abweichungen):  # type: ignore
         ),
         "gesamtvalidierungsstatus": Gesamtvalidierungsstatus.FACHLICH_VALIDIERT,
         "validierungsvermerk": "Mit Prozesseignerin geprüft.",
+        "gesamtpruefung_bestaetigt": True,
     }
     parameter.update(abweichungen)
     return service.arbeitsfassung_erstellen(**parameter)
@@ -224,19 +234,19 @@ def test_k_stern_entsteht_idempotent_und_laesst_k_und_o_unveraendert(tmp_path) -
         arbeitsfassung,
         validierungslauf_id=uuid4(),
         k_stern_id=uuid4(),
-        fachlich_bestaetigt=True,
     )
     erneut = service.speichern(
         arbeitsfassung,
         validierungslauf_id=uuid4(),
         k_stern_id=uuid4(),
-        fachlich_bestaetigt=True,
     )
     geladen, k_stern = service.laden(gespeichert.validierungslauf_id)
 
     assert erneut == gespeichert == geladen
     assert len(repository.werte) == 1
     assert geladen.status is Modellvalidierungsstatus.FACHLICH_VALIDIERT
+    assert k_stern["artefaktversion"] == 2
+    assert k_stern["mappingversion"] == 3
     assert [wert["bestandteil_id"] for wert in k_stern["modellbestandteile"]] == [
         wert.bestandteil_id.value for wert in MODELLBESTANDTEILE
     ]
@@ -252,6 +262,16 @@ def test_k_stern_entsteht_idempotent_und_laesst_k_und_o_unveraendert(tmp_path) -
         for bestandteil in k_stern["modellbestandteile"]
         for wert in bestandteil["menschliche_eintraege"]
     )
+    ergaenzung = k_stern["modellbestandteile"][0]["menschliche_eintraege"][0]
+    assert ergaenzung["fachlicher_inhalt"] == "Fachliche Ergänzung 1"
+    assert ergaenzung["modellinhalt_erzeugt"] is True
+    bestaetigung = k_stern["modellbestandteile"][1]["menschliche_eintraege"][0]
+    assert bestaetigung["entscheidung"] == Offenheitsentscheidung.BESTAETIGT.value
+    assert bestaetigung["fachlicher_inhalt"] == ""
+    assert bestaetigung["modellinhalt_erzeugt"] is False
+    zusaetzlich = k_stern["modellbestandteile"][5]["menschliche_eintraege"][-1]
+    assert zusaetzlich["eintragstyp"] == "zusaetzliche_anpassung"
+    assert zusaetzlich["fuer_k_stern_massgeblich"] is True
     assert ableitungen.k == k_vorher
     assert ableitungen.o == o_vorher
 
@@ -298,6 +318,7 @@ def test_manuelle_mehrfachressource_und_bewusst_offen_erscheinen_in_k_stern(
             ressourcen_offen["begruendung"],
             Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST,
             json.dumps(dokumentation, ensure_ascii=False, sort_keys=True),
+            "Ressourcenzuordnung wurde durch die Prozesseignerin ergänzt.",
         ),
     )
     arbeitsfassung = _arbeitsfassung(service, ableitungen, behandlungen=behandlungen)
@@ -306,7 +327,6 @@ def test_manuelle_mehrfachressource_und_bewusst_offen_erscheinen_in_k_stern(
         arbeitsfassung,
         validierungslauf_id=uuid4(),
         k_stern_id=uuid4(),
-        fachlich_bestaetigt=True,
     )
     _, k_stern = service.laden(gespeichert.validierungslauf_id)
 
@@ -337,7 +357,6 @@ def test_finalisierung_verlangt_alle_o_eintraege_validierung_und_bestaetigung(tm
             unvollstaendig,
             validierungslauf_id=uuid4(),
             k_stern_id=uuid4(),
-            fachlich_bestaetigt=True,
         )
     anpassungsbedarf = _arbeitsfassung(
         service,
@@ -349,15 +368,99 @@ def test_finalisierung_verlangt_alle_o_eintraege_validierung_und_bestaetigung(tm
             anpassungsbedarf,
             validierungslauf_id=uuid4(),
             k_stern_id=uuid4(),
-            fachlich_bestaetigt=True,
         )
     with pytest.raises(Domaenenfehler, match="bewusste fachliche Bestätigung"):
         service.speichern(
-            _arbeitsfassung(service, ableitungen),
+            _arbeitsfassung(service, ableitungen, gesamtpruefung_bestaetigt=False),
             validierungslauf_id=uuid4(),
             k_stern_id=uuid4(),
-            fachlich_bestaetigt=False,
         )
+
+
+def test_doppelte_unbekannte_o_behandlung_und_unbekannter_bestandteil_werden_abgewiesen(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    service, _, _, _, ableitungen = _umgebung(tmp_path)
+    behandlungen = _behandlungen(ableitungen.o)
+    with pytest.raises(Domaenenfehler, match="nur einmal"):
+        _arbeitsfassung(service, ableitungen, behandlungen=(*behandlungen, behandlungen[0]))
+    with pytest.raises(Domaenenfehler, match="keinen Eintrag"):
+        _arbeitsfassung(
+            service,
+            ableitungen,
+            behandlungen=(replace(behandlungen[0], offener_eintrag_id="unbekannt"),),
+        )
+    unbekannt = ZusaetzlicheModellanpassung(
+        cast(ModellbestandteilId, "unbekannt"), "Inhalt", "Begründung"
+    )
+    with pytest.raises(Domaenenfehler, match="keinem der 16 Modellbestandteile"):
+        _arbeitsfassung(service, ableitungen, zusaetzliche_anpassungen=(unbekannt,))
+
+
+def test_iterative_validierung_aendert_fingerabdruck_und_erzeugt_nur_final_k_stern(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    service, _, repository, _, ableitungen = _umgebung(tmp_path)
+    arbeitsstand = _arbeitsfassung(
+        service,
+        ableitungen,
+        gesamtvalidierungsstatus=Gesamtvalidierungsstatus.ANPASSUNGSBEDARF,
+        gesamtpruefung_bestaetigt=False,
+    )
+    assert not arbeitsstand.finalisierbar
+    assert repository.werte == {}
+    mit_anpassung = _arbeitsfassung(
+        service,
+        ableitungen,
+        zusaetzliche_anpassungen=(
+            *arbeitsstand.zusaetzliche_anpassungen,
+            ZusaetzlicheModellanpassung(
+                ModellbestandteilId.DATEN,
+                "Datenumfang fachlich korrigiert.",
+                "Ergebnis der erneuten Gesamtprüfung.",
+            ),
+        ),
+        gesamtvalidierungsstatus=Gesamtvalidierungsstatus.ANPASSUNGSBEDARF,
+        gesamtpruefung_bestaetigt=False,
+    )
+    final = _arbeitsfassung(
+        service,
+        ableitungen,
+        zusaetzliche_anpassungen=mit_anpassung.zusaetzliche_anpassungen,
+        gesamtpruefung_bestaetigt=True,
+    )
+    assert (
+        len(
+            {
+                arbeitsstand.entscheidungsfingerabdruck,
+                mit_anpassung.entscheidungsfingerabdruck,
+                final.entscheidungsfingerabdruck,
+            }
+        )
+        == 3
+    )
+    assert final.finalisierbar
+    gespeichert = service.speichern(final, validierungslauf_id=uuid4(), k_stern_id=uuid4())
+    assert repository.laden(gespeichert.validierungslauf_id) == gespeichert
+
+
+def test_nicht_anwendbar_erzeugt_keinen_kuenstlichen_modellinhalt(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    service, _, _, _, ableitungen = _umgebung(tmp_path)
+    behandlungen = list(_behandlungen(ableitungen.o))
+    behandlungen[0] = replace(
+        behandlungen[0],
+        entscheidung=Offenheitsentscheidung.NICHT_ANWENDBAR,
+        fachlicher_inhalt="",
+        begruendung="Für den Modellzweck fachlich nicht relevant.",
+    )
+    arbeitsfassung = _arbeitsfassung(service, ableitungen, behandlungen=tuple(behandlungen))
+    gespeichert = service.speichern(arbeitsfassung, validierungslauf_id=uuid4(), k_stern_id=uuid4())
+    _, k_stern = service.laden(gespeichert.validierungslauf_id)
+    eintrag = k_stern["modellbestandteile"][0]["menschliche_eintraege"][0]
+    assert eintrag["entscheidung"] == Offenheitsentscheidung.NICHT_ANWENDBAR.value
+    assert eintrag["fachlicher_inhalt"] == ""
+    assert eintrag["modellinhalt_erzeugt"] is False
+    assert eintrag["begruendung"] == "Für den Modellzweck fachlich nicht relevant."
 
 
 def test_projektfremde_inkonsistente_oder_manipulierte_artefakte_werden_abgewiesen(
@@ -377,11 +480,41 @@ def test_projektfremde_inkonsistente_oder_manipulierte_artefakte_werden_abgewies
         arbeitsfassung,
         validierungslauf_id=uuid4(),
         k_stern_id=uuid4(),
-        fachlich_bestaetigt=True,
     )
     artefakte.pfad(gespeichert.relativer_k_stern_pfad).write_bytes(b"manipuliert")
     with pytest.raises(Importintegritaetsfehler, match="Dateiprüfsumme"):
         service.laden(gespeichert.validierungslauf_id)
+
+
+def test_historisches_k_stern_v1_bleibt_kontrolliert_lesbar_aber_nicht_uebergabefaehig(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    service, _, repository, artefakte, ableitungen = _umgebung(tmp_path)
+    gespeichert = service.speichern(
+        _arbeitsfassung(service, ableitungen),
+        validierungslauf_id=uuid4(),
+        k_stern_id=uuid4(),
+    )
+    _, struktur = service.laden(gespeichert.validierungslauf_id)
+    historisch = copy.deepcopy(struktur)
+    historisch.pop("gesamtpruefsumme")
+    historisch["artefaktversion"] = 1
+    historisch["gesamtpruefsumme"] = _sha(historisch)
+    inhalt = _json_bytes(historisch)
+    artefakte.pfad(gespeichert.relativer_k_stern_pfad).write_bytes(inhalt)
+    repository.werte[gespeichert.validierungslauf_id] = replace(
+        gespeichert, k_stern_sha256=hashlib.sha256(inhalt).hexdigest()
+    )
+
+    _, gelesen = service.laden(gespeichert.validierungslauf_id)
+    assert gelesen["artefaktversion"] == 1
+    assert gelesen["historischer_lesemodus"] is True
+    with pytest.raises(Domaenenfehler, match=r"historisches K\*"):
+        service.uebergabe_schritt10(
+            gespeichert.validierungslauf_id,
+            gespeichert.projekt_id,
+            gespeichert.k_stern_id,
+        )
 
 
 def test_geaenderte_eingaben_oder_menschliche_entscheidung_invalidieren_arbeitsfassung(
@@ -395,7 +528,6 @@ def test_geaenderte_eingaben_oder_menschliche_entscheidung_invalidieren_arbeitsf
             arbeitsfassung,
             validierungslauf_id=uuid4(),
             k_stern_id=uuid4(),
-            fachlich_bestaetigt=True,
         )
 
     service, _, _, _, ableitungen = _umgebung(tmp_path / "menschlich")
@@ -406,7 +538,6 @@ def test_geaenderte_eingaben_oder_menschliche_entscheidung_invalidieren_arbeitsf
             manipuliert,
             validierungslauf_id=uuid4(),
             k_stern_id=uuid4(),
-            fachlich_bestaetigt=True,
         )
 
 
@@ -414,7 +545,7 @@ def test_geaenderte_eingaben_oder_menschliche_entscheidung_invalidieren_arbeitsf
     ("html", "pdf"),
     [(True, False), (False, True), (True, True)],
 )
-def test_html_pdf_und_gemeinsame_auswahl_enthalten_alle_elf_ohne_mutation(
+def test_html_pdf_und_gemeinsame_auswahl_enthalten_alle_16_ohne_mutation(
     tmp_path, html, pdf
 ) -> None:  # type: ignore[no-untyped-def]
     service, ausgaben, _, _, ableitungen = _umgebung(tmp_path)
@@ -422,7 +553,6 @@ def test_html_pdf_und_gemeinsame_auswahl_enthalten_alle_elf_ohne_mutation(
         _arbeitsfassung(service, ableitungen),
         validierungslauf_id=uuid4(),
         k_stern_id=uuid4(),
-        fachlich_bestaetigt=True,
     )
     _, vorher = service.laden(gespeichert.validierungslauf_id)
     ergebnis = ausgaben.erzeugen(
@@ -458,7 +588,6 @@ def test_schritt_10_akzeptiert_nur_passendes_fachlich_validiertes_k_stern(tmp_pa
         _arbeitsfassung(service, ableitungen),
         validierungslauf_id=uuid4(),
         k_stern_id=uuid4(),
-        fachlich_bestaetigt=True,
     )
     with pytest.raises(Domaenenfehler, match=r"aktive K\*"):
         ausgaben.erzeugen(

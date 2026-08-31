@@ -9,20 +9,25 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from framework_mvp.domain.models import Datenprofil
+from framework_mvp.domain.models import (
+    Datenprofil,
+    Indikatorbedingung,
+    Indikatoroperator,
+)
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.infrastructure.persistence.sqlite_importvorgang_repository import (
     serialisiere_importparameter,
 )
 
-PROFIL_VERSION = 2
-UNTERSTUETZTE_PROFIL_VERSIONEN = {1, PROFIL_VERSION}
+PROFIL_VERSION = 3
+UNTERSTUETZTE_PROFIL_VERSIONEN = {1, 2, PROFIL_VERSION}
 
 STATISTISCHE_REGELN = (
     "Echte Fehlwerte folgen der Pandas-Semantik.",
     "Textuelle Platzhalter werden nach strip exakt und ohne Beachtung der Schreibweise erkannt.",
     "Numerische Kennzahlen verwenden ausschließlich endliche Werte und Gleichung 3.10.",
     "Potenzielle Ausreißer liegen außerhalb der 1,5-IQR-Grenzen.",
+    "Indikatorhäufigkeiten verwenden nur reguläre, typgerecht auswertbare Beobachtungen.",
 )
 
 
@@ -39,6 +44,7 @@ class ProfilArtefakt:
     gesamtprofil: dict[str, Any]
     statistische_regeln: tuple[str, ...]
     warnungen: tuple[str, ...]
+    indikatorbedingungen: tuple[Indikatorbedingung, ...] = ()
 
 
 def _json_wert(wert: Any) -> Any:
@@ -81,6 +87,7 @@ def _fachliches_gesamtprofil(profil: Datenprofil) -> dict[str, Any]:
             "technischer_datentyp": spalte["technischer_datentyp"],
             "profiltyp": spalte["profiltyp"],
             "fehlwerte": spalte["fehlwerte"],
+            "indikatorauswertungen": spalte["indikatorauswertungen"],
         }
         numerisch = spalte.get("numerisch")
         if numerisch is not None:
@@ -141,6 +148,7 @@ def _migriere_gesamtprofil(gesamtprofil: dict[str, Any]) -> dict[str, Any]:
     for spalte in gesamtprofil.get("spaltenprofile", []):
         if not isinstance(spalte, dict):
             continue
+        spalte.setdefault("indikatorauswertungen", [])
         original = str(spalte.get("originaldatentyp", "")).lower()
         profiltyp = spalte.get("profiltyp")
         if "bool" in original:
@@ -198,6 +206,37 @@ def _migriere_gesamtprofil(gesamtprofil: dict[str, Any]) -> dict[str, Any]:
     return gesamtprofil
 
 
+def _indikatorbedingungen_laden(
+    gesamtprofil: dict[str, Any],
+) -> tuple[Indikatorbedingung, ...]:
+    bedingungen: list[Indikatorbedingung] = []
+    for spalte in gesamtprofil.get("spaltenprofile", []):
+        if not isinstance(spalte, dict):
+            raise ValueError
+        for auswertung in spalte.get("indikatorauswertungen", []):
+            if not isinstance(auswertung, dict):
+                raise ValueError
+            spaltenname = str(auswertung["spaltenname"])
+            if spaltenname != str(spalte.get("spaltenname", "")):
+                raise ValueError
+            absolute_haeufigkeit = int(auswertung["absolute_haeufigkeit"])
+            auswertbare_beobachtungen = int(auswertung["auswertbare_beobachtungen"])
+            if (
+                absolute_haeufigkeit < 0
+                or auswertbare_beobachtungen < 0
+                or absolute_haeufigkeit > auswertbare_beobachtungen
+            ):
+                raise ValueError
+            bedingungen.append(
+                Indikatorbedingung(
+                    spaltenname=spaltenname,
+                    operator=Indikatoroperator(str(auswertung["operator"])),
+                    vergleichswert=str(auswertung["vergleichswert"]),
+                )
+            )
+    return tuple(bedingungen)
+
+
 def lade_profil_json(pfad: Path) -> ProfilArtefakt:
     """Lädt und validiert ein unterstütztes Profil-JSON."""
     try:
@@ -211,6 +250,7 @@ def lade_profil_json(pfad: Path) -> ProfilArtefakt:
         gesamtprofil = struktur["gesamtprofil"]
         if not isinstance(gesamtprofil, dict) or "spaltenprofile" not in gesamtprofil:
             raise ValueError
+        gesamtprofil = _migriere_gesamtprofil(gesamtprofil)
         return ProfilArtefakt(
             profil_version=version,
             import_id=UUID(struktur["import_id"]),
@@ -218,7 +258,8 @@ def lade_profil_json(pfad: Path) -> ProfilArtefakt:
             importparameter=dict(struktur["importparameter"]),
             tabellenbezeichnung=str(struktur["tabellenbezeichnung"]),
             erstellt_am=datetime.fromisoformat(struktur["erstellt_am"]),
-            gesamtprofil=_migriere_gesamtprofil(gesamtprofil),
+            gesamtprofil=gesamtprofil,
+            indikatorbedingungen=_indikatorbedingungen_laden(gesamtprofil),
             statistische_regeln=tuple(struktur["statistische_regeln"]),
             warnungen=tuple(struktur["warnungen"]),
         )

@@ -16,6 +16,8 @@ from framework_mvp.domain.models import (
     KpiStatus,
     Operandentyp,
     OperandZuordnung,
+    ProfilkennzahlReferenz,
+    Profilkennzahltyp,
     Vorkommensregel,
 )
 
@@ -319,7 +321,8 @@ class KpiDatenbasis:
     zwischendatensatz: pd.DataFrame
     event_log: pd.DataFrame
     profilwerte: dict[str, float]
-    referenzen: dict[Datenartefakt, dict[str, str]]
+    referenzen: dict[Datenartefakt, dict[str, Any]]
+    profilkennzahlen: tuple[ProfilkennzahlReferenz, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,6 +330,95 @@ class _OperandWert:
     wert: float | tuple[float, ...]
     ausgeschlossen: int
     dokumentation: dict[str, Any]
+
+
+_KOMPATIBLE_PROFILKENNZAHLEN: dict[Operandentyp, frozenset[Profilkennzahltyp]] = {
+    Operandentyp.ANZAHL: frozenset(
+        {
+            Profilkennzahltyp.ZEILENANZAHL,
+            Profilkennzahltyp.GUELTIGE_BEOBACHTUNGEN,
+            Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR,
+        }
+    ),
+    Operandentyp.SUMME: frozenset({Profilkennzahltyp.SUMME}),
+    Operandentyp.MITTELWERT: frozenset({Profilkennzahltyp.ARITHMETISCHES_MITTEL}),
+    Operandentyp.MESSWERTE: frozenset(),
+    Operandentyp.ZEITDIFFERENZ_SUMME: frozenset({Profilkennzahltyp.ZEITDIFFERENZ_SUMME}),
+}
+
+
+def profilkennzahlen_fuer_operand(
+    definition: KpiOperandDefinition,
+    basis: KpiDatenbasis,
+) -> tuple[ProfilkennzahlReferenz, ...]:
+    """Liefert nur mathematisch passende, tatsächlich in R gespeicherte Kennzahlen."""
+    if Datenartefakt.DATENPROFIL_R not in definition.zulaessige_quellen:
+        return ()
+    typen = _KOMPATIBLE_PROFILKENNZAHLEN[definition.operandentyp]
+    return tuple(wert for wert in basis.profilkennzahlen if wert.kennzahltyp in typen)
+
+
+def kompatible_tabellenspalten(
+    operandentyp: Operandentyp,
+    daten: pd.DataFrame,
+) -> tuple[str, ...]:
+    """Filtert T/E*-Spalten kontrolliert nach der benötigten mathematischen Operation."""
+    if operandentyp is Operandentyp.ANZAHL:
+        return tuple(str(wert) for wert in daten.columns)
+    kandidaten: list[str] = []
+    for name in daten.columns:
+        serie = cast("pd.Series", daten[name])
+        if operandentyp is Operandentyp.ZEITDIFFERENZ_SUMME:
+            if pd.api.types.is_datetime64_any_dtype(serie.dtype):
+                kandidaten.append(str(name))
+                continue
+            if pd.api.types.is_numeric_dtype(serie.dtype):
+                continue
+            regulaer = serie.dropna()
+            if (
+                not regulaer.empty
+                and pd.to_datetime(regulaer, errors="coerce", utc=True, format="mixed")
+                .notna()
+                .all()
+            ):
+                kandidaten.append(str(name))
+            continue
+        if pd.api.types.is_datetime64_any_dtype(serie.dtype):
+            continue
+        if pd.api.types.is_numeric_dtype(serie.dtype):
+            kandidaten.append(str(name))
+            continue
+        regulaer = serie.dropna()
+        if not regulaer.empty and pd.to_numeric(regulaer, errors="coerce").notna().all():
+            kandidaten.append(str(name))
+    return tuple(kandidaten)
+
+
+def zulaessige_quellen_fuer_operand(
+    definition: KpiOperandDefinition,
+    basis: KpiDatenbasis,
+) -> tuple[Datenartefakt, ...]:
+    """Schränkt formale Quellen auf die mit den aktuellen Daten tatsächlich nutzbaren ein."""
+    ergebnis: list[Datenartefakt] = []
+    for quelle in definition.zulaessige_quellen:
+        if quelle is Datenartefakt.DATENPROFIL_R:
+            if profilkennzahlen_fuer_operand(definition, basis):
+                ergebnis.append(quelle)
+            continue
+        tabelle = (
+            basis.zwischendatensatz
+            if quelle is Datenartefakt.ZWISCHENDATENSATZ_T
+            else basis.event_log
+        )
+        if kompatible_tabellenspalten(definition.operandentyp, tabelle):
+            ergebnis.append(quelle)
+        elif (
+            definition.operandentyp is Operandentyp.ZEITDIFFERENZ_SUMME
+            and quelle is Datenartefakt.EVENT_LOG_E_STERN
+            and {"case_id", "activity", "timestamp"} <= set(tabelle.columns)
+        ):
+            ergebnis.append(quelle)
+    return tuple(ergebnis)
 
 
 def kpi_definition(kpi_id: str) -> KpiDefinition:
@@ -449,10 +541,42 @@ def _operand_ermitteln(
             f"{definition.bezeichnung} nicht zulässig."
         )
     if zuordnung.quelle is Datenartefakt.DATENPROFIL_R:
+        aktuelle_nach_id = {wert.referenz_id: wert for wert in basis.profilkennzahlen}
+        strukturierte_referenz = zuordnung.profilkennzahl
+        if strukturierte_referenz is None and zuordnung.profilreferenz in aktuelle_nach_id:
+            strukturierte_referenz = aktuelle_nach_id[zuordnung.profilreferenz]
+        if strukturierte_referenz is not None:
+            aktuell = aktuelle_nach_id.get(strukturierte_referenz.referenz_id)
+            if aktuell is None:
+                raise ValueError(
+                    "Die strukturierte Profilkennzahl ist im aktuellen R nicht vorhanden."
+                )
+            if aktuell != strukturierte_referenz:
+                raise ValueError(
+                    "Die strukturierte Profilkennzahl stimmt nicht mehr mit dem aktuellen "
+                    "R überein."
+                )
+            if aktuell.kennzahltyp not in _KOMPATIBLE_PROFILKENNZAHLEN[definition.operandentyp]:
+                raise ValueError(
+                    "Die gespeicherte Profilkennzahl entspricht nicht exakt der benötigten "
+                    f"Rechengröße {definition.operandentyp.value}."
+                )
+            ausgeschlossen = max(
+                aktuell.grundgesamtheit - aktuell.auswertbare_beobachtungen,
+                0,
+            )
+            return _OperandWert(
+                float(aktuell.wert),
+                ausgeschlossen,
+                {
+                    "profilkennzahl": asdict(aktuell),
+                    "profilreferenz": aktuell.referenz_id,
+                    "ermittelter_wert": float(aktuell.wert),
+                    "wert_aus_gespeichertem_r_uebernommen": True,
+                },
+            )
         if not zuordnung.profilreferenz or zuordnung.profilreferenz not in basis.profilwerte:
             raise ValueError("Die exakt benötigte Profilkennzahl aus R wurde nicht zugeordnet.")
-        if definition.operandentyp is Operandentyp.MESSWERTE:
-            raise ValueError("R enthält keine Einzelwerte für diese weiterführende Berechnung.")
         profilkennzahl = zuordnung.profilreferenz.rsplit(":", 1)[-1]
         erwartete_profilkennzahlen = {
             Operandentyp.ANZAHL: {"gueltige_werte", "zeilen"},
@@ -468,7 +592,11 @@ def _operand_ermitteln(
         return _OperandWert(
             wert,
             0,
-            {"profilreferenz": zuordnung.profilreferenz, "wert": wert},
+            {
+                "profilreferenz": zuordnung.profilreferenz,
+                "ermittelter_wert": wert,
+                "legacy_profilreferenz": True,
+            },
         )
 
     daten = _tabelle(zuordnung, basis)
@@ -507,6 +635,8 @@ def _operand_ermitteln(
             "zweite_spalte": zuordnung.zweite_spalte,
             "startaktivitaet": zuordnung.startaktivitaet,
             "endaktivitaet": zuordnung.endaktivitaet,
+            "bedingungsoperator": zuordnung.bedingungsoperator,
+            "bedingungswert": zuordnung.bedingungswert,
             "ermittelter_wert": wert,
         },
     )
@@ -528,7 +658,14 @@ def _nicht_berechenbar(
             {
                 "artefakt": wert.quelle.value,
                 "spalte": wert.spalte,
-                "profilreferenz": wert.profilreferenz,
+                "profilreferenz": (
+                    wert.profilkennzahl.referenz_id
+                    if wert.profilkennzahl is not None
+                    else wert.profilreferenz
+                ),
+                "profilkennzahl": (
+                    asdict(wert.profilkennzahl) if wert.profilkennzahl is not None else None
+                ),
             }
             for wert in zuordnungen
         ),
@@ -580,12 +717,25 @@ def berechne_ausgewaehlte_kpis(
                 )
             )
             continue
-        if konfiguration.direkte_profilreferenz:
+        if konfiguration.direkte_profilreferenz or konfiguration.direkte_profilkennzahl:
             referenz = konfiguration.direkte_profilreferenz
-            if (
-                kpi_id not in _DIREKT_AUS_R_UEBERNEHMBARE_MITTELWERTE
-                or not referenz.endswith(":mittelwert")
-                or referenz not in basis.profilwerte
+            strukturierte_referenz = konfiguration.direkte_profilkennzahl
+            aktuelle_nach_id = {wert.referenz_id: wert for wert in basis.profilkennzahlen}
+            if strukturierte_referenz is None and referenz in aktuelle_nach_id:
+                strukturierte_referenz = aktuelle_nach_id[referenz]
+            struktur_gueltig = (
+                strukturierte_referenz is not None
+                and aktuelle_nach_id.get(strukturierte_referenz.referenz_id)
+                == strukturierte_referenz
+                and strukturierte_referenz.kennzahltyp is Profilkennzahltyp.ARITHMETISCHES_MITTEL
+            )
+            legacy_gueltig = (
+                bool(referenz)
+                and referenz.endswith(":mittelwert")
+                and referenz in basis.profilwerte
+            )
+            if kpi_id not in _DIREKT_AUS_R_UEBERNEHMBARE_MITTELWERTE or not (
+                struktur_gueltig or legacy_gueltig
             ):
                 ergebnisse.append(
                     _nicht_berechenbar(
@@ -598,7 +748,21 @@ def berechne_ausgewaehlte_kpis(
                     )
                 )
                 continue
-            wert = float(basis.profilwerte[referenz])
+            wert = float(
+                strukturierte_referenz.wert
+                if strukturierte_referenz is not None
+                else basis.profilwerte[referenz]
+            )
+            profilreferenz = (
+                strukturierte_referenz.referenz_id
+                if strukturierte_referenz is not None
+                else referenz
+            )
+            profildokumentation = (
+                asdict(strukturierte_referenz)
+                if strukturierte_referenz is not None
+                else {"profilreferenz": referenz, "legacy_profilreferenz": True}
+            )
             ergebnisse.append(
                 KpiErgebnis(
                     kpi_id,
@@ -607,21 +771,32 @@ def berechne_ausgewaehlte_kpis(
                     definition.formel,
                     (
                         {
-                            "direkte_profilreferenz": referenz,
+                            "direkte_profilreferenz": profilreferenz,
+                            "profilkennzahl": profildokumentation,
                             "menschlich_bestaetigte_bedeutung": definition.bezeichnung,
+                            "ermittelter_wert": wert,
                         },
                     ),
                     (
                         {
                             "artefakt": Datenartefakt.DATENPROFIL_R.value,
                             **basis.referenzen.get(Datenartefakt.DATENPROFIL_R, {}),
-                            "profilreferenz": referenz,
+                            "profilreferenz": profilreferenz,
+                            "profilkennzahl": profildokumentation,
                         },
                     ),
                     (),
                     konfiguration.bezugsmenge or definition.bezugsmenge,
                     konfiguration.einheit or definition.einheit,
-                    0,
+                    (
+                        max(
+                            strukturierte_referenz.grundgesamtheit
+                            - strukturierte_referenz.auswertbare_beobachtungen,
+                            0,
+                        )
+                        if strukturierte_referenz is not None
+                        else 0
+                    ),
                     "Die in R gespeicherte arithmetische Mittelwertgröße wurde nach "
                     "ausdrücklicher fachlicher Bestätigung direkt übernommen.",
                     {"profilmittelwert": wert},
@@ -671,18 +846,41 @@ def berechne_ausgewaehlte_kpis(
                 "artefakt": wert.quelle.value,
                 **basis.referenzen.get(wert.quelle, {}),
                 "spalte": wert.spalte,
-                "profilreferenz": wert.profilreferenz,
+                "profilreferenz": (
+                    wert.profilkennzahl.referenz_id
+                    if wert.profilkennzahl is not None
+                    else wert.profilreferenz
+                ),
+                "profilkennzahl": (
+                    asdict(wert.profilkennzahl) if wert.profilkennzahl is not None else None
+                ),
             }
             for wert in konfiguration.zuordnungen
         )
-        bedingungen = tuple(
+        tabellenbedingungen = tuple(
             {
                 "operand_id": wert.operand_id,
+                "quelle": wert.quelle.value,
                 "operator": wert.bedingungsoperator,
                 "wert": wert.bedingungswert,
+                "in_schritt_7_ausgewertet": True,
             }
             for wert in konfiguration.zuordnungen
             if wert.bedingungsoperator
+        )
+        profilbedingungen = tuple(
+            {
+                "operand_id": wert.operand_id,
+                "quelle": Datenartefakt.DATENPROFIL_R.value,
+                "spalte": wert.profilkennzahl.spaltenname,
+                "operator": wert.profilkennzahl.operator,
+                "wert": wert.profilkennzahl.vergleichswert,
+                "in_schritt_7_ausgewertet": False,
+                "bedeutung": "Gespeicherte Indikatorbedingung aus R",
+            }
+            for wert in konfiguration.zuordnungen
+            if wert.profilkennzahl is not None
+            and wert.profilkennzahl.kennzahltyp is Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR
         )
         ergebnisse.append(
             KpiErgebnis(
@@ -692,7 +890,7 @@ def berechne_ausgewaehlte_kpis(
                 formel,
                 tuple(dokumentation),
                 quellen,
-                bedingungen,
+                (*tabellenbedingungen, *profilbedingungen),
                 konfiguration.bezugsmenge or definition.bezugsmenge,
                 konfiguration.einheit or definition.einheit,
                 ausgeschlossen,

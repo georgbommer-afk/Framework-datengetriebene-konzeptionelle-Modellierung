@@ -84,7 +84,7 @@ def test_konfiguration_m_und_e_bleiben_vollstaendig_reproduzierbar(tmp_path: Pat
         "projects/x/interim/T.transformation.json",
         "a" * 64,
         2,
-        4,
+        5,
         jetzt,
     )
     etl_repository.datensatz_speichern(datensatz)
@@ -93,6 +93,7 @@ def test_konfiguration_m_und_e_bleiben_vollstaendig_reproduzierbar(tmp_path: Pat
             "fall": ["A", "A"],
             "aktion": ["S", "E"],
             "zeit": ["2025-01-02", "2025-01-01"],
+            "ende": ["2025-01-03", "2025-01-02"],
             "ressource": ["R1", "R2"],
         }
     )
@@ -176,6 +177,35 @@ def test_konfiguration_m_und_e_bleiben_vollstaendig_reproduzierbar(tmp_path: Pat
         "R2",
         "R1",
     ]
+
+    version_vier = replace(
+        version_drei,
+        mapping_id=uuid4(),
+        startzeitstempelspalte="zeit",
+        endzeitstempelspalte="ende",
+        validierung=None,
+        status=Mappingstatus.ENTWURF,
+        konfigurationsversion=4,
+    )
+    version_vier, pruefung_vier = konfigurations_service.validieren(version_vier, daten)
+    assert pruefung_vier.validierung.gueltig
+    pfad_vier = konfigurations_service.speichern(version_vier)
+    assert konfigurations_service.laden(version_vier.mapping_id) == version_vier
+    struktur_vier = json.loads(speicher.lesen(pfad_vier))
+    assert struktur_vier["mapping"]["konfigurationsversion"] == 4
+    assert struktur_vier["mapping"]["zeitstempelspalte"] == "zeit"
+    assert struktur_vier["mapping"]["startzeitstempelspalte"] == "zeit"
+    assert struktur_vier["mapping"]["endzeitstempelspalte"] == "ende"
+    vorschau_vier = event_service.vorschau(version_vier.mapping_id)
+    assert vorschau_vier.herkunft_standardspalten["timestamp"] == "zeit"
+    assert vorschau_vier.herkunft_standardspalten["start_timestamp"] == "zeit"
+    assert vorschau_vier.herkunft_standardspalten["end_timestamp"] == "ende"
+    artefakt_vier = event_service.speichern(uuid4(), version_vier.mapping_id)
+    lineage_vier = json.loads(speicher.lesen(artefakt_vier.relativer_lineage_pfad))
+    assert lineage_vier["event_log_konfiguration"]["konfigurationsversion"] == 4
+    assert lineage_vier["herkunft_standardspalten"]["timestamp"] == "zeit"
+    assert lineage_vier["herkunft_standardspalten"]["start_timestamp"] == "zeit"
+    assert lineage_vier["herkunft_standardspalten"]["end_timestamp"] == "ende"
 
     event_log_id = uuid4()
     event_service.vorschau(konfiguration.mapping_id)

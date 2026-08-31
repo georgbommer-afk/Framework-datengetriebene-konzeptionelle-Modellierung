@@ -199,8 +199,79 @@ def test_mapping_ist_exakt_oder_menschlich_und_replay_verwendet_vollstaendiges_l
     assert len(ergebnis.fallbezogene_diagnosen) == 2
     assert ergebnis.produzierte_tokens == 5
     assert ergebnis.konsumierte_tokens == 5
+    assert ergebnis.fehlende_tokens == 1
+    assert ergebnis.verbleibende_tokens == 1
     assert ergebnis.fitness == pytest.approx(0.8)
+    assert ergebnis.fitness_plausibilisierung_pm4py is not None
     pd.testing.assert_frame_equal(log, vorher)
+
+
+def test_exakte_zuordnung_ist_automatisch_und_unbeobachtete_solltransition_bleibt() -> None:
+    projekt_id = uuid4()
+    modell = _linear(projekt_id)
+
+    mapping = erstelle_aktivitaetsmapping(
+        projekt_id=projekt_id,
+        sollmodell_id=modell.metadaten.sollmodell_id,
+        event_aktivitaeten=("A",),
+        modell_transitionen=("A", "B"),
+        manuelle_zuordnungen={},
+        menschlich_bestaetigt=True,
+    )
+
+    assert mapping.exakte_zuordnungen == (("A", "A"),)
+    assert mapping.nur_event_log == ()
+    assert mapping.nur_sollmodell == ("B",)
+
+
+def test_abweichender_name_bleibt_bis_zur_manuellen_zuordnung_offen() -> None:
+    projekt_id = uuid4()
+    modell = _linear(projekt_id)
+
+    offen = erstelle_aktivitaetsmapping(
+        projekt_id=projekt_id,
+        sollmodell_id=modell.metadaten.sollmodell_id,
+        event_aktivitaeten=("QG", "B"),
+        modell_transitionen=("Qualitätsprüfung", "B"),
+        manuelle_zuordnungen={},
+        menschlich_bestaetigt=True,
+    )
+    bestaetigt = erstelle_aktivitaetsmapping(
+        projekt_id=projekt_id,
+        sollmodell_id=modell.metadaten.sollmodell_id,
+        event_aktivitaeten=("QG", "B"),
+        modell_transitionen=("Qualitätsprüfung", "B"),
+        manuelle_zuordnungen={"QG": "Qualitätsprüfung"},
+        menschlich_bestaetigt=True,
+    )
+
+    assert offen.nur_event_log == ("QG",)
+    assert offen.nur_sollmodell == ("Qualitätsprüfung",)
+    assert bestaetigt.manuelle_zuordnungen == (("QG", "Qualitätsprüfung"),)
+    assert bestaetigt.nur_event_log == ()
+
+
+def test_fehlende_menschliche_mappingbestaetigung_blockiert_replay() -> None:
+    projekt_id = uuid4()
+    modell = _linear(projekt_id)
+    mapping = erstelle_aktivitaetsmapping(
+        projekt_id=projekt_id,
+        sollmodell_id=modell.metadaten.sollmodell_id,
+        event_aktivitaeten=("A", "B"),
+        modell_transitionen=("A", "B"),
+        manuelle_zuordnungen={},
+        menschlich_bestaetigt=False,
+    )
+    log = pd.DataFrame(
+        {
+            "case_id": ["1", "1"],
+            "activity": ["A", "B"],
+            "timestamp": pd.to_datetime(["2026-01-01", "2026-01-02"], utc=True),
+        }
+    )
+
+    with pytest.raises(Domaenenfehler, match="menschlich bestätigt"):
+        token_replay(event_log=log, sollmodell=modell, mapping=mapping)
 
 
 def test_nicht_zugeordnete_aktivitaet_blockiert_replay_ohne_filterung() -> None:

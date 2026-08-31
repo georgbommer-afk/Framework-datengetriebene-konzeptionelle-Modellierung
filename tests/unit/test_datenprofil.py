@@ -10,8 +10,12 @@ from pandas.testing import assert_frame_equal
 from framework_mvp.application.profiling import (
     erstelle_datenprofil,
     quantil_nach_gleichung_3_10,
+    zulaessige_indikatoroperatoren,
 )
+from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
+    Indikatorbedingung,
+    Indikatoroperator,
     Profiltyp,
     Spaltenprofil,
     TechnischerDatentyp,
@@ -242,3 +246,106 @@ def test_gemischte_zeitzonen_werden_nicht_stillschweigend_vereinheitlicht() -> N
     assert profil is not None
     assert profil.fruehester_zeitpunkt is None
     assert profil.granularitaet is None
+
+
+@pytest.mark.parametrize(
+    ("werte", "operator", "vergleichswert", "erwartet"),
+    [
+        (["A", "B", "A", "C"], Indikatoroperator.GLEICH, "A", 2),
+        (["A", "B", "A", "C"], Indikatoroperator.UNGLEICH, "A", 2),
+        ([1, 5, 10, 15], Indikatoroperator.GROESSER, "5", 2),
+        ([1, 5, 10, 15], Indikatoroperator.GROESSER_GLEICH, "10", 2),
+    ],
+)
+def test_absolute_haeufigkeit_eines_indikators(
+    werte: list[object],
+    operator: Indikatoroperator,
+    vergleichswert: str,
+    erwartet: int,
+) -> None:
+    profil = erstelle_datenprofil(
+        pd.DataFrame({"x": werte}),
+        indikatorbedingungen=(Indikatorbedingung("x", operator, vergleichswert),),
+    )
+    auswertung = profil.spaltenprofile[0].indikatorauswertungen[0]
+    assert auswertung.absolute_haeufigkeit == erwartet
+    assert auswertung.auswertbare_beobachtungen == 4
+
+
+def test_indikator_ungleich_schliesst_fehlwerte_und_platzhalter_aus() -> None:
+    profil = erstelle_datenprofil(
+        pd.DataFrame({"status": ["A", np.nan, "NULL", "B", "A"]}),
+        indikatorbedingungen=(Indikatorbedingung("status", Indikatoroperator.UNGLEICH, "A"),),
+    )
+    auswertung = profil.spaltenprofile[0].indikatorauswertungen[0]
+    assert auswertung.absolute_haeufigkeit == 1
+    assert auswertung.auswertbare_beobachtungen == 3
+
+
+def test_mehrere_indikatorbedingungen_bleiben_unabhaengig() -> None:
+    profil = erstelle_datenprofil(
+        pd.DataFrame({"status": ["A", "B", "A", "C"]}),
+        indikatorbedingungen=(
+            Indikatorbedingung("status", Indikatoroperator.GLEICH, "A"),
+            Indikatorbedingung("status", Indikatoroperator.GLEICH, "B"),
+        ),
+    )
+    assert [
+        (wert.vergleichswert, wert.absolute_haeufigkeit)
+        for wert in profil.spaltenprofile[0].indikatorauswertungen
+    ] == [("A", 2), ("B", 1)]
+
+
+def test_numerischer_indikator_akzeptiert_dezimalkomma() -> None:
+    profil = erstelle_datenprofil(
+        pd.DataFrame({"wert": [10.5, 11.0]}),
+        indikatorbedingungen=(Indikatorbedingung("wert", Indikatoroperator.GLEICH, "10,5"),),
+    )
+    assert profil.spaltenprofile[0].indikatorauswertungen[0].absolute_haeufigkeit == 1
+
+
+@pytest.mark.parametrize(
+    ("daten", "vergleichswert", "erwartet"),
+    [
+        (pd.DataFrame({"wert": pd.Series([True, False, True], dtype="boolean")}), "true", 2),
+        (
+            pd.DataFrame({"wert": pd.to_datetime(["2024-01-01", "2024-01-02"])}),
+            "2024-01-02",
+            1,
+        ),
+        (pd.DataFrame({"wert": ["10:00", "11:30"]}), "11:30", 1),
+    ],
+)
+def test_boolesche_und_zeitliche_indikatorwerte_werden_typgerecht_interpretiert(
+    daten: pd.DataFrame, vergleichswert: str, erwartet: int
+) -> None:
+    profil = erstelle_datenprofil(
+        daten,
+        indikatorbedingungen=(
+            Indikatorbedingung("wert", Indikatoroperator.GLEICH, vergleichswert),
+        ),
+    )
+    assert profil.spaltenprofile[0].indikatorauswertungen[0].absolute_haeufigkeit == erwartet
+
+
+def test_ungueltiger_indikatorvergleichswert_erzeugt_keine_auswertung() -> None:
+    with pytest.raises(Domaenenfehler, match="kein gültiger Wert.*Ganzzahl"):
+        erstelle_datenprofil(
+            pd.DataFrame({"wert": [1, 2, 3]}),
+            indikatorbedingungen=(Indikatorbedingung("wert", Indikatoroperator.GLEICH, "abc"),),
+        )
+
+
+def test_indikatoroperatoren_haengen_vom_technischen_datentyp_ab() -> None:
+    assert zulaessige_indikatoroperatoren(TechnischerDatentyp.TEXT) == (
+        Indikatoroperator.GLEICH,
+        Indikatoroperator.UNGLEICH,
+    )
+    assert Indikatoroperator.GROESSER in zulaessige_indikatoroperatoren(
+        TechnischerDatentyp.GANZZAHL
+    )
+    with pytest.raises(Domaenenfehler, match="nicht zulässig"):
+        erstelle_datenprofil(
+            pd.DataFrame({"text": ["A", "B"]}),
+            indikatorbedingungen=(Indikatorbedingung("text", Indikatoroperator.GROESSER, "A"),),
+        )

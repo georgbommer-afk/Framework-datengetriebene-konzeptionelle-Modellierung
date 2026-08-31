@@ -8,8 +8,10 @@ import pandas as pd
 import pytest
 
 from framework_mvp.application.event_log import erzeuge_event_log
+from framework_mvp.application.mapping import validiere_mapping
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
+    AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION,
     Aktivitaetsbildungsart,
     Aktivitaetsdefinition,
     Attributrolle,
@@ -22,6 +24,10 @@ from framework_mvp.domain.models import (
     ZeitstempelZuordnung,
     ZusammengesetzteFallId,
 )
+
+
+def test_aktuelle_event_log_konfigurationsversion_ist_vier() -> None:
+    assert AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION == 4
 
 
 def _konfiguration(
@@ -230,6 +236,161 @@ def test_version_drei_erzeugt_optionale_kanonische_rollen_mit_utc_zeiten() -> No
     assert str(ergebnis.ereignisse["end_timestamp"].dt.tz) == "UTC"
     assert ergebnis.herkunft_standardspalten["resource"] == "bearbeiter"
     assert ergebnis.herkunft_standardspalten["start_timestamp"] == "start"
+
+
+def test_version_vier_erlaubt_ereigniszeitstempel_auch_als_ist_startzeitpunkt() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A", "A"],
+            "aktion": ["Starten", "Beenden"],
+            "IstStart": ["2025-01-01T08:00:00+01:00", "2025-01-01T09:00:00+01:00"],
+            "IstEnde": ["2025-01-01T08:30:00+01:00", "2025-01-01T09:30:00+01:00"],
+        }
+    )
+    konfiguration = replace(
+        _konfiguration(projekt_id, datensatz_id),
+        konfigurationsversion=4,
+        zeitstempelspalte="IstStart",
+        startzeitstempelspalte="IstStart",
+        endzeitstempelspalte="IstEnde",
+    )
+
+    validierung = validiere_mapping(daten, konfiguration).validierung
+    ergebnis = erzeuge_event_log(daten, konfiguration, datensatz_id)
+
+    assert validierung.gueltig
+    assert not any(wert.code == "DOPPELTE_ROLLENBELEGUNG" for wert in validierung.warnungen)
+    timestamp_utc = pd.to_datetime(ergebnis.ereignisse["timestamp"], utc=True)
+    pd.testing.assert_series_equal(
+        timestamp_utc.reset_index(drop=True),
+        ergebnis.ereignisse["start_timestamp"].reset_index(drop=True),
+        check_names=False,
+    )
+    assert ergebnis.herkunft_standardspalten["timestamp"] == "IstStart"
+    assert ergebnis.herkunft_standardspalten["start_timestamp"] == "IstStart"
+    assert ergebnis.herkunft_standardspalten["end_timestamp"] == "IstEnde"
+
+
+def test_version_vier_erlaubt_ereigniszeitstempel_auch_als_ist_endzeitpunkt() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A"],
+            "aktion": ["Fräsen abgeschlossen"],
+            "IstEnde": ["2025-01-01T10:00:00Z"],
+        }
+    )
+    konfiguration = replace(
+        _konfiguration(projekt_id, datensatz_id),
+        konfigurationsversion=4,
+        zeitstempelspalte="IstEnde",
+        endzeitstempelspalte="IstEnde",
+    )
+
+    ergebnis = erzeuge_event_log(daten, konfiguration, datensatz_id)
+
+    assert "start_timestamp" not in ergebnis.ereignisse
+    pd.testing.assert_series_equal(
+        pd.to_datetime(ergebnis.ereignisse["timestamp"], utc=True),
+        ergebnis.ereignisse["end_timestamp"],
+        check_names=False,
+    )
+    assert ergebnis.herkunft_standardspalten["timestamp"] == "IstEnde"
+    assert ergebnis.herkunft_standardspalten["end_timestamp"] == "IstEnde"
+
+
+def test_version_vier_verbietet_dieselbe_quelle_fuer_ist_start_und_ist_ende() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    basis = _konfiguration(projekt_id, datensatz_id)
+
+    with pytest.raises(Domaenenfehler, match="Ist-Startzeitpunkt und Ist-Endzeitpunkt"):
+        replace(
+            basis,
+            konfigurationsversion=4,
+            startzeitstempelspalte="zeit",
+            endzeitstempelspalte="zeit",
+        )
+
+
+def test_version_drei_behaelt_das_verbot_der_mehrfachrolle() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    with pytest.raises(Domaenenfehler, match="mehreren Standardrollen"):
+        replace(
+            _konfiguration(projekt_id, datensatz_id),
+            konfigurationsversion=3,
+            startzeitstempelspalte="zeit",
+        )
+
+
+def test_version_vier_konstruiert_keine_fehlenden_start_oder_endzeitpunkte() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A", "A"],
+            "aktion": ["A", "B"],
+            "zeit": ["2025-01-01 08:00", "2025-01-01 08:30"],
+        }
+    )
+    konfiguration = replace(
+        _konfiguration(projekt_id, datensatz_id),
+        konfigurationsversion=4,
+    )
+
+    ereignisse = erzeuge_event_log(daten, konfiguration, datensatz_id).ereignisse
+
+    assert "start_timestamp" not in ereignisse
+    assert "end_timestamp" not in ereignisse
+
+
+def test_version_vier_sortiert_weiterhin_nach_ereigniszeitstempel() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A", "A"],
+            "aktion": ["späteres Event", "früheres Event"],
+            "ereigniszeit": ["2025-01-01 10:00", "2025-01-01 09:00"],
+            "start": ["2025-01-01 07:00", "2025-01-01 08:00"],
+            "ende": ["2025-01-01 07:30", "2025-01-01 08:30"],
+        }
+    )
+    konfiguration = replace(
+        _konfiguration(projekt_id, datensatz_id),
+        konfigurationsversion=4,
+        zeitstempelspalte="ereigniszeit",
+        startzeitstempelspalte="start",
+        endzeitstempelspalte="ende",
+    )
+
+    ereignisse = erzeuge_event_log(daten, konfiguration, datensatz_id).ereignisse
+
+    assert ereignisse["activity"].tolist() == ["früheres Event", "späteres Event"]
+
+
+def test_start_nach_ende_bleibt_transparenter_validierungsbefund() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A"],
+            "aktion": ["Bearbeiten"],
+            "zeit": ["2025-01-01 09:00"],
+            "start": ["2025-01-01 09:00"],
+            "ende": ["2025-01-01 08:00"],
+        }
+    )
+    konfiguration = replace(
+        _konfiguration(projekt_id, datensatz_id),
+        konfigurationsversion=4,
+        startzeitstempelspalte="start",
+        endzeitstempelspalte="ende",
+    )
+
+    ergebnis = validiere_mapping(daten, konfiguration)
+
+    assert ergebnis.validierung.start_nach_ende == 1
+    assert any(wert.code == "START_NACH_ENDE" for wert in ergebnis.validierung.warnungen)
+    assert daten.loc[0, "start"] == "2025-01-01 09:00"
+    assert daten.loc[0, "ende"] == "2025-01-01 08:00"
 
 
 def test_version_drei_verbietet_ressource_zusaetzlich_als_allgemeines_attribut() -> None:

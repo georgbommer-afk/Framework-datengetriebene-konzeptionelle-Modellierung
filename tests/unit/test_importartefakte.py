@@ -11,7 +11,12 @@ import pandas as pd
 import pytest
 
 from framework_mvp.application.profiling import erstelle_datenprofil
-from framework_mvp.domain.models import CsvImportparameter, Trennzeichenwahl
+from framework_mvp.domain.models import (
+    CsvImportparameter,
+    Indikatorbedingung,
+    Indikatoroperator,
+    Trennzeichenwahl,
+)
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.infrastructure.importartefakte.artefakt_speicher import ImportartefaktSpeicher
 from framework_mvp.infrastructure.importartefakte.profil_json import (
@@ -154,3 +159,48 @@ def test_unterstuetzte_profilversion_wird_geprueft(tmp_path: Path) -> None:
     pfad.write_text(json.dumps(struktur), encoding="utf-8")
     with pytest.raises(Importintegritaetsfehler, match="nicht unterstützt"):
         lade_profil_json(pfad)
+
+
+def test_indikatorauswertung_wird_in_r_persistiert_und_wiederhergestellt(
+    tmp_path: Path,
+) -> None:
+    bedingung = Indikatorbedingung("Status", Indikatoroperator.GLEICH, "A")
+    profil = erstelle_datenprofil(
+        pd.DataFrame({"Status": ["A", "B", "A"]}),
+        indikatorbedingungen=(bedingung,),
+    )
+    inhalt = erstelle_profil_json(
+        import_id=uuid4(),
+        datei_pruefsumme="c" * 64,
+        importparameter=CsvImportparameter(trennzeichenwahl=Trennzeichenwahl.KOMMA),
+        tabellenbezeichnung="daten",
+        erstellt_am=datetime.now(UTC),
+        profil=profil,
+        warnungen=(),
+    )
+    struktur = json.loads(inhalt)
+    auswertung = struktur["gesamtprofil"]["spaltenprofile"][0]["indikatorauswertungen"][0]
+    assert auswertung == {
+        "absolute_haeufigkeit": 2,
+        "auswertbare_beobachtungen": 3,
+        "operator": "gleich",
+        "spaltenname": "Status",
+        "vergleichswert": "A",
+    }
+    pfad = tmp_path / "profil-mit-indikator.json"
+    pfad.write_bytes(inhalt)
+    assert lade_profil_json(pfad).indikatorbedingungen == (bedingung,)
+
+
+def test_aelteres_profil_ohne_indikatorfeld_bleibt_ladbar(tmp_path: Path) -> None:
+    inhalt, _, _ = _profil_json()
+    struktur = json.loads(inhalt)
+    struktur["profil_version"] = 2
+    for spalte in struktur["gesamtprofil"]["spaltenprofile"]:
+        spalte.pop("indikatorauswertungen", None)
+    pfad = tmp_path / "profil-version-2.json"
+    pfad.write_text(json.dumps(struktur), encoding="utf-8")
+    geladen = lade_profil_json(pfad)
+    assert geladen.profil_version == 2
+    assert geladen.indikatorbedingungen == ()
+    assert geladen.gesamtprofil["spaltenprofile"][0]["indikatorauswertungen"] == []

@@ -17,8 +17,13 @@ from framework_mvp.application.ergebnisaggregation.kpi import (
     berechne_ausgewaehlte_kpis,
     kpi_definition,
 )
+from framework_mvp.application.ergebnisaggregation.performance import (
+    busy_ratio_berechnen,
+    performance_zeitvergleich_berechnen,
+)
 from framework_mvp.application.ergebnisaggregation.sollprozess import token_replay
 from framework_mvp.application.ergebnisaggregation.strukturierte_ergebnisse import (
+    analysiere_entitaeten,
     analysiere_ressourcen,
     analysiere_warteschlangen,
     analysiere_zeitbezogene_datenauswahl,
@@ -34,12 +39,22 @@ from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     Aggregationsstatus,
     Aktivitaetsmapping,
+    AnkunftsstromDefinition,
+    Attributzuordnung,
+    BestaetigteWarteschlangeninformation,
+    BusyRatioErgebnis,
+    BusyRatioKonfiguration,
     ConformanceErgebnis,
     Datenartefakt,
+    EntitaetsanalyseErgebnis,
     Ergebnisaggregation,
     KpiErgebnis,
     KpiKonfiguration,
+    PerformanceZeitvergleichErgebnis,
+    PerformanceZeitvergleichKonfiguration,
     ProcessMiningAnalyse,
+    ProfilkennzahlReferenz,
+    Profilkennzahltyp,
     Projekt,
     Qualitaetsfreigabe,
     RessourcenanalyseErgebnis,
@@ -54,10 +69,10 @@ from framework_mvp.domain.models import (
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
 
-AG_ARTEFAKTVERSION = 2
-AG_LESBARE_ARTEFAKTVERSIONEN = frozenset({1, AG_ARTEFAKTVERSION})
+AG_ARTEFAKTVERSION = 5
+AG_LESBARE_ARTEFAKTVERSIONEN = frozenset({1, 2, 3, 4, AG_ARTEFAKTVERSION})
 AG_ARTEFAKTART = "aggregierte_analyseergebnisse_a_g"
-STRUKTURIERTE_ERGEBNISVERSION = 1
+STRUKTURIERTE_ERGEBNISVERSION = 3
 
 
 def _normalisieren(wert: Any) -> Any:
@@ -109,6 +124,7 @@ class Aggregationsgrundlage:
     discovery_ergebnisse_sha256: str
     eingabefingerabdruck: str
     datenquellen_ids: tuple[str, ...] = ()
+    profilkennzahlen: tuple[ProfilkennzahlReferenz, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +145,16 @@ class Aggregationsvorschau:
     ressourcenanalyse: RessourcenanalyseErgebnis | None = None
     warteschlangenanalyse: WarteschlangenanalyseErgebnis | None = None
     zeitbezogene_datenauswahl: ZeitbezogeneDatenauswahlErgebnis | None = None
-    ankunftsspalte: str = ""
+    entitaetsanalyse: EntitaetsanalyseErgebnis | None = None
+    ressourcenattributzuordnungen: tuple[Attributzuordnung, ...] = ()
+    entitaetsattributzuordnungen: tuple[Attributzuordnung, ...] = ()
+    entitaetstyp: str = ""
+    bestaetigte_warteschlangen: tuple[BestaetigteWarteschlangeninformation, ...] = ()
+    ankunftsstroeme: tuple[AnkunftsstromDefinition, ...] = ()
+    performance_zeitvergleich_konfiguration: PerformanceZeitvergleichKonfiguration | None = None
+    performance_zeitvergleich_ergebnis: PerformanceZeitvergleichErgebnis | None = None
+    busy_ratio_konfiguration: BusyRatioKonfiguration | None = None
+    busy_ratio_ergebnis: BusyRatioErgebnis | None = None
 
 
 class ErgebnisaggregationService:
@@ -197,33 +222,143 @@ class ErgebnisaggregationService:
             raise Importintegritaetsfehler("T und E* besitzen keine übereinstimmende Lineage.")
         profil_snapshot: list[dict[str, Any]] = []
         profilwerte: dict[str, float] = {}
+        profilkennzahlen: list[ProfilkennzahlReferenz] = []
         datenquellen_ids: list[str] = []
         for import_id in datensatz.import_ids:
             geladen = self._transformationen.import_laden(import_id)
             if geladen is None or geladen.importvorgang.projekt_id != projekt_id:
                 raise Importintegritaetsfehler("Ein in T referenziertes Datenprofil R fehlt.")
             profil = geladen.profil
+            importvorgang = geladen.importvorgang
             datenquellen_id = str(getattr(geladen.importvorgang, "datenquellen_id", ""))
             if datenquellen_id:
                 datenquellen_ids.append(datenquellen_id)
+            originaldateiname = str(getattr(importvorgang, "originaldateiname", ""))
+            tabellenbezeichnung = str(
+                getattr(importvorgang, "tabellenbezeichnung", "")
+                or getattr(profil, "tabellenbezeichnung", "")
+            )
+            datenquelle = getattr(geladen, "datenquelle", None)
+            datenquelle_bezeichnung = str(getattr(datenquelle, "bezeichnung", ""))
             snapshot = {
                 "import_id": str(import_id),
                 "raw_sha256": geladen.importvorgang.sha256,
                 "profil_version": profil.profil_version,
                 "datei_pruefsumme": profil.datei_pruefsumme,
+                "datenquellen_id": datenquellen_id,
+                "datenquelle_bezeichnung": datenquelle_bezeichnung,
+                "originaldateiname": originaldateiname,
+                "tabellenbezeichnung": tabellenbezeichnung,
                 "gesamtprofil": profil.gesamtprofil,
             }
             snapshot["profil_sha256"] = _sha(snapshot)
             profil_snapshot.append(snapshot)
             gesamt = profil.gesamtprofil
-            profilwerte[f"{import_id}:__gesamt__:zeilen"] = float(gesamt.get("zeilen", 0))
+            zeilen = int(gesamt.get("zeilen", 0))
+            legacy_zeilen = f"{import_id}:__gesamt__:zeilen"
+            profilwerte[legacy_zeilen] = float(zeilen)
+            profilkennzahlen.append(
+                ProfilkennzahlReferenz(
+                    referenz_id="profilkennzahl:"
+                    + _sha(
+                        {
+                            "import_id": str(import_id),
+                            "kennzahltyp": Profilkennzahltyp.ZEILENANZAHL,
+                        }
+                    ),
+                    import_id=str(import_id),
+                    datenquellen_id=datenquellen_id,
+                    datenquelle_bezeichnung=datenquelle_bezeichnung,
+                    originaldateiname=originaldateiname,
+                    tabellenbezeichnung=tabellenbezeichnung,
+                    spaltenname="",
+                    kennzahltyp=Profilkennzahltyp.ZEILENANZAHL,
+                    wert=float(zeilen),
+                    auswertbare_beobachtungen=zeilen,
+                    grundgesamtheit=zeilen,
+                    profilversion=profil.profil_version,
+                    profil_sha256=snapshot["profil_sha256"],
+                )
+            )
             for spalte in gesamt.get("spaltenprofile", []):
+                spaltenname = str(spalte.get("spaltenname", ""))
+                for auswertung in spalte.get("indikatorauswertungen", []):
+                    if not isinstance(auswertung, dict):
+                        continue
+                    operator = str(auswertung.get("operator", ""))
+                    vergleichswert = str(auswertung.get("vergleichswert", ""))
+                    wert = float(auswertung.get("absolute_haeufigkeit", 0))
+                    auswertbar = int(auswertung.get("auswertbare_beobachtungen", 0))
+                    profilkennzahlen.append(
+                        ProfilkennzahlReferenz(
+                            referenz_id="profilkennzahl:"
+                            + _sha(
+                                {
+                                    "import_id": str(import_id),
+                                    "spaltenname": spaltenname,
+                                    "kennzahltyp": (
+                                        Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR
+                                    ),
+                                    "operator": operator,
+                                    "vergleichswert": vergleichswert,
+                                }
+                            ),
+                            import_id=str(import_id),
+                            datenquellen_id=datenquellen_id,
+                            datenquelle_bezeichnung=datenquelle_bezeichnung,
+                            originaldateiname=originaldateiname,
+                            tabellenbezeichnung=tabellenbezeichnung,
+                            spaltenname=spaltenname,
+                            kennzahltyp=Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR,
+                            wert=wert,
+                            operator=operator,
+                            vergleichswert=vergleichswert,
+                            auswertbare_beobachtungen=auswertbar,
+                            grundgesamtheit=zeilen,
+                            profilversion=profil.profil_version,
+                            profil_sha256=snapshot["profil_sha256"],
+                        )
+                    )
                 numerisch = spalte.get("numerisch")
                 if not isinstance(numerisch, dict):
                     continue
                 for kennzahl, wert in numerisch.items():
                     if isinstance(wert, (int, float)):
-                        profilwerte[f"{import_id}:{spalte['spaltenname']}:{kennzahl}"] = float(wert)
+                        profilwerte[f"{import_id}:{spaltenname}:{kennzahl}"] = float(wert)
+                profiltypen = {
+                    "gueltige_werte": Profilkennzahltyp.GUELTIGE_BEOBACHTUNGEN,
+                    "mittelwert": Profilkennzahltyp.ARITHMETISCHES_MITTEL,
+                    "summe": Profilkennzahltyp.SUMME,
+                }
+                for kennzahl, kennzahltyp in profiltypen.items():
+                    wert = numerisch.get(kennzahl)
+                    if not isinstance(wert, (int, float)):
+                        continue
+                    auswertbar = int(numerisch.get("gueltige_werte", zeilen))
+                    profilkennzahlen.append(
+                        ProfilkennzahlReferenz(
+                            referenz_id="profilkennzahl:"
+                            + _sha(
+                                {
+                                    "import_id": str(import_id),
+                                    "spaltenname": spaltenname,
+                                    "kennzahltyp": kennzahltyp,
+                                }
+                            ),
+                            import_id=str(import_id),
+                            datenquellen_id=datenquellen_id,
+                            datenquelle_bezeichnung=datenquelle_bezeichnung,
+                            originaldateiname=originaldateiname,
+                            tabellenbezeichnung=tabellenbezeichnung,
+                            spaltenname=spaltenname,
+                            kennzahltyp=kennzahltyp,
+                            wert=float(wert),
+                            auswertbare_beobachtungen=auswertbar,
+                            grundgesamtheit=zeilen,
+                            profilversion=profil.profil_version,
+                            profil_sha256=snapshot["profil_sha256"],
+                        )
+                    )
         u_sha256 = _sha(projekt.untersuchungsauftrag)
         r_sha256 = _sha(profil_snapshot)
         fingerabdruck = _sha(
@@ -264,6 +399,7 @@ class ErgebnisaggregationService:
             a_d_sha256,
             fingerabdruck,
             tuple(sorted(set(datenquellen_ids))),
+            tuple(profilkennzahlen),
         )
 
     @staticmethod
@@ -276,7 +412,17 @@ class ErgebnisaggregationService:
         zeitvergleich_konfiguration: ZeitvergleichKonfiguration | None,
         zeitvergleich_ausfuehren: bool,
         ressourcenanalyse: RessourcenanalyseErgebnis | None = None,
-        ankunftsspalte: str = "",
+        ressourcenattributzuordnungen: tuple[Attributzuordnung, ...] = (),
+        entitaetsattributzuordnungen: tuple[Attributzuordnung, ...] = (),
+        entitaetstyp: str = "",
+        bestaetigte_warteschlangen: tuple[BestaetigteWarteschlangeninformation, ...] = (),
+        ankunftsstroeme: tuple[AnkunftsstromDefinition, ...] = (),
+        performance_zeitvergleich_konfiguration: (
+            PerformanceZeitvergleichKonfiguration | None
+        ) = None,
+        performance_zeitvergleich_ausfuehren: bool = False,
+        busy_ratio_konfiguration: BusyRatioKonfiguration | None = None,
+        busy_ratio_ausfuehren: bool = False,
     ) -> str:
         return _sha(
             {
@@ -288,7 +434,17 @@ class ErgebnisaggregationService:
                 "zeitvergleich_konfiguration": zeitvergleich_konfiguration,
                 "zeitvergleich_ausfuehren": zeitvergleich_ausfuehren,
                 "ressourcenanalyse": ressourcenanalyse,
-                "ankunftsspalte": ankunftsspalte,
+                "ressourcenattributzuordnungen": ressourcenattributzuordnungen,
+                "entitaetsattributzuordnungen": entitaetsattributzuordnungen,
+                "entitaetstyp": entitaetstyp,
+                "bestaetigte_warteschlangen": bestaetigte_warteschlangen,
+                "ankunftsstroeme": ankunftsstroeme,
+                "performance_zeitvergleich_konfiguration": (
+                    performance_zeitvergleich_konfiguration
+                ),
+                "performance_zeitvergleich_ausfuehren": (performance_zeitvergleich_ausfuehren),
+                "busy_ratio_konfiguration": busy_ratio_konfiguration,
+                "busy_ratio_ausfuehren": busy_ratio_ausfuehren,
             }
         )
 
@@ -303,7 +459,17 @@ class ErgebnisaggregationService:
         zeitvergleich_konfiguration: ZeitvergleichKonfiguration | None,
         zeitvergleich_ausfuehren: bool,
         ressourcenanalyse: RessourcenanalyseErgebnis | None = None,
-        ankunftsspalte: str = "",
+        ressourcenattributzuordnungen: tuple[Attributzuordnung, ...] = (),
+        entitaetsattributzuordnungen: tuple[Attributzuordnung, ...] = (),
+        entitaetstyp: str = "",
+        bestaetigte_warteschlangen: tuple[BestaetigteWarteschlangeninformation, ...] = (),
+        ankunftsstroeme: tuple[AnkunftsstromDefinition, ...] = (),
+        performance_zeitvergleich_konfiguration: (
+            PerformanceZeitvergleichKonfiguration | None
+        ) = None,
+        performance_zeitvergleich_ausfuehren: bool = False,
+        busy_ratio_konfiguration: BusyRatioKonfiguration | None = None,
+        busy_ratio_ausfuehren: bool = False,
     ) -> str:
         """Erlaubt der UI, geänderte Entscheidungen vor dem Speichern zu erkennen."""
         return self._konfigurationsfingerabdruck(
@@ -315,7 +481,15 @@ class ErgebnisaggregationService:
             zeitvergleich_konfiguration,
             zeitvergleich_ausfuehren,
             ressourcenanalyse,
-            ankunftsspalte,
+            ressourcenattributzuordnungen,
+            entitaetsattributzuordnungen,
+            entitaetstyp,
+            bestaetigte_warteschlangen,
+            ankunftsstroeme,
+            performance_zeitvergleich_konfiguration,
+            performance_zeitvergleich_ausfuehren,
+            busy_ratio_konfiguration,
+            busy_ratio_ausfuehren,
         )
 
     def vorschau(
@@ -333,7 +507,17 @@ class ErgebnisaggregationService:
         zeitvergleich_konfiguration: ZeitvergleichKonfiguration | None = None,
         zeitvergleich_ausfuehren: bool = False,
         ressourcenanalyse: RessourcenanalyseErgebnis | None = None,
-        ankunftsspalte: str = "",
+        ressourcenattributzuordnungen: tuple[Attributzuordnung, ...] = (),
+        entitaetsattributzuordnungen: tuple[Attributzuordnung, ...] = (),
+        entitaetstyp: str = "",
+        bestaetigte_warteschlangen: tuple[BestaetigteWarteschlangeninformation, ...] = (),
+        ankunftsstroeme: tuple[AnkunftsstromDefinition, ...] = (),
+        performance_zeitvergleich_konfiguration: (
+            PerformanceZeitvergleichKonfiguration | None
+        ) = None,
+        performance_zeitvergleich_ausfuehren: bool = False,
+        busy_ratio_konfiguration: BusyRatioKonfiguration | None = None,
+        busy_ratio_ausfuehren: bool = False,
     ) -> Aggregationsvorschau:
         """Berechnet die drei unabhängigen Bestandteile auf tiefen Arbeitskopien."""
         basis = self.grundlage_laden(projekt_id, freigabe_id, analyse_id)
@@ -362,6 +546,7 @@ class ErgebnisaggregationService:
                     "sha256": basis.freigabe.event_log_sha256,
                 },
             },
+            basis.profilkennzahlen,
         )
         kpis = berechne_ausgewaehlte_kpis(ausgewaehlt, kpi_konfigurationen, kpi_basis)
         warnungen: list[str] = []
@@ -423,40 +608,97 @@ class ErgebnisaggregationService:
                         )
                     except Domaenenfehler as fehler:
                         warnungen.append(f"Soll-Ist-Zeitauswertung wurde nicht berechnet: {fehler}")
+        performance_zeitvergleich = None
+        if performance_zeitvergleich_ausfuehren:
+            if performance_zeitvergleich_konfiguration is None:
+                warnungen.append(
+                    "dT/dB nicht berechenbar: Die bestätigten Soll-/Ist-Zeitrollen fehlen."
+                )
+            else:
+                if performance_zeitvergleich_konfiguration.sollquelle == "T":
+                    performance_soll = basis.zwischendaten.copy(deep=True)
+                elif performance_zeitvergleich_konfiguration.sollquelle == "E*":
+                    performance_soll = basis.event_log.copy(deep=True)
+                elif (
+                    sollzeitdaten is not None
+                    and sollzeit_tabelle is not None
+                    and sollzeitdaten.projekt_id == projekt_id
+                ):
+                    performance_soll = sollzeit_tabelle.copy(deep=True)
+                else:
+                    performance_soll = None
+                if performance_soll is None:
+                    warnungen.append(
+                        "dT/dB nicht berechenbar: Die bestätigte Sollzeitquelle fehlt."
+                    )
+                else:
+                    try:
+                        performance_zeitvergleich = performance_zeitvergleich_berechnen(
+                            soll_daten=performance_soll,
+                            event_log=basis.event_log.copy(deep=True),
+                            konfiguration=performance_zeitvergleich_konfiguration,
+                        )
+                    except Domaenenfehler as fehler:
+                        warnungen.append(f"dT/dB nicht berechenbar: {fehler}")
+        busy_ratio = None
+        if busy_ratio_ausfuehren:
+            if busy_ratio_konfiguration is None:
+                warnungen.append(
+                    "Busy Ratio nicht berechenbar: Ressource, Ist-Start, Ist-Ende oder "
+                    "Betrachtungszeitraum wurde nicht bestätigt."
+                )
+            else:
+                try:
+                    busy_ratio = busy_ratio_berechnen(
+                        event_log=basis.event_log.copy(deep=True),
+                        konfiguration=busy_ratio_konfiguration,
+                    )
+                except Domaenenfehler as fehler:
+                    warnungen.append(f"Busy Ratio nicht berechenbar: {fehler}")
+        bestaetigte_ressourcenentscheidung = ressourcenanalyse
         if ressourcenanalyse is None:
-            ressourcenanalyse = analysiere_ressourcen(basis.event_log)
-        elif ressourcenanalyse.modus is Ressourcenzuordnungsmodus.MANUELL:
             ressourcenanalyse = analysiere_ressourcen(
                 basis.event_log,
-                manuelle_zuordnungen={
-                    wert.aktivitaet: wert.ressourcen for wert in ressourcenanalyse.zuordnungen
-                },
+                zwischendaten=basis.zwischendaten,
+                attributzuordnungen=ressourcenattributzuordnungen,
             )
-        elif ressourcenanalyse.modus is Ressourcenzuordnungsmodus.NICHT_MOEGLICH:
-            if not ressourcenanalyse.begruendung.strip():
-                raise Domaenenfehler(
-                    "Eine nicht mögliche Ressourcenzuordnung benötigt eine Begründung."
-                )
-            ressourcenanalyse = analysiere_ressourcen(
-                basis.event_log,
-                nicht_moeglich_begruendung=ressourcenanalyse.begruendung,
-            )
-            if ressourcenanalyse.modus is Ressourcenzuordnungsmodus.AUTOMATISCH:
-                raise Domaenenfehler(
-                    "Eine vollständige kanonische Ressourcenzuordnung darf nicht als nicht "
-                    "möglich dokumentiert werden."
-                )
         else:
-            automatisch = analysiere_ressourcen(basis.event_log)
-            if automatisch != ressourcenanalyse:
-                raise Domaenenfehler(
-                    "Die automatische Ressourcenzuordnung stimmt nicht mit E* überein."
+            manuell = {
+                wert.aktivitaet: (
+                    wert.manuell_bestaetigte_ressourcen
+                    or (
+                        wert.ressourcen
+                        if ressourcenanalyse.modus is Ressourcenzuordnungsmodus.MANUELL
+                        else ()
+                    )
                 )
-        warteschlangenanalyse = analysiere_warteschlangen(basis.event_log)
+                for wert in ressourcenanalyse.zuordnungen
+            }
+            ressourcenanalyse = analysiere_ressourcen(
+                basis.event_log,
+                manuelle_zuordnungen=manuell,
+                offene_aktivitaeten=tuple(
+                    wert.aktivitaet for wert in ressourcenanalyse.zuordnungen if wert.offen
+                ),
+                nicht_moeglich_begruendung=ressourcenanalyse.begruendung,
+                zwischendaten=basis.zwischendaten,
+                attributzuordnungen=ressourcenattributzuordnungen,
+            )
+        entitaetsanalyse = analysiere_entitaeten(
+            basis.zwischendaten,
+            basis.event_log,
+            attributzuordnungen=entitaetsattributzuordnungen,
+            entitaetstyp=entitaetstyp,
+        )
+        warteschlangenanalyse = analysiere_warteschlangen(
+            basis.event_log,
+            bestaetigte_warteschlangen=bestaetigte_warteschlangen,
+            zwischendaten=basis.zwischendaten,
+        )
         zeitbezogene_datenauswahl = analysiere_zeitbezogene_datenauswahl(
             basis.zwischendaten,
             basis.event_log,
-            ankunftsspalte=ankunftsspalte,
+            ankunftsstroeme=ankunftsstroeme,
             datenbasis_referenzen={
                 "Q": {"datenquellen_ids": list(basis.datenquellen_ids)},
                 "R": {
@@ -486,8 +728,16 @@ class ErgebnisaggregationService:
             sollzeitdaten,
             zeitvergleich_konfiguration,
             zeitvergleich_ausfuehren,
-            ressourcenanalyse,
-            ankunftsspalte,
+            bestaetigte_ressourcenentscheidung,
+            ressourcenattributzuordnungen,
+            entitaetsattributzuordnungen,
+            entitaetstyp,
+            bestaetigte_warteschlangen,
+            ankunftsstroeme,
+            performance_zeitvergleich_konfiguration,
+            performance_zeitvergleich_ausfuehren,
+            busy_ratio_konfiguration,
+            busy_ratio_ausfuehren,
         )
         pd.testing.assert_frame_equal(basis.zwischendaten, t_original, check_dtype=True)
         pd.testing.assert_frame_equal(basis.event_log, e_original, check_dtype=True)
@@ -506,7 +756,16 @@ class ErgebnisaggregationService:
             ressourcenanalyse,
             warteschlangenanalyse,
             zeitbezogene_datenauswahl,
-            ankunftsspalte,
+            entitaetsanalyse,
+            ressourcenattributzuordnungen,
+            entitaetsattributzuordnungen,
+            entitaetstyp,
+            bestaetigte_warteschlangen,
+            ankunftsstroeme,
+            performance_zeitvergleich_konfiguration,
+            performance_zeitvergleich,
+            busy_ratio_konfiguration,
+            busy_ratio,
         )
 
     def speichern(
@@ -541,26 +800,34 @@ class ErgebnisaggregationService:
             )
         if vorschau.ressourcenanalyse is None:
             raise Domaenenfehler("Die strukturierte Ressourcenanalyse der Vorschau fehlt.")
-        if vorschau.ressourcenanalyse.modus is Ressourcenzuordnungsmodus.MANUELL:
-            erwartete_ressourcen = analysiere_ressourcen(
-                basis.event_log,
-                manuelle_zuordnungen={
-                    wert.aktivitaet: wert.ressourcen
-                    for wert in vorschau.ressourcenanalyse.zuordnungen
-                },
-            )
-        elif vorschau.ressourcenanalyse.modus is Ressourcenzuordnungsmodus.NICHT_MOEGLICH:
-            erwartete_ressourcen = analysiere_ressourcen(
-                basis.event_log,
-                nicht_moeglich_begruendung=vorschau.ressourcenanalyse.begruendung,
-            )
-        else:
-            erwartete_ressourcen = analysiere_ressourcen(basis.event_log)
-        erwartete_warteschlangen = analysiere_warteschlangen(basis.event_log)
+        erwartete_ressourcen = analysiere_ressourcen(
+            basis.event_log,
+            manuelle_zuordnungen={
+                wert.aktivitaet: wert.manuell_bestaetigte_ressourcen
+                for wert in vorschau.ressourcenanalyse.zuordnungen
+            },
+            offene_aktivitaeten=tuple(
+                wert.aktivitaet for wert in vorschau.ressourcenanalyse.zuordnungen if wert.offen
+            ),
+            nicht_moeglich_begruendung=vorschau.ressourcenanalyse.begruendung,
+            zwischendaten=basis.zwischendaten,
+            attributzuordnungen=vorschau.ressourcenattributzuordnungen,
+        )
+        erwartete_entitaeten = analysiere_entitaeten(
+            basis.zwischendaten,
+            basis.event_log,
+            attributzuordnungen=vorschau.entitaetsattributzuordnungen,
+            entitaetstyp=vorschau.entitaetstyp,
+        )
+        erwartete_warteschlangen = analysiere_warteschlangen(
+            basis.event_log,
+            bestaetigte_warteschlangen=vorschau.bestaetigte_warteschlangen,
+            zwischendaten=basis.zwischendaten,
+        )
         erwartete_zeitdaten = analysiere_zeitbezogene_datenauswahl(
             basis.zwischendaten,
             basis.event_log,
-            ankunftsspalte=vorschau.ankunftsspalte,
+            ankunftsstroeme=vorschau.ankunftsstroeme,
             datenbasis_referenzen={
                 "Q": {"datenquellen_ids": list(basis.datenquellen_ids)},
                 "R": {
@@ -584,6 +851,7 @@ class ErgebnisaggregationService:
         )
         if (
             vorschau.ressourcenanalyse != erwartete_ressourcen
+            or vorschau.entitaetsanalyse != erwartete_entitaeten
             or vorschau.warteschlangenanalyse != erwartete_warteschlangen
             or vorschau.zeitbezogene_datenauswahl != erwartete_zeitdaten
         ):
@@ -681,7 +949,11 @@ class ErgebnisaggregationService:
                 "relativer_pfad": sollzeit_pfad,
                 "sha256": vorschau.sollzeitdaten.sha256,
             }
-        if vorschau.zeitvergleich_ergebnis is not None:
+        if (
+            vorschau.zeitvergleich_ergebnis is not None
+            and vorschau.performance_zeitvergleich_ergebnis is None
+            and vorschau.busy_ratio_ergebnis is None
+        ):
             av = vorschau.zeitvergleich_ergebnis
             av_json_pfad = (basis_pfad / f"{av.auswertungs_id}.deviations.json").as_posix()
             av_csv_pfad = (basis_pfad / f"{av.auswertungs_id}.deviations.csv").as_posix()
@@ -711,6 +983,58 @@ class ErgebnisaggregationService:
                 "relativer_pfad": av_json_pfad,
                 "detail_csv_pfad": av_csv_pfad,
             }
+        if (
+            vorschau.performance_zeitvergleich_ergebnis is not None
+            or vorschau.busy_ratio_ergebnis is not None
+        ):
+            performance = vorschau.performance_zeitvergleich_ergebnis
+            busy = vorschau.busy_ratio_ergebnis
+            if performance is not None:
+                av_id = performance.auswertungs_id
+            else:
+                assert busy is not None
+                av_id = busy.auswertungs_id
+            av_json_pfad = (basis_pfad / f"{av_id}.performance-a-v.json").as_posix()
+            av_struktur = {
+                "artefaktart": "potenzielle_verbesserungspotenziale_a_v",
+                "artefaktversion": 2,
+                "quellreferenzen": {
+                    "event_log_id": str(basis.freigabe.event_log_id),
+                    "event_log_sha256": basis.freigabe.event_log_sha256,
+                    "zwischendatensatz_id": str(basis.zwischendatensatz.zwischendatensatz_id),
+                    "zwischendatensatz_sha256": basis.zwischendatensatz.sha256,
+                    "sollzeitdaten": referenzen.get("sollzeitdaten"),
+                },
+                "fertigstellungs_und_bearbeitungszeitabweichungen": performance,
+                "ressourcenbezogene_busy_ratio": busy,
+                "hinweis": (
+                    "Zeitliche Abweichungen und Busy Ratio sind Hinweise auf potenzielle "
+                    "Verbesserungspotenziale; es werden keine Ursachen oder Maßnahmen abgeleitet."
+                ),
+            }
+            artefakte[av_json_pfad] = _json_bytes(av_struktur)
+            av_referenz: dict[str, Any] = {
+                "auswertungs_id": str(av_id),
+                "artefaktversion": 2,
+                "relativer_pfad": av_json_pfad,
+            }
+            if performance is not None:
+                performance_csv = (basis_pfad / f"{av_id}.dt-db.csv").as_posix()
+                artefakte[performance_csv] = (
+                    pd.DataFrame([asdict(wert) for wert in performance.einzelwerte])
+                    .to_csv(index=False)
+                    .encode("utf-8")
+                )
+                av_referenz["dt_db_csv_pfad"] = performance_csv
+            if busy is not None:
+                busy_csv = (basis_pfad / f"{av_id}.busy-ratio.csv").as_posix()
+                artefakte[busy_csv] = (
+                    pd.DataFrame([asdict(wert) for wert in busy.einzelwerte])
+                    .to_csv(index=False)
+                    .encode("utf-8")
+                )
+                av_referenz["busy_ratio_csv_pfad"] = busy_csv
+            referenzen["potenzielle_verbesserungspotenziale_a_v"] = av_referenz
         pruefsummen = {
             pfad: hashlib.sha256(inhalt).hexdigest() for pfad, inhalt in artefakte.items()
         }
@@ -725,7 +1049,13 @@ class ErgebnisaggregationService:
                 metadatenpfad = referenz.get("relativer_metadaten_pfad")
                 if metadatenpfad in pruefsummen:
                     referenz["metadaten_sha256"] = pruefsummen[metadatenpfad]
-                for schluessel in ("relativer_pfad", "relativer_metadaten_pfad", "detail_csv_pfad"):
+                for schluessel in (
+                    "relativer_pfad",
+                    "relativer_metadaten_pfad",
+                    "detail_csv_pfad",
+                    "dt_db_csv_pfad",
+                    "busy_ratio_csv_pfad",
+                ):
                     pfad = referenz.get(schluessel)
                     if pfad in pruefsummen:
                         referenz[f"{schluessel}_sha256"] = pruefsummen[pfad]
@@ -789,6 +1119,8 @@ class ErgebnisaggregationService:
                 "analyse_id": str(basis.analyse.analyse_id),
                 "relativer_pfad": basis.analyse.relativer_ergebnis_pfad,
                 "sha256": basis.discovery_ergebnisse_sha256,
+                "schwellwert_k": basis.discovery_ergebnisse.get("schwellwert_k"),
+                "miner_variante": basis.discovery_ergebnisse.get("miner_variante"),
                 "bedeutung": "Unveränderte Referenz; A_D wurde weder kopiert noch verändert.",
             },
             "prozessbelege": {
@@ -805,13 +1137,37 @@ class ErgebnisaggregationService:
             },
             "ausgewaehlte_kpi_ids": list(basis.projekt.untersuchungsauftrag.ausgewaehlte_kpi_ids),
             "kpi_definitionen_version": 1,
+            "kpi_konfigurationsversion": 2,
             "kpi_konfigurationen": vorschau.kpi_konfigurationen,
             "kpi_ergebnisse": vorschau.kpi_ergebnisse,
+            "conformance_checking": {
+                "sollprozess_vorhanden": vorschau.sollmodell is not None,
+                "durchgefuehrt": vorschau.conformance_ergebnis is not None,
+                "status": (
+                    "Token-Based Replay durchgeführt; A_C ist referenziert."
+                    if vorschau.conformance_ergebnis is not None
+                    else (
+                        "Kein Sollprozess vorhanden; Conformance Checking entfällt ohne Fehler."
+                        if vorschau.sollmodell is None
+                        else "Conformance Checking nicht durchgeführt oder Voraussetzungen fehlen."
+                    )
+                ),
+                "a_c_referenz": referenzen.get("conformance_ergebnisse_a_c"),
+            },
             "strukturierte_ergebnisse": {
                 "ergebnisversion": STRUKTURIERTE_ERGEBNISVERSION,
                 "ressourcen": vorschau.ressourcenanalyse,
+                "entitaetsinstanzen_und_attribute": vorschau.entitaetsanalyse,
                 "warteschlangen_und_wartezeiten": vorschau.warteschlangenanalyse,
                 "zeitbezogene_datenauswahl": vorschau.zeitbezogene_datenauswahl,
+                "performance_und_engpassanalyse": {
+                    "ergebnisversion": 1,
+                    "dt_db_konfiguration": (vorschau.performance_zeitvergleich_konfiguration),
+                    "dt_db_ergebnis": vorschau.performance_zeitvergleich_ergebnis,
+                    "busy_ratio_konfiguration": vorschau.busy_ratio_konfiguration,
+                    "busy_ratio_ergebnis": vorschau.busy_ratio_ergebnis,
+                    "a_v_referenz": referenzen.get("potenzielle_verbesserungspotenziale_a_v"),
+                },
             },
             "optionale_artefakte": referenzen,
             "pm4py_version": basis.analyse.pm4py_version,

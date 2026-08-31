@@ -46,7 +46,8 @@ class BehandlungOffenerEintrag:
     urspruengliche_kategorie: Offenheitskategorie
     urspruengliche_begruendung: str
     entscheidung: Offenheitsentscheidung
-    fachliche_ergaenzung_oder_begruendung: str
+    fachlicher_inhalt: str = ""
+    begruendung: str = ""
     menschliche_entscheidung: bool = True
 
     def __post_init__(self) -> None:
@@ -54,13 +55,40 @@ class BehandlungOffenerEintrag:
             raise Domaenenfehler("Die Behandlung benötigt die ID des offenen Eintrags.")
         if not self.urspruengliche_begruendung.strip():
             raise Domaenenfehler("Die ursprüngliche Begründung aus O darf nicht fehlen.")
-        if not self.fachliche_ergaenzung_oder_begruendung.strip():
-            raise Domaenenfehler(
-                "Jede Behandlung benötigt eine fachliche Ergänzung beziehungsweise Begründung."
-            )
+        object.__setattr__(self, "offener_eintrag_id", self.offener_eintrag_id.strip())
+        object.__setattr__(
+            self, "urspruengliche_begruendung", self.urspruengliche_begruendung.strip()
+        )
+        object.__setattr__(self, "fachlicher_inhalt", self.fachlicher_inhalt.strip())
+        object.__setattr__(self, "begruendung", self.begruendung.strip())
         if not self.menschliche_entscheidung:
             raise Domaenenfehler(
                 "Eine O-Behandlung muss als menschliche Entscheidung markiert sein."
+            )
+        if (
+            self.entscheidung is Offenheitsentscheidung.BESTAETIGT
+            and self.urspruengliche_kategorie is not Offenheitskategorie.FACHLICH_UNSICHER
+        ):
+            raise Domaenenfehler(
+                "Nur ein fachlich unsicherer O-Eintrag darf fachlich bestätigt werden."
+            )
+        if self.entscheidung is Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST:
+            if not self.fachlicher_inhalt or not self.begruendung:
+                raise Domaenenfehler(
+                    "Eine Ergänzung oder Anpassung benötigt fachlichen Inhalt und Begründung."
+                )
+        elif not self.begruendung:
+            raise Domaenenfehler("Die fachliche Entscheidung benötigt eine Begründung.")
+        if (
+            self.entscheidung
+            in {
+                Offenheitsentscheidung.BESTAETIGT,
+                Offenheitsentscheidung.NICHT_ANWENDBAR,
+            }
+            and self.fachlicher_inhalt
+        ):
+            raise Domaenenfehler(
+                "Bestätigung und Nichtanwendbarkeit dürfen keinen Modellinhalt ergänzen."
             )
 
 
@@ -74,6 +102,8 @@ class ZusaetzlicheModellanpassung:
     menschliche_entscheidung: bool = True
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "fachlicher_inhalt", self.fachlicher_inhalt.strip())
+        object.__setattr__(self, "begruendung", self.begruendung.strip())
         if not self.fachlicher_inhalt.strip() or not self.begruendung.strip():
             raise Domaenenfehler(
                 "Eine zusätzliche Anpassung benötigt fachlichen Inhalt und Begründung."

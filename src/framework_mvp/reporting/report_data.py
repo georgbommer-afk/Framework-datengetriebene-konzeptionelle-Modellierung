@@ -13,6 +13,25 @@ REPORT_DATA_VERSION = 1
 ERWARTETE_BESTANDTEIL_IDS = (
     "problemstellung",
     "zielsetzung",
+    "ausgaben",
+    "eingaben",
+    "modellumfang",
+    "modellgrenzen",
+    "detaillierungsgrad",
+    "entitaeten",
+    "aktivitaeten",
+    "warteschlangen",
+    "ressourcen",
+    "annahmen",
+    "vereinfachungen",
+    "datenauswahl",
+    "daten",
+    "darstellung_der_vorgaenge_des_systems",
+)
+
+_HISTORISCHE_BESTANDTEIL_IDS = (
+    "problemstellung",
+    "zielsetzung",
     "ausgaben_und_eingaben",
     "modellumfang_grenzen_detaillierungsgrad",
     "entitaeten",
@@ -89,7 +108,7 @@ def _code_liste(wert: Any) -> list[dict[str, str]]:
 
 
 def _bestandteile_nach_id(k_stern: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
-    """Indiziert die elf Bestandteile unabhängig von ihrer späteren Darstellung."""
+    """Indiziert aktuelle 16er- sowie historische 11er-Bestandteile."""
     roh = k_stern.get("modellbestandteile")
     if not isinstance(roh, list):
         raise ReportDataFehler("K* enthält keine gültige Liste der Modellbestandteile.")
@@ -105,9 +124,11 @@ def _bestandteile_nach_id(k_stern: Mapping[str, Any]) -> dict[str, Mapping[str, 
             raise ReportDataFehler(f"Der Modellbestandteil '{bestandteil_id}' kommt mehrfach vor.")
         ergebnis[bestandteil_id] = bestandteil
 
-    erwartet = set(ERWARTETE_BESTANDTEIL_IDS)
     vorhanden = set(ergebnis)
-    if vorhanden != erwartet:
+    aktuell = set(ERWARTETE_BESTANDTEIL_IDS)
+    historisch = set(_HISTORISCHE_BESTANDTEIL_IDS)
+    if vorhanden not in (aktuell, historisch):
+        erwartet = aktuell
         fehlend = sorted(erwartet - vorhanden)
         unerwartet = sorted(vorhanden - erwartet)
         raise ReportDataFehler(
@@ -117,6 +138,30 @@ def _bestandteile_nach_id(k_stern: Mapping[str, Any]) -> dict[str, Mapping[str, 
         )
 
     return ergebnis
+
+
+def _kombiniere_bestandteile(
+    *bestandteile: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Projiziert getrennte V3-Bestandteile verlustfrei auf das bestehende Reportlayout."""
+    erster = bestandteile[0]
+    informationen: list[Any] = []
+    menschliche_eintraege: list[Any] = []
+    for bestandteil in bestandteile:
+        original = bestandteil.get("urspruenglicher_bestandteil", {})
+        if isinstance(original, Mapping) and isinstance(original.get("informationen"), list):
+            informationen.extend(original["informationen"])
+        eintraege = bestandteil.get("menschliche_eintraege", [])
+        if isinstance(eintraege, list):
+            menschliche_eintraege.extend(eintraege)
+    original_erster = erster.get("urspruenglicher_bestandteil", {})
+    original = dict(original_erster) if isinstance(original_erster, Mapping) else {}
+    original["informationen"] = informationen
+    return {
+        **dict(erster),
+        "urspruenglicher_bestandteil": original,
+        "menschliche_eintraege": menschliche_eintraege,
+    }
 
 
 def _informationen(bestandteil: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -359,7 +404,7 @@ def _lineage_informationen(
 ) -> list[dict[str, Any]]:
     """Hält technische Rückverfolgbarkeit getrennt vom sichtbaren Modellinhalt."""
     ergebnis: list[dict[str, Any]] = []
-    for bestandteil_id in ERWARTETE_BESTANDTEIL_IDS:
+    for bestandteil_id in bestandteile:
         for information in _informationen(bestandteile[bestandteil_id]):
             ergebnis.append(
                 {
@@ -387,14 +432,35 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
 
     problemstellung = bestandteile["problemstellung"]
     zielsetzung = bestandteile["zielsetzung"]
-    ausgaben_eingaben = bestandteile["ausgaben_und_eingaben"]
-    umfang = bestandteile["modellumfang_grenzen_detaillierungsgrad"]
+    ist_v3 = "ausgaben" in bestandteile
+    ausgaben_eingaben = (
+        _kombiniere_bestandteile(bestandteile["ausgaben"], bestandteile["eingaben"])
+        if ist_v3
+        else bestandteile["ausgaben_und_eingaben"]
+    )
+    umfang = (
+        _kombiniere_bestandteile(
+            bestandteile["modellumfang"],
+            bestandteile["modellgrenzen"],
+            bestandteile["detaillierungsgrad"],
+        )
+        if ist_v3
+        else bestandteile["modellumfang_grenzen_detaillierungsgrad"]
+    )
     entitaeten = bestandteile["entitaeten"]
     aktivitaeten = bestandteile["aktivitaeten"]
     warteschlangen = bestandteile["warteschlangen"]
     ressourcen = bestandteile["ressourcen"]
-    annahmen = bestandteile["annahmen_und_vereinfachungen"]
-    daten = bestandteile["datenauswahl_und_daten"]
+    annahmen = (
+        _kombiniere_bestandteile(bestandteile["annahmen"], bestandteile["vereinfachungen"])
+        if ist_v3
+        else bestandteile["annahmen_und_vereinfachungen"]
+    )
+    daten = (
+        _kombiniere_bestandteile(bestandteile["datenauswahl"], bestandteile["daten"])
+        if ist_v3
+        else bestandteile["datenauswahl_und_daten"]
+    )
     darstellung = bestandteile["darstellung_der_vorgaenge_des_systems"]
 
     systemprofil = _info_wert(umfang, "systemprofil", {})

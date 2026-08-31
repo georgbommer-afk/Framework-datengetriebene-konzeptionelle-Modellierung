@@ -14,7 +14,8 @@ import streamlit as st
 
 from framework_mvp.domain.models import (
     Freigabestatus, LogistischeZielgroesse, Mappingzustand, Projekt, Projektstatus,
-    Qualitaetsfreigabe, Systemtyp, Untersuchungsauftrag,
+    ProfilkennzahlReferenz, Profilkennzahltyp, Qualitaetsfreigabe, Systemtyp,
+    Untersuchungsauftrag,
 )
 from framework_mvp.ui.pages.ergebnisaggregation import zeige_ergebnisaggregation_seite
 
@@ -52,6 +53,21 @@ BASIS = SimpleNamespace(
     eingabefingerabdruck="5" * 64,
     zwischendatensatz=SimpleNamespace(sha256="b" * 64),
     profilwerte={"00000000-0000-0000-0000-000000000001:wert:mittelwert": 2.0},
+    profilkennzahlen=(
+        ProfilkennzahlReferenz(
+            "profilkennzahl:befriedigt-ja", "00000000-0000-0000-0000-000000000001",
+            "quelle-1", "Produktionsdaten", "produktion.csv", "Aufträge", "befriedigt",
+            Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR, 1.0,
+            "gleich", "ja", 2, 2, 3, "4" * 64,
+        ),
+        ProfilkennzahlReferenz(
+            "profilkennzahl:zeilen", "00000000-0000-0000-0000-000000000001",
+            "quelle-1", "Produktionsdaten", "produktion.csv", "Aufträge", "",
+            Profilkennzahltyp.ZEILENANZAHL, 2.0,
+            auswertbare_beobachtungen=2, grundgesamtheit=2, profilversion=3,
+            profil_sha256="4" * 64,
+        ),
+    ),
 )
 
 class Projekte:
@@ -116,41 +132,44 @@ def test_aktive_kette_hat_keine_lokale_auswahl_und_nur_kpis_aus_u() -> None:
     untertitel = "\n".join(wert.value for wert in app.subheader)
     assert "Validierte Eingangsartefakte" in untertitel
     assert any(wert.label == "Sollmodellpfad" for wert in app.radio)
-    assert any(
-        wert.label == "Direkte zeitbezogene Soll-Ist-Auswertung durchführen"
-        for wert in app.checkbox
-    )
-    assert any(wert.label == "Ressourcenentscheidung" for wert in app.radio)
-    assert any(wert.label == "Explizite Ankunftszeitspalte (optional)" for wert in app.selectbox)
+    checkboxen = {wert.label for wert in app.checkbox}
+    assert "A. Termin-/Fertigstellungsabweichung dT – Gleichung 3.1" in checkboxen
+    assert "B. Bearbeitungszeitabweichung dB – Gleichung 3.2" in checkboxen
+    assert "C. Ressourcenbezogene Busy Ratio – Gleichungen 3.3 bis 3.5" in checkboxen
+    assert "Ressourcen, Entitäten, Warteschlangen und Zeitgrößen" in untertitel
+    assert any(wert.label == "Anzahl bestätigter Ankunftsströme q" for wert in app.number_input)
+    assert not any("erster gültiger Ereigniszeitstempel" in wert.label for wert in app.selectbox)
+
+
+def test_r_profilkennzahlen_werden_fachlich_statt_als_technische_ids_angezeigt() -> None:
+    app = _app()
+    auswahl = next(wert for wert in app.selectbox if wert.label == "Exakte Profilkennzahl aus R")
+    optionen = "\n".join(str(wert) for wert in auswahl.options)
+    assert "Datensatz: Produktionsdaten" in optionen
+    assert "Spalte: befriedigt" in optionen
+    assert "Absolute Häufigkeit eines Indikators" in optionen
+    assert "befriedigt = ja" in optionen
+    assert "Wert: 1" in optionen
+    assert "profilkennzahl:befriedigt-ja" not in optionen
 
 
 def test_vollstaendige_ressourcenspalte_zeigt_automatische_schreibgeschuetzte_zuordnung() -> None:
     app = _app(ressourcen_vollstaendig=True)
     assert not app.exception
-    assert any("kanonische Spalte resource" in wert.value for wert in app.success)
-    assert not any(wert.label == "Ressourcenentscheidung" for wert in app.radio)
-    assert any(
-        "Die eindeutigen Zuordnungen werden automatisch übernommen" in wert.value
-        for wert in app.success
-    )
+    assert any("kanonischen Spalte resource" in wert.value for wert in app.success)
+    assert any("automatisch übernommen" in wert.value for wert in app.success)
 
 
 def test_unvollstaendige_ressourcen_zeigen_kompakte_manuelle_tabelle() -> None:
     app = _app()
-    auswahl = next(wert for wert in app.radio if wert.label == "Ressourcenentscheidung")
-    app = auswahl.set_value("Manuell je Aktivität zuordnen").run()
-
     assert not app.exception
-    assert len(app.dataframe) == 1
-    assert app.dataframe[0].key == "ag_ressourcen_tabelle"
-    assert list(app.dataframe[0].value.columns) == [
+    tabelle = next(wert for wert in app.dataframe if wert.key == "ag_ressourcen_tabelle")
+    assert list(tabelle.value.columns) == [
         "Aktivität",
-        "Ressourcen (kommagetrennt)",
+        "Manuelle Ressourcen (kommagetrennt)",
+        "Offen / nicht bekannt",
     ]
-    assert any(
-        "manuelle Ressourcenzuordnung ist nicht vollständig" in wert.value for wert in app.warning
-    )
-    assert next(
+    assert not next(
         wert for wert in app.button if wert.label == "A_G berechnen und zu Schritt 8"
     ).disabled
 
@@ -178,3 +197,15 @@ def test_woped_url_iframe_und_fallback_sind_fest_und_bedingt() -> None:
     assert "components.iframe(WOPED_NEXT_URL, height=900, scrolling=True)" in quelle
     assert 'st.link_button("WoPeD Next in neuem Tab öffnen", WOPED_NEXT_URL)' in quelle
     assert 'if status == "Sollmodell muss zunächst erstellt werden"' in quelle
+
+
+def test_conformance_ergebnisdarstellung_und_mappingbestaetigung_sind_explizit() -> None:
+    quelle = Path("src/framework_mvp/ui/pages/ergebnisaggregation.py").read_text(encoding="utf-8")
+    assert "Ich bestätige die Zuordnung zwischen den Aktivitäten des Event Logs" in quelle
+    assert "Fitness nach Gleichung 3.13" in quelle
+    assert "pT · produzierte Tokens" in quelle
+    assert "cT · konsumierte Tokens" in quelle
+    assert "mT · fehlende Tokens" in quelle
+    assert "rT · verbleibende Tokens" in quelle
+    assert "PM4Py-Plausibilisierung" in quelle
+    assert "fallbezogene Diagnosen" in quelle

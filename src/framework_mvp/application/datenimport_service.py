@@ -13,6 +13,7 @@ from framework_mvp.domain.models import (
     Datenprofil,
     DatenprofilDiagramme,
     ExcelImportparameter,
+    Indikatorbedingung,
     Quellenart,
     TabellenblattInfo,
     Zeichenkodierung,
@@ -136,11 +137,14 @@ class DatenimportService:
         return (datei_metadaten.sha256, parameter)
 
     def profil_erstellen(
-        self, daten: pd.DataFrame, zusaetzliche_platzhalter: tuple[str, ...] = ()
+        self,
+        daten: pd.DataFrame,
+        zusaetzliche_platzhalter: tuple[str, ...] = (),
+        indikatorbedingungen: tuple[Indikatorbedingung, ...] = (),
     ) -> Profilierungsergebnis:
         """Berechnet Profilkennzahlen und getrennte aggregierte Diagrammdaten."""
         bereinigt = tuple(
             dict.fromkeys(wert.strip() for wert in zusaetzliche_platzhalter if wert.strip())
         )
-        profil = erstelle_datenprofil(daten, bereinigt)
+        profil = erstelle_datenprofil(daten, bereinigt, indikatorbedingungen)
         return Profilierungsergebnis(profil, erstelle_diagrammdaten(daten, profil))

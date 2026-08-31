@@ -82,7 +82,7 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
                     "A_G",
                 )
             )
-        elif bestandteil_id == "datenauswahl_und_daten" and neue_felder:
+        elif bestandteil_id == "datenauswahl" and neue_felder:
             informationen.append(
                 _information(
                     "strukturierte_ergebnisse.zeitbezogene_datenauswahl",

@@ -5,6 +5,8 @@ from framework_mvp.application.modellableitung.ableitung import (
     MODELLBESTANDTEILE,
     extrahiere_sichtbare_aktivitaeten,
     leite_modellbestandteile_ab,
+    validiere_quellenzuordnung,
+    wende_fachliche_entscheidungen_an,
 )
 
 __all__ = [
@@ -12,4 +14,6 @@ __all__ = [
     "MODELLBESTANDTEILE",
     "extrahiere_sichtbare_aktivitaeten",
     "leite_modellbestandteile_ab",
+    "validiere_quellenzuordnung",
+    "wende_fachliche_entscheidungen_an",
 ]

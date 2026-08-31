@@ -23,13 +23,19 @@ from framework_mvp.application.ergebnisaggregation.strukturierte_ergebnisse impo
     analysiere_zeitbezogene_datenauswahl,
 )
 from framework_mvp.application.modellableitung import (
+    MAPPINGVERSION,
     MODELLBESTANDTEILE,
     extrahiere_sichtbare_aktivitaeten,
     leite_modellbestandteile_ab,
+    validiere_quellenzuordnung,
+    wende_fachliche_entscheidungen_an,
 )
+from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     Datenquelle,
     Eingangsartefakt,
+    FachlicheBestandteilentscheidung,
+    FachlicheEntscheidungsart,
     Intralogistikklassifikation,
     Kennzeichnungsherkunft,
     LogistischeZielgroesse,
@@ -194,6 +200,7 @@ def _basis(tmp_path: Path):  # type: ignore[no-untyped-def]
         prozessmodell=modell,
         prozessnotation=Prozessnotation.PETRINETZ,
         a_g={
+            "discovery_ergebnisse_a_d": {"schwellwert_k": 0.2},
             "kpi_ergebnisse": [
                 {
                     "kpi_id": "tatsaechliche_wartezeit_aqt",
@@ -216,40 +223,64 @@ def _json_dict(wert):  # type: ignore[no-untyped-def]
     return json.loads(json.dumps(asdict(wert), ensure_ascii=False, default=str))
 
 
-def test_elf_bestandteile_und_quellenmatrix_sind_exakt_und_stabil() -> None:
+def test_sechzehn_bestandteile_und_quellenmatrix_sind_exakt_und_stabil() -> None:
+    assert MAPPINGVERSION == 3
     assert [wert.bezeichnung for wert in MODELLBESTANDTEILE] == [
         "Problemstellung",
         "Zielsetzung",
-        "Ausgaben und Eingaben",
-        "Modellumfang, Modellgrenzen und Detaillierungsgrad",
+        "Ausgaben",
+        "Eingaben",
+        "Modellumfang",
+        "Modellgrenzen",
+        "Detaillierungsgrad",
         "Entitäten",
         "Aktivitäten",
         "Warteschlangen",
         "Ressourcen",
-        "Annahmen und Vereinfachungen",
-        "Datenauswahl und Daten",
+        "Annahmen",
+        "Vereinfachungen",
+        "Datenauswahl",
+        "Daten",
         "Darstellung der Vorgänge des Systems",
     ]
     assert [wert.bestandteil_id for wert in MODELLBESTANDTEILE] == list(ModellbestandteilId)
     assert {wert.bestandteil_id for wert in MODELLBESTANDTEILE if wert.teilweise_offen} == {
-        ModellbestandteilId.AUSGABEN_UND_EINGABEN,
+        ModellbestandteilId.EINGABEN,
+        ModellbestandteilId.DETAILLIERUNGSGRAD,
         ModellbestandteilId.WARTESCHLANGEN,
-        ModellbestandteilId.ANNAHMEN_UND_VEREINFACHUNGEN,
+        ModellbestandteilId.RESSOURCEN,
+        ModellbestandteilId.ANNAHMEN,
+        ModellbestandteilId.VEREINFACHUNGEN,
     }
+
+
+def test_quellenmatrix_akzeptiert_und_verwirft_jede_kombination_exakt() -> None:
+    for definition in MODELLBESTANDTEILE:
+        for quelle in Eingangsartefakt:
+            if quelle in definition.zulaessige_quellen:
+                validiere_quellenzuordnung(definition.bestandteil_id, quelle)
+            else:
+                with pytest.raises(Domaenenfehler, match="Tabelle 3.15"):
+                    validiere_quellenzuordnung(definition.bestandteil_id, quelle)
     assert {
         wert.bestandteil_id: tuple(quelle.value for quelle in wert.zulaessige_quellen)
         for wert in MODELLBESTANDTEILE
     } == {
         ModellbestandteilId.PROBLEMSTELLUNG: ("U",),
         ModellbestandteilId.ZIELSETZUNG: ("U",),
-        ModellbestandteilId.AUSGABEN_UND_EINGABEN: ("U", "A_G"),
-        ModellbestandteilId.MODELLUMFANG_GRENZEN_DETAILLIERUNG: ("U", "S", "P", "A_G"),
-        ModellbestandteilId.ENTITAETEN: ("S", "E*"),
+        ModellbestandteilId.AUSGABEN: ("U", "A_G"),
+        ModellbestandteilId.EINGABEN: ("U",),
+        ModellbestandteilId.MODELLUMFANG: ("U", "S", "P", "A_G"),
+        ModellbestandteilId.MODELLGRENZEN: ("U",),
+        ModellbestandteilId.DETAILLIERUNGSGRAD: ("U", "S", "P", "A_G"),
+        ModellbestandteilId.ENTITAETEN: ("S", "E*", "A_G"),
         ModellbestandteilId.AKTIVITAETEN: ("P", "A_G"),
         ModellbestandteilId.WARTESCHLANGEN: ("A_G",),
         ModellbestandteilId.RESSOURCEN: ("S", "A_G"),
-        ModellbestandteilId.ANNAHMEN_UND_VEREINFACHUNGEN: ("P", "A_G"),
-        ModellbestandteilId.DATENAUSWAHL_UND_DATEN: ("Q", "R", "T", "E*", "A_G"),
+        ModellbestandteilId.ANNAHMEN: ("U", "S", "P", "A_G"),
+        ModellbestandteilId.VEREINFACHUNGEN: ("P", "A_G"),
+        ModellbestandteilId.DATENAUSWAHL: ("Q", "R", "T", "E*", "A_G"),
+        ModellbestandteilId.DATEN: ("Q", "R", "T", "E*", "A_G"),
         ModellbestandteilId.DARSTELLUNG_DER_VORGAENGE: ("P",),
     }
 
@@ -259,7 +290,7 @@ def test_ableitung_bleibt_belegt_offen_und_schliesst_p_soll_aus(tmp_path: Path) 
     bestandteile, offen = leite_modellbestandteile_ab(basis)
     definitionen = {wert.bestandteil_id: wert for wert in MODELLBESTANDTEILE}
 
-    assert len(bestandteile) == 11
+    assert len(bestandteile) == 16
     assert [wert.bestandteil_id for wert in bestandteile] == list(ModellbestandteilId)
     for bestandteil in bestandteile:
         assert set(bestandteil.verwendete_quellen) <= set(
@@ -268,37 +299,55 @@ def test_ableitung_bleibt_belegt_offen_und_schliesst_p_soll_aus(tmp_path: Path) 
     problem = bestandteile[0]
     assert [wert.wert for wert in problem.informationen] == ["Unveränderte Problemstellung"]
     ausgaben = bestandteile[2]
-    nicht_berechenbar = next(
+    kpi_ergebnis = next(
         wert
         for wert in ausgaben.informationen
-        if isinstance(wert.wert, dict) and wert.wert.get("kpi_id") == "servicegrad"
+        if isinstance(wert.wert, dict) and wert.wert.get("kpi_id") == "tatsaechliche_wartezeit_aqt"
     )
-    assert nicht_berechenbar.wert["status"] == "nicht_berechenbar"
-    assert nicht_berechenbar.wert["ergebnis"] is None
+    assert kpi_ergebnis.wert["status"] == "berechnet"
+    assert not any(
+        isinstance(wert.wert, dict) and wert.wert.get("kpi_id") == "servicegrad"
+        for wert in ausgaben.informationen
+    )
     assert "prozessmodell_p_soll" not in repr(bestandteile)
-    annahmen = next(
-        wert
-        for wert in bestandteile
-        if wert.bestandteil_id is ModellbestandteilId.ANNAHMEN_UND_VEREINFACHUNGEN
+    vereinfachungen = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.VEREINFACHUNGEN
     )
     schwellwert = next(
         wert
-        for wert in annahmen.informationen
+        for wert in vereinfachungen.informationen
         if wert.strukturreferenz == "discovery_ergebnisse_a_d.schwellwert_k.auswirkung"
     )
-    assert "technische Abstraktions" in schwellwert.wert["einordnung"]
-    assert not any(
-        wert.bestandteil_id is ModellbestandteilId.ANNAHMEN_UND_VEREINFACHUNGEN
-        and wert.kategorie is Offenheitskategorie.FACHLICH_UNSICHER
-        and "k > 0" in wert.begruendung
-        for wert in offen
+    assert "seltenes Verhalten" in schwellwert.wert["beobachtbare_tatsache"]
+    detail = next(
+        wert
+        for wert in bestandteile
+        if wert.bestandteil_id is ModellbestandteilId.DETAILLIERUNGSGRAD
     )
+    assert any("nicht den Detaillierungsgrad" in str(info.wert) for info in detail.informationen)
+    assert any(wert.bestandteil_id is ModellbestandteilId.EINGABEN for wert in offen)
 
 
-def test_menschliche_unsicherheit_erzeugt_nur_offenen_eintrag(tmp_path: Path) -> None:
-    bestandteile, offen = leite_modellbestandteile_ab(
-        _basis(tmp_path),
-        fachlich_unsichere_bestandteile=frozenset({ModellbestandteilId.AKTIVITAETEN}),
+def test_menschliche_entscheidungen_steuern_k_und_o(tmp_path: Path) -> None:
+    vorschlaege, systematisch_offen = leite_modellbestandteile_ab(_basis(tmp_path))
+    jetzt = datetime.now(UTC)
+    entscheidungen = tuple(
+        FachlicheBestandteilentscheidung(
+            wert.bestandteil_id,
+            (
+                FachlicheEntscheidungsart.OFFEN_UNSICHER
+                if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
+                else FachlicheEntscheidungsart.UEBERNEHMEN
+            ),
+            "Aktivitäten müssen fachlich geprüft werden."
+            if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
+            else "",
+            jetzt,
+        )
+        for wert in vorschlaege
+    )
+    bestandteile, offen = wende_fachliche_entscheidungen_an(
+        vorschlaege, systematisch_offen, entscheidungen
     )
     aktivitaeten = next(
         wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
@@ -309,10 +358,57 @@ def test_menschliche_unsicherheit_erzeugt_nur_offenen_eintrag(tmp_path: Path) ->
         if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
         and wert.kennzeichnungsherkunft is Kennzeichnungsherkunft.MENSCHLICH_MARKIERT
     )
-    assert [wert.wert for wert in aktivitaeten.informationen if wert.herkunftsartefakt == "P"] == [
-        ("A", "B")
-    ]
+    assert not aktivitaeten.informationen
     assert markierung.status == "offen"
+    problem = bestandteile[0]
+    assert problem.informationen[0].fachliche_entscheidung is FachlicheEntscheidungsart.UEBERNEHMEN
+    assert problem.informationen[0].bestaetigt_am == jetzt
+    detaillierung = next(
+        wert
+        for wert in bestandteile
+        if wert.bestandteil_id is ModellbestandteilId.DETAILLIERUNGSGRAD
+    )
+    assert detaillierung.informationen and detaillierung.offene_eintrag_ids
+    assert detaillierung.status.value == "teilweise_offen"
+
+
+def test_nicht_uebernehmen_benoetigt_begruendung() -> None:
+    with pytest.raises(Domaenenfehler, match="Begründung"):
+        FachlicheBestandteilentscheidung(
+            ModellbestandteilId.AKTIVITAETEN,
+            FachlicheEntscheidungsart.NICHT_UEBERNEHMEN,
+            "",
+            datetime.now(UTC),
+        )
+
+
+def test_nicht_uebernehmen_entfernt_vorschlag_aus_k_und_dokumentiert_o(
+    tmp_path: Path,
+) -> None:
+    vorschlaege, systematisch_offen = leite_modellbestandteile_ab(_basis(tmp_path))
+    entscheidung = FachlicheBestandteilentscheidung(
+        ModellbestandteilId.PROBLEMSTELLUNG,
+        FachlicheEntscheidungsart.NICHT_UEBERNEHMEN,
+        "Die Problemstellung ist fachlich nicht mehr aktuell.",
+        datetime.now(UTC),
+    )
+
+    bestandteile, offen = wende_fachliche_entscheidungen_an(
+        vorschlaege, systematisch_offen, (entscheidung,)
+    )
+
+    problem = bestandteile[0]
+    assert not problem.informationen
+    menschlicher_o_eintrag = next(
+        wert
+        for wert in offen
+        if wert.bestandteil_id is ModellbestandteilId.PROBLEMSTELLUNG
+        and wert.kennzeichnungsherkunft is Kennzeichnungsherkunft.MENSCHLICH_MARKIERT
+    )
+    assert menschlicher_o_eintrag.fachliche_entscheidung is (
+        FachlicheEntscheidungsart.NICHT_UEBERNEHMEN
+    )
+    assert menschlicher_o_eintrag.belegreferenzen[0]["wert"] == "Unveränderte Problemstellung"
 
 
 def test_ressourcen_werden_nur_aus_strukturiertem_a_g_uebernommen(tmp_path: Path) -> None:
@@ -341,14 +437,68 @@ def test_ressourcen_werden_nur_aus_strukturiertem_a_g_uebernommen(tmp_path: Path
         if wert.strukturreferenz == "strukturierte_ergebnisse.ressourcen"
     )
     assert information.wert["modus"] == "automatisch"
-    assert information.wert["zuordnungen"] == [
-        {"aktivitaet": "A", "ressourcen": ["M1", "M2"]},
-        {"aktivitaet": "B", "ressourcen": ["M2"]},
+    assert [wert["ressourcen"] for wert in information.wert["zuordnungen"]] == [
+        ["M1", "M2"],
+        ["M2"],
+    ]
+    assert information.wert["zuordnungen"][0]["automatisch_beobachtete_ressourcen"] == [
+        "M1",
+        "M2",
     ]
     assert "DARF_NICHT_NEU_BERECHNET_WERDEN" not in repr(information.wert)
 
 
-def test_uebergangsdifferenzen_werden_aus_a_g_uebernommen_ohne_neuberechnung(
+def test_entitaet_und_ressource_bleiben_getrennt_und_attribute_erhalten(tmp_path: Path) -> None:
+    basis = _basis(tmp_path)
+    basis.a_g["strukturierte_ergebnisse"]["entitaetsinstanzen_und_attribute"] = {
+        "entitaetstyp": "Produktionsauftrag",
+        "instanzen": [{"instanz_id": "PA4711"}],
+        "attribute": [{"attribut": "Priorität", "stabiler_wert": "hoch"}],
+    }
+    basis.a_g["strukturierte_ergebnisse"]["ressourcen"] = {
+        "modus": "automatisch",
+        "zuordnungen": [{"aktivitaet": "A", "ressourcen": ["M01"], "offen": False}],
+        "attribute": [{"instanz_id": "M01", "attribut": "OEE", "stabiler_wert": "0.82"}],
+    }
+
+    bestandteile, _ = leite_modellbestandteile_ab(basis)
+
+    entitaeten = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.ENTITAETEN
+    )
+    ressourcen = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.RESSOURCEN
+    )
+    assert "Produktionsauftrag" in repr(entitaeten)
+    assert "PA4711" in repr(entitaeten)
+    assert "M01" not in repr(entitaeten)
+    assert "M01" in repr(ressourcen)
+    assert "OEE" in repr(ressourcen)
+
+
+def test_nur_explizit_bestaetigte_warteschlange_ist_uebernehmbar(tmp_path: Path) -> None:
+    basis = _basis(tmp_path)
+    wartedaten = basis.a_g["strukturierte_ergebnisse"]["warteschlangen_und_wartezeiten"]
+    wartedaten["bestaetigte_warteschlangen"] = [
+        {
+            "bezeichnung": "Puffer vor B",
+            "von_aktivitaet": "A",
+            "zu_aktivitaet": "B",
+            "herkunft": "manuell_bestaetigt",
+        }
+    ]
+
+    bestandteile, offen = leite_modellbestandteile_ab(basis)
+
+    warteschlangen = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
+    )
+    assert "Puffer vor B" in repr(warteschlangen.informationen)
+    assert "potenzielle_wartezeiten" not in repr(warteschlangen.informationen)
+    assert not any(wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN for wert in offen)
+
+
+def test_potenzielle_wartezeiten_werden_aus_a_g_uebernommen_ohne_neuberechnung(
     tmp_path: Path,
 ) -> None:
     basis = _basis(tmp_path)
@@ -385,6 +535,9 @@ def test_uebergangsdifferenzen_werden_aus_a_g_uebernommen_ohne_neuberechnung(
     basis.a_g["strukturierte_ergebnisse"]["warteschlangen_und_wartezeiten"] = _json_dict(
         analysiere_warteschlangen(basis.event_log)
     )
+    basis.a_g["strukturierte_ergebnisse"]["zeitbezogene_datenauswahl"] = _json_dict(
+        analysiere_zeitbezogene_datenauswahl(basis.zwischendaten, basis.event_log)
+    )
     vorher = basis.event_log.copy(deep=True)
     basis.event_log["start_timestamp"] = basis.event_log["start_timestamp"].iloc[::-1].to_numpy()
 
@@ -394,12 +547,16 @@ def test_uebergangsdifferenzen_werden_aus_a_g_uebernommen_ohne_neuberechnung(
     warteschlangen = next(
         wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
     )
+    assert not warteschlangen.informationen
+    datenauswahl = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.DATENAUSWAHL
+    )
     hinweis = next(
         wert
-        for wert in warteschlangen.informationen
-        if wert.strukturreferenz == "strukturierte_ergebnisse.warteschlangen_und_wartezeiten"
+        for wert in datenauswahl.informationen
+        if wert.strukturreferenz == "strukturierte_ergebnisse.zeitbezogene_datenauswahl"
     )
-    assert hinweis.wert["uebergaenge"] == [
+    assert hinweis.wert["potenzielle_wartezeiten"] == [
         {
             "von_aktivitaet": "A",
             "zu_aktivitaet": "B",
@@ -410,9 +567,9 @@ def test_uebergangsdifferenzen_werden_aus_a_g_uebernommen_ohne_neuberechnung(
             },
         }
     ]
-    assert not any(
+    assert any(
         wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
-        and "keine in Schritt 7" in wert.begruendung
+        and "keine explizit bestätigte Warteschlange" in wert.begruendung
         for wert in offen
     )
 
@@ -454,24 +611,24 @@ def test_nullwartezeit_bleibt_gueltig_negative_und_fehlende_werden_ausgeschlosse
     basis.a_g["strukturierte_ergebnisse"]["warteschlangen_und_wartezeiten"] = _json_dict(
         analysiere_warteschlangen(basis.event_log)
     )
+    basis.a_g["strukturierte_ergebnisse"]["zeitbezogene_datenauswahl"] = _json_dict(
+        analysiere_zeitbezogene_datenauswahl(basis.zwischendaten, basis.event_log)
+    )
 
     bestandteile, offen = leite_modellbestandteile_ab(basis)
 
-    warteschlangen = next(
-        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
+    datenauswahl = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.DATENAUSWAHL
     )
     analyse = next(
         wert.wert
-        for wert in warteschlangen.informationen
-        if wert.strukturreferenz == "strukturierte_ergebnisse.warteschlangen_und_wartezeiten"
+        for wert in datenauswahl.informationen
+        if wert.strukturreferenz == "strukturierte_ergebnisse.zeitbezogene_datenauswahl"
     )
-    assert analyse["status"] == "ableitbar"
-    assert analyse["uebergaenge"][0]["statistik"]["median_sekunden"] == 0.0
-    assert analyse["ausgeschlossene_negative_werte"] == 1
-    assert analyse["ausgeschlossene_nicht_auswertbare_werte"] == 1
-    assert not any(
+    assert analyse["potenzielle_wartezeiten"][0]["statistik"]["median_sekunden"] == 0.0
+    assert any(
         wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
-        and "keine nichtnegativen" in wert.begruendung
+        and "keine explizit bestätigte Warteschlange" in wert.begruendung
         for wert in offen
     )
 
@@ -488,7 +645,7 @@ def test_fehlende_zeitspalten_und_warteinformation_erzeugen_offenen_eintrag(
     assert any(
         wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
         and wert.kategorie is Offenheitskategorie.NICHT_ABLEITBAR
-        and "Schritt 8 berechnet sie nicht erneut" in wert.begruendung
+        and "keine explizit bestätigte Warteschlange" in wert.begruendung
         for wert in offen
     )
 
@@ -524,11 +681,10 @@ def test_fehlende_problemstellung_und_widerspruechliche_grenzen_bleiben_offen(
         and wert.kategorie is Offenheitskategorie.FEHLEND
         for wert in offen
     )
-    konflikt = next(
-        wert
-        for wert in offen
-        if wert.bestandteil_id is ModellbestandteilId.MODELLUMFANG_GRENZEN_DETAILLIERUNG
-        and "unterschiedliche Belege" in wert.begruendung
+    grenzen = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.MODELLGRENZEN
     )
-    assert konflikt.kategorie is Offenheitskategorie.FACHLICH_UNSICHER
-    assert len(konflikt.belegreferenzen) == 2
+    assert [info.herkunftsartefakt for info in grenzen.informationen] == [
+        Eingangsartefakt.UNTERSUCHUNGSAUFTRAG_U
+    ]
+    assert "Abweichender Datenbereich" not in repr(grenzen)

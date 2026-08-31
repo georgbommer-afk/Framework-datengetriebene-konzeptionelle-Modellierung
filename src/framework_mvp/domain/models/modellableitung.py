@@ -23,19 +23,32 @@ class Eingangsartefakt(StrEnum):
 
 
 class ModellbestandteilId(StrEnum):
-    """Stabile Reihenfolge der elf Bestandteile aus Abschnitt 2.3.1."""
+    """Stabile Reihenfolge der 16 Bestandteile aus der aktuellen Tabelle 3.15."""
 
     PROBLEMSTELLUNG = "problemstellung"
     ZIELSETZUNG = "zielsetzung"
-    AUSGABEN_UND_EINGABEN = "ausgaben_und_eingaben"
-    MODELLUMFANG_GRENZEN_DETAILLIERUNG = "modellumfang_grenzen_detaillierungsgrad"
+    AUSGABEN = "ausgaben"
+    EINGABEN = "eingaben"
+    MODELLUMFANG = "modellumfang"
+    MODELLGRENZEN = "modellgrenzen"
+    DETAILLIERUNGSGRAD = "detaillierungsgrad"
     ENTITAETEN = "entitaeten"
     AKTIVITAETEN = "aktivitaeten"
     WARTESCHLANGEN = "warteschlangen"
     RESSOURCEN = "ressourcen"
-    ANNAHMEN_UND_VEREINFACHUNGEN = "annahmen_und_vereinfachungen"
-    DATENAUSWAHL_UND_DATEN = "datenauswahl_und_daten"
+    ANNAHMEN = "annahmen"
+    VEREINFACHUNGEN = "vereinfachungen"
+    DATENAUSWAHL = "datenauswahl"
+    DATEN = "daten"
     DARSTELLUNG_DER_VORGAENGE = "darstellung_der_vorgaenge_des_systems"
+
+
+class FachlicheEntscheidungsart(StrEnum):
+    """Explizite Human-in-the-Loop-Entscheidung zu genau einem Vorschlag."""
+
+    UEBERNEHMEN = "vorschlag_uebernehmen"
+    OFFEN_UNSICHER = "offen_fachlich_unsicher"
+    NICHT_UEBERNEHMEN = "vorschlag_nicht_uebernehmen"
 
 
 class Bestandteilstatus(StrEnum):
@@ -98,6 +111,40 @@ class Informationseintrag:
     strukturreferenz: str
     wert: Any
     uebernahmeart: Uebernahmeart
+    fachliche_entscheidung: FachlicheEntscheidungsart | None = None
+    bestaetigt_am: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if (self.fachliche_entscheidung is None) != (self.bestaetigt_am is None):
+            raise Domaenenfehler(
+                "Entscheidung und Bestätigungszeitpunkt eines K-Eintrags müssen gemeinsam "
+                "vorliegen."
+            )
+        if self.bestaetigt_am is not None:
+            if self.bestaetigt_am.utcoffset() is None:
+                raise Domaenenfehler("Ein Bestätigungszeitpunkt muss zeitzonenbewusst sein.")
+            object.__setattr__(self, "bestaetigt_am", self.bestaetigt_am.astimezone(UTC))
+
+
+@dataclass(frozen=True, slots=True)
+class FachlicheBestandteilentscheidung:
+    """Geprüfte Entscheidung der anwendenden Person ohne erfundene Benutzeridentität."""
+
+    bestandteil_id: ModellbestandteilId
+    entscheidung: FachlicheEntscheidungsart
+    begruendung: str
+    entschieden_am: datetime
+
+    def __post_init__(self) -> None:
+        begruendung = self.begruendung.strip()
+        object.__setattr__(self, "begruendung", begruendung)
+        if self.entscheidung is not FachlicheEntscheidungsart.UEBERNEHMEN and not begruendung:
+            raise Domaenenfehler(
+                "Offene, unsichere oder nicht übernommene Vorschläge benötigen eine Begründung."
+            )
+        if self.entschieden_am.utcoffset() is None:
+            raise Domaenenfehler("Der Entscheidungszeitpunkt muss zeitzonenbewusst sein.")
+        object.__setattr__(self, "entschieden_am", self.entschieden_am.astimezone(UTC))
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,12 +158,23 @@ class OffenerEintrag:
     belegreferenzen: tuple[dict[str, Any], ...]
     kennzeichnungsherkunft: Kennzeichnungsherkunft
     status: str = "offen"
+    fachliche_entscheidung: FachlicheEntscheidungsart | None = None
+    entschieden_am: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.status != "offen":
             raise Domaenenfehler("Ein Eintrag in O muss in Schritt 8 offen bleiben.")
         if not self.begruendung.strip():
             raise Domaenenfehler("Ein offener Eintrag benötigt eine konkrete Begründung.")
+        if (self.fachliche_entscheidung is None) != (self.entschieden_am is None):
+            raise Domaenenfehler(
+                "Menschliche Entscheidung und Zeitpunkt eines O-Eintrags müssen gemeinsam "
+                "vorliegen."
+            )
+        if self.entschieden_am is not None:
+            if self.entschieden_am.utcoffset() is None:
+                raise Domaenenfehler("Ein Entscheidungszeitpunkt muss zeitzonenbewusst sein.")
+            object.__setattr__(self, "entschieden_am", self.entschieden_am.astimezone(UTC))
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +187,7 @@ class AbgeleiteterModellbestandteil:
     verwendete_quellen: tuple[Eingangsartefakt, ...]
     informationen: tuple[Informationseintrag, ...]
     offene_eintrag_ids: tuple[str, ...]
+    fachliche_entscheidung: FachlicheBestandteilentscheidung | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,3 +225,8 @@ class Modellableitung:
         if self.erstellt_am.utcoffset() is None:
             raise Domaenenfehler("Der Erstellungszeitpunkt muss zeitzonenbewusst sein.")
         object.__setattr__(self, "erstellt_am", self.erstellt_am.astimezone(UTC))
+
+    @property
+    def entscheidungsfingerabdruck(self) -> str:
+        """Fachlich aktuelle Bezeichnung der aus Kompatibilitätsgründen erhaltenen Spalte."""
+        return self.unsicherheitsfingerabdruck
