@@ -12,6 +12,7 @@ import stat
 import tempfile
 import threading
 import zipfile
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -163,6 +164,7 @@ class ProjektArchivService:
         grenzen: ArchivGrenzen | None = None,
         sperren: ProjektSperren | None = None,
         gast_ttl: timedelta = timedelta(hours=24),
+        konsistenzpruefung: Callable[[UUID], None] | None = None,
     ) -> None:
         self._datenbankpfad = Path(datenbankpfad)
         self._workspace = workspace
@@ -171,6 +173,7 @@ class ProjektArchivService:
         self._grenzen = grenzen or ArchivGrenzen()
         self._sperren = sperren or ProjektSperren()
         self._gast_ttl = gast_ttl
+        self._konsistenzpruefung = konsistenzpruefung
 
     def exportieren(self, kontext: Zugriffskontext, projekt_id: UUID) -> bytes:
         """Exportiert einen autorisierten, konsistenten Projektsnapshot als ZIP v1."""
@@ -773,6 +776,8 @@ class ProjektArchivService:
         if ziel.exists() and not ersetzen:
             shutil.rmtree(staging, ignore_errors=True)
             raise ArchivKonflikt("Zum Projekt existiert bereits ein abweichender Dateibestand.")
+        vorherige_tabellen = self._datenbank_snapshot(projekt_id) if ersetzen else None
+        import_archiv_id = uuid4()
         try:
             for pfad, daten in inhalt.items():
                 if not (pfad.startswith("artifacts/") or pfad.startswith("reports/")):
@@ -785,6 +790,7 @@ class ProjektArchivService:
             verbindung = sqlite3.connect(self._datenbankpfad, timeout=5.0)
             backup_project = staging / "bisheriger-dateibestand"
             dateien_ausgetauscht = False
+            commit_erfolgt = False
             try:
                 initialisiere_schema(verbindung)
                 verbindung.execute("BEGIN IMMEDIATE")
@@ -876,7 +882,7 @@ class ProjektArchivService:
                     ) VALUES (?, ?, ?, 'projekt_import', ?, ?, ?, ?, ?, 'erfolgreich', ?)
                     """,
                     (
-                        str(uuid4()),
+                        str(import_archiv_id),
                         str(projekt_id),
                         None if ziel_gruppen_id is None else str(ziel_gruppen_id),
                         ARCHIVVERSION,
@@ -898,17 +904,76 @@ class ProjektArchivService:
                 os.replace(staged_project, ziel)
                 dateien_ausgetauscht = True
                 verbindung.commit()
+                commit_erfolgt = True
+                if self._konsistenzpruefung is not None:
+                    self._konsistenzpruefung(projekt_id)
             except Exception:
                 verbindung.rollback()
-                if dateien_ausgetauscht and ziel.exists():
-                    shutil.rmtree(ziel, ignore_errors=True)
-                if backup_project.exists():
-                    os.replace(backup_project, ziel)
+                try:
+                    if commit_erfolgt:
+                        self._import_db_zurueckrollen(
+                            projekt_id,
+                            import_archiv_id,
+                            vorherige_tabellen,
+                        )
+                finally:
+                    if dateien_ausgetauscht and ziel.exists():
+                        shutil.rmtree(ziel, ignore_errors=True)
+                    if backup_project.exists():
+                        os.replace(backup_project, ziel)
                 raise
             finally:
                 verbindung.close()
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+
+    def _import_db_zurueckrollen(
+        self,
+        projekt_id: UUID,
+        import_archiv_id: UUID,
+        vorherige_tabellen: dict[str, list[dict[str, Any]]] | None,
+    ) -> None:
+        """Stellt nach einer fehlgeschlagenen Nachprüfung den DB-Stand wieder her."""
+        verbindung = sqlite3.connect(self._datenbankpfad, timeout=5.0)
+        try:
+            initialisiere_schema(verbindung)
+            verbindung.execute("BEGIN IMMEDIATE")
+            self._projektinhalt_aus_verbindung_loeschen(verbindung, projekt_id)
+            verbindung.execute(
+                "DELETE FROM archivmetadaten WHERE archiv_id=?", (str(import_archiv_id),)
+            )
+            if vorherige_tabellen is None:
+                verbindung.execute(
+                    "DELETE FROM projektmitglieder WHERE projekt_id=?", (str(projekt_id),)
+                )
+                verbindung.execute(
+                    "DELETE FROM projektzugehoerigkeiten WHERE projekt_id=?", (str(projekt_id),)
+                )
+                verbindung.execute("DELETE FROM projekte WHERE projekt_id=?", (str(projekt_id),))
+            else:
+                projektzeile = vorherige_tabellen["projekte"][0]
+                spalten = [name for name in projektzeile if name != "projekt_id"]
+                verbindung.execute(
+                    f"UPDATE projekte SET {','.join(f'{name}=?' for name in spalten)} "  # noqa: S608
+                    "WHERE projekt_id=?",
+                    [projektzeile[name] for name in spalten] + [str(projekt_id)],
+                )
+                for tabelle in _TABELLEN_REIHENFOLGE:
+                    if tabelle == "projekte":
+                        continue
+                    for zeile in vorherige_tabellen[tabelle]:
+                        spalten = list(zeile)
+                        verbindung.execute(
+                            f"INSERT INTO {tabelle} ({','.join(spalten)}) "  # noqa: S608
+                            f"VALUES ({','.join('?' for _ in spalten)})",  # noqa: S608
+                            [zeile[spalte] for spalte in spalten],
+                        )
+            verbindung.commit()
+        except Exception:
+            verbindung.rollback()
+            raise
+        finally:
+            verbindung.close()
 
     @staticmethod
     def _projektinhalt_aus_verbindung_loeschen(

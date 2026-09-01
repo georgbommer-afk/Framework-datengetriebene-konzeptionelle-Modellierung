@@ -5,7 +5,7 @@ from uuid import UUID
 import streamlit as st
 
 FRAMEWORK_BEREICHE = (
-    "Schritt 1: Projektrahmen definieren",
+    "1 Projektrahmen definieren",
     "2 ETL durchführen",
     "3 Semantisches Mapping",
     "4 Event Log aufbauen",

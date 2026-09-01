@@ -10,12 +10,7 @@ from pathlib import Path
 from uuid import UUID
 
 from framework_mvp.application.loesch_service import LoeschService
-from framework_mvp.application.mandanten_projekt_service import (
-    AutorisierterLoeschService,
-    MandantenProjektService,
-)
 from framework_mvp.application.ports.zugriffs_repository import ZugriffsRepository
-from framework_mvp.domain.models import Projekt, Systemtyp, Untersuchungsauftrag
 from framework_mvp.domain.models.zugriff import Zugriffskontext
 from framework_mvp.workspace import WorkspaceKonfiguration
 
@@ -26,39 +21,20 @@ GAST_HINWEIS = (
 
 
 @dataclass(frozen=True, slots=True)
-class Gastdemo:
+class Gastsitzung:
+    """Isolierter temporärer Zugriffskontext ohne vorab erzeugtes Projekt."""
+
     kontext: Zugriffskontext
-    projekt: Projekt
 
 
 class GastService:
-    """Erzeugt einen zufälligen Besitznachweis und genau ein isoliertes Demoprojekt."""
+    """Erzeugt isolierte temporäre Zugriffskontexte und beendet Gastprojekte."""
 
-    def __init__(
-        self,
-        projekt_service: MandantenProjektService,
-        loesch_service: AutorisierterLoeschService,
-    ) -> None:
-        self._projekte = projekt_service
-        self._loeschen = loesch_service
-
-    def demo_starten(self) -> Gastdemo:
+    def sitzung_starten(self) -> Gastsitzung:
+        """Startet den temporären Bereich ohne Projekt- oder Demodaten."""
         geheimnis = secrets.token_urlsafe(32)
         kontext = Zugriffskontext.gast(geheimnis)
-        projekt = self._projekte.projekt_anlegen(
-            kontext,
-            bezeichnung="Temporäres Demoprojekt",
-            untersuchungsauftrag=Untersuchungsauftrag(
-                problemstellung="Demonstration des Framework-Ablaufs",
-                untersuchungszweck="Framework unverbindlich testen",
-                systemtyp=Systemtyp.PRODUKTION,
-                systemgrenze="Noch festzulegen",
-            ),
-        )
-        return Gastdemo(kontext, projekt)
-
-    def demo_beenden(self, demo: Gastdemo) -> None:
-        self._loeschen.projekt_loeschen(demo.kontext, demo.projekt.projekt_id)
+        return Gastsitzung(kontext)
 
 
 class BereinigungsService:

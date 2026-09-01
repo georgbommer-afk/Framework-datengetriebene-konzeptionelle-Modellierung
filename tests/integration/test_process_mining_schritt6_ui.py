@@ -69,6 +69,7 @@ class ProcessMining:
             F, P, E, "a" * 64, konfiguration, dfg, discovery, None, "2.7.23.3", "x" * 64
         )
     def speichern(self, analyse_id, freigabe_id, konfiguration, vorschau):
+        st.session_state.setdefault("test_gespeicherte_analyse_ids", []).append(str(analyse_id))
         return SimpleNamespace(
             analyse_id=A, projekt_id=P, qualitaetspruefung_id=F, event_log_id=E,
             relativer_ergebnis_pfad="analysis.discovery.json",
@@ -166,7 +167,7 @@ def test_regulaerer_ablauf_bietet_nur_k_und_notation_und_uebergibt_p_und_a_d() -
     )
     app.slider[0].set_value(0.2)
     app.radio[0].set_value("BPMN")
-    _button(app, "Prozessmodell berechnen und zu Schritt 7").click().run()
+    _button(app, "DFG und Prozessmodell berechnen").click().run()
     assert app.session_state["test_vorschau_aufrufe"] == 1
     assert app.session_state["aktuelle_analyse_id"] == "44444444-4444-4444-4444-444444444444"
     assert app.session_state["aktuelles_prozessmodell_id"] == (
@@ -175,6 +176,20 @@ def test_regulaerer_ablauf_bietet_nur_k_und_notation_und_uebergibt_p_und_a_d() -
     assert app.session_state["aktuelle_discovery_ergebnisse_id"] == (
         "44444444-4444-4444-4444-444444444444"
     )
+    zustand = app.session_state["process_mining_zustaende"]["11111111-1111-1111-1111-111111111111"]
+    assert zustand["schritt"] == 3
+    assert "naechster_framework_bereich" not in app.session_state
+    assert any(
+        "Gespeicherter vollständiger Directly-Follows-Graph" in w.value for w in app.subheader
+    )
+    _button(app, "k und Prozessnotation anpassen").click().run()
+    assert app.slider[0].value == 0.2
+    assert app.radio[0].value.value == "bpmn"
+    app.slider[0].set_value(0.3)
+    _button(app, "DFG und Prozessmodell berechnen").click().run()
+    assert app.session_state["test_vorschau_aufrufe"] == 2
+    assert len(set(app.session_state["test_gespeicherte_analyse_ids"])) == 2
+    _button(app, "Weiter zu Schritt 7: Ergebnisse aggregieren").click().run()
     assert app.session_state["naechster_framework_bereich"] == "7 Ergebnisse aggregieren"
     assert not any(
         wert.label in {"Modell berechnen", "P und A_D speichern und zu Schritt 7"}
@@ -201,3 +216,20 @@ def test_ruecknavigation_bewahrt_konfiguration_ohne_berechnung() -> None:
     assert notation is not None
     assert notation.value == "bpmn"
     assert _vorschau_aufrufe(app) == 0
+
+
+def test_persistierte_analyse_oeffnet_direkt_ergebnis_und_rehydriert_k_und_bpmn() -> None:
+    app = AppTest.from_string(APP)
+    app.session_state["aktuelles_projekt_id"] = "11111111-1111-1111-1111-111111111111"
+    app.session_state["aktuelle_freigabe_id"] = "22222222-2222-2222-2222-222222222222"
+    app.session_state["aktuelle_analyse_id"] = "44444444-4444-4444-4444-444444444444"
+    app = app.run()
+
+    assert not app.exception
+    zustand = app.session_state["process_mining_zustaende"]["11111111-1111-1111-1111-111111111111"]
+    assert zustand["schritt"] == 3
+    assert zustand["schwellwert_k"] == 0.2
+    assert zustand["prozessnotation"].value == "bpmn"
+    _button(app, "k und Prozessnotation anpassen").click().run()
+    assert app.slider[0].value == 0.2
+    assert app.radio[0].value.value == "bpmn"

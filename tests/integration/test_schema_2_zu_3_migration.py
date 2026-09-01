@@ -182,7 +182,7 @@ def test_streamlit_seiten_starten_mit_migrierter_version_2_datenbank(
         for element in anwendung.title
     )
     if etl_oeffnen:
-        assert anwendung.radio[0].value == "Schritt 1: Projektrahmen definieren"
+        assert anwendung.radio[0].value == "1 Projektrahmen definieren"
 
 
 def test_nicht_unterstuetzte_version_zeigt_fehlermeldung_statt_traceback(

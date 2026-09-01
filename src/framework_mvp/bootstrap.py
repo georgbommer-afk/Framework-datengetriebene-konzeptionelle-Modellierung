@@ -8,6 +8,7 @@ from framework_mvp.application.autorisierung import AutorisierungsService
 from framework_mvp.application.datenimport_service import DatenimportService
 from framework_mvp.application.datenqualitaet_service import DatenqualitaetService
 from framework_mvp.application.datenquelle_service import DatenquelleService
+from framework_mvp.application.demoprojekt_service import DemoProjektService
 from framework_mvp.application.ergebnisaggregation_service import ErgebnisaggregationService
 from framework_mvp.application.event_log_service import EventLogService
 from framework_mvp.application.fortschritt_service import FortschrittService
@@ -17,6 +18,10 @@ from framework_mvp.application.importvorgang_service import ImportvorgangService
 from framework_mvp.application.kursarchiv_service import KursarchivService
 from framework_mvp.application.kursgruppen_service import EinladungsService, KursgruppenService
 from framework_mvp.application.loesch_service import LoeschService
+from framework_mvp.application.mandanten_projekt_service import (
+    AutorisierterLoeschService,
+    MandantenProjektService,
+)
 from framework_mvp.application.mapping_service import (
     EventLogKonfigurationService,
     MappingService,
@@ -28,6 +33,7 @@ from framework_mvp.application.modellvalidierung_service import Modellvalidierun
 from framework_mvp.application.process_mining_service import ProcessMiningService
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.application.projektarchiv_service import ArchivGrenzen, ProjektArchivService
+from framework_mvp.application.projektkontext_service import ProjektkontextService
 from framework_mvp.application.transformations_service import TransformationsService
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
 from framework_mvp.infrastructure.persistence.sqlite_datenquelle_repository import (
@@ -199,6 +205,7 @@ def erstelle_projektarchiv_service(
     pfad = ermittle_datenbankpfad(datenbankpfad)
     workspace_konfiguration = workspace or WorkspaceKonfiguration.ermitteln()
     repository = SQLiteZugriffsRepository(pfad)
+    kontext_service = erstelle_projektkontext_service(pfad, workspace_konfiguration)
     return ProjektArchivService(
         pfad,
         workspace_konfiguration,
@@ -206,6 +213,7 @@ def erstelle_projektarchiv_service(
         AutorisierungsService(repository),
         grenzen=ermittle_archivgrenzen(),
         gast_ttl=ermittle_gast_ttl(),
+        konsistenzpruefung=lambda projekt_id: kontext_service.pruefen(projekt_id),
     )
 
 
@@ -227,6 +235,9 @@ def erstelle_kursarchiv_service(
             autorisierung,
             grenzen=ermittle_archivgrenzen(),
             gast_ttl=ermittle_gast_ttl(),
+            konsistenzpruefung=lambda projekt_id: erstelle_projektkontext_service(
+                pfad, workspace_konfiguration
+            ).pruefen(projekt_id),
         ),
         erstelle_projekt_service(pfad),
         erstelle_loesch_service(pfad, workspace_konfiguration),
@@ -435,4 +446,71 @@ def erstelle_modellausgabe_service(
         erstelle_modellvalidierung_service(datenbankpfad, workspace_konfiguration),
         erstelle_projekt_service(datenbankpfad),
         workspace_konfiguration,
+    )
+
+
+def erstelle_projektkontext_service(
+    datenbankpfad: Path | str | None = None,
+    workspace: WorkspaceKonfiguration | None = None,
+) -> ProjektkontextService:
+    """Erzeugt die zentrale, integritätsprüfende Projekt-Rehydrierung."""
+    pfad = ermittle_datenbankpfad(datenbankpfad)
+    workspace_konfiguration = workspace or WorkspaceKonfiguration.ermitteln()
+    return ProjektkontextService(
+        pfad,
+        transformationen=erstelle_transformations_service(pfad, workspace_konfiguration),
+        event_log_konfiguration=erstelle_event_log_konfigurations_service(
+            pfad, workspace_konfiguration
+        ),
+        mappingtabelle=erstelle_mappingtabelle_service(pfad, workspace_konfiguration),
+        event_log=erstelle_event_log_service(pfad, workspace_konfiguration),
+        datenqualitaet=erstelle_datenqualitaet_service(pfad, workspace_konfiguration),
+        process_mining=erstelle_process_mining_service(pfad, workspace_konfiguration),
+        ergebnisaggregation=erstelle_ergebnisaggregation_service(pfad, workspace_konfiguration),
+        modellableitung=erstelle_modellableitung_service(pfad, workspace_konfiguration),
+        modellvalidierung=erstelle_modellvalidierung_service(pfad, workspace_konfiguration),
+    )
+
+
+def erstelle_demoprojekt_service(
+    datenbankpfad: Path | str | None = None,
+    workspace: WorkspaceKonfiguration | None = None,
+) -> DemoProjektService:
+    """Erzeugt den vollständigen Demo-Orchestrator mit versionierten Repository-Daten."""
+    pfad = ermittle_datenbankpfad(datenbankpfad)
+    workspace_konfiguration = workspace or WorkspaceKonfiguration.ermitteln()
+    repository = erstelle_zugriffs_repository(pfad)
+    autorisierung = AutorisierungsService(repository)
+    projektservice = erstelle_projekt_service(pfad)
+    repo_wurzel = Path(__file__).resolve().parents[2]
+    datensaetze = repo_wurzel / "tests" / "datasets"
+    return DemoProjektService(
+        projekte=MandantenProjektService(
+            projektservice,
+            repository,
+            autorisierung,
+            gast_ttl=ermittle_gast_ttl(),
+        ),
+        loeschen=AutorisierterLoeschService(
+            erstelle_loesch_service(pfad, workspace_konfiguration), autorisierung
+        ),
+        datenquellen=erstelle_datenquelle_service(pfad),
+        datenimport=erstelle_datenimport_service(),
+        importvorgaenge=erstelle_importvorgang_service(pfad, workspace_konfiguration),
+        transformationen=erstelle_transformations_service(pfad, workspace_konfiguration),
+        mappingtabellen=erstelle_mappingtabelle_service(pfad, workspace_konfiguration),
+        event_log_konfiguration=erstelle_event_log_konfigurations_service(
+            pfad, workspace_konfiguration
+        ),
+        event_logs=erstelle_event_log_service(pfad, workspace_konfiguration),
+        datenqualitaet=erstelle_datenqualitaet_service(pfad, workspace_konfiguration),
+        process_mining=erstelle_process_mining_service(pfad, workspace_konfiguration),
+        aggregationen=erstelle_ergebnisaggregation_service(pfad, workspace_konfiguration),
+        modellableitungen=erstelle_modellableitung_service(pfad, workspace_konfiguration),
+        modellvalidierungen=erstelle_modellvalidierung_service(pfad, workspace_konfiguration),
+        modellausgabe=erstelle_modellausgabe_service(pfad, workspace_konfiguration),
+        fortschritt=erstelle_fortschritt_service(pfad),
+        artefakte=ImportartefaktSpeicher(workspace_konfiguration),
+        produktionsdaten=datensaetze / "Testdatensatz_Produktion.xlsx",
+        sollprozess=datensaetze / "Sollprozess_Produktion.pnml",
     )

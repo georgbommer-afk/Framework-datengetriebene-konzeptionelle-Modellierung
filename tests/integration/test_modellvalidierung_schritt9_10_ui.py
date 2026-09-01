@@ -120,6 +120,7 @@ class Validierungen:
         assert (validierungslauf_id, projekt_id, k_stern_id) == (V, P, KS)
         return K_STERN
 class Ausgaben:
+    def persistierte_ausgabe_laden(self, **kwargs): return None
     def erzeugen(self, **kwargs):
         assert kwargs["html"] is True and kwargs["pdf"] is True
         assert "excel" not in kwargs and "report" not in kwargs

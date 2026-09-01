@@ -1362,6 +1362,32 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
         )
 
 
+def _gespeichertes_a_g_anzeigen(a_g: dict[str, object]) -> None:
+    """Zeigt die persistierten Entscheidungen und Ergebnisse ohne Neuberechnung."""
+    st.subheader("Gespeicherte Konfiguration und Ergebnisse A_G")
+    st.write(
+        "**Ausgewählte KPI:** "
+        + ", ".join(str(wert) for wert in a_g.get("ausgewaehlte_kpi_ids", []))
+    )
+    kpi_konfigurationen = a_g.get("kpi_konfigurationen", [])
+    if isinstance(kpi_konfigurationen, list) and kpi_konfigurationen:
+        st.write("**Persistierte KPI-Operanden und Datenquellen**")
+        st.json(kpi_konfigurationen, expanded=False)
+    st.write("**Conformance Checking**")
+    st.json(a_g.get("conformance_checking", {}), expanded=False)
+    strukturierte = a_g.get("strukturierte_ergebnisse", {})
+    if isinstance(strukturierte, dict):
+        for titel, schluessel in (
+            ("Ressourcenentscheidungen", "ressourcen"),
+            ("Entitätsinformationen", "entitaetsinstanzen_und_attribute"),
+            ("Warteschlangen und Wartezeiten", "warteschlangen_und_wartezeiten"),
+            ("Zeit- und Ankunftsauswahl", "zeitbezogene_datenauswahl"),
+            ("Soll-/Ist-Performance und Busy Ratio", "performance_und_engpassanalyse"),
+        ):
+            with st.expander(titel, expanded=False):
+                st.json(strukturierte.get(schluessel, {}), expanded=True)
+
+
 def zeige_ergebnisaggregation_seite(
     projekt_service: ProjektService,
     service: ErgebnisaggregationService,
@@ -1384,6 +1410,31 @@ def zeige_ergebnisaggregation_seite(
         _navigation_zurueck()
         return
     _eingangsartefakte(basis)
+    aktive_aggregation = st.session_state.get("aktuelle_aggregations_id")
+    bearbeitung_key = f"ag_konfiguration_bearbeiten_{projekt_id}"
+    if aktive_aggregation and not st.session_state.get(bearbeitung_key, False):
+        try:
+            aggregation, a_g = service.laden(UUID(str(aktive_aggregation)))
+            if (
+                aggregation.projekt_id != projekt_id
+                or aggregation.freigabe_id != freigabe_id
+                or aggregation.analyse_id != analyse_id
+            ):
+                raise Domaenenfehler("A_G gehört nicht zur aktiven Artefaktkette.")
+            _gespeichertes_a_g_anzeigen(a_g)
+            st.success("A_G ist gespeichert und erneut validiert.")
+            st.download_button(
+                "A_G als JSON herunterladen",
+                service.a_g_download_laden(aggregation.aggregations_id),
+                file_name="aggregation-a-g.json",
+                mime="application/json",
+            )
+            if st.button("Konfiguration ansehen oder anpassen"):
+                st.session_state[bearbeitung_key] = True
+                st.rerun()
+            return
+        except (Domaenenfehler, Importintegritaetsfehler, ValueError) as fehler:
+            st.error(f"Das aktive A_G ist nicht mehr gültig: {fehler}")
     kpi_konfigurationen = _kpi_konfigurationen(basis)
     sollmodell, mapping, conformance = _sollmodell_und_mapping(basis)
     st.subheader("4. Ressourcen, Entitäten, Warteschlangen und Zeitgrößen")

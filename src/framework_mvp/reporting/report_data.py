@@ -146,11 +146,22 @@ def _kombiniere_bestandteile(
     """Projiziert getrennte V3-Bestandteile verlustfrei auf das bestehende Reportlayout."""
     erster = bestandteile[0]
     informationen: list[Any] = []
+    bekannte_referenzen: dict[str, Any] = {}
     menschliche_eintraege: list[Any] = []
     for bestandteil in bestandteile:
         original = bestandteil.get("urspruenglicher_bestandteil", {})
         if isinstance(original, Mapping) and isinstance(original.get("informationen"), list):
-            informationen.extend(original["informationen"])
+            for eintrag in original["informationen"]:
+                if not isinstance(eintrag, Mapping):
+                    informationen.append(eintrag)
+                    continue
+                referenz = str(eintrag.get("strukturreferenz", ""))
+                wert = _normalisieren(eintrag.get("wert"))
+                if referenz in bekannte_referenzen and bekannte_referenzen[referenz] == wert:
+                    continue
+                if referenz and referenz not in bekannte_referenzen:
+                    bekannte_referenzen[referenz] = wert
+                informationen.append(eintrag)
         eintraege = bestandteil.get("menschliche_eintraege", [])
         if isinstance(eintraege, list):
             menschliche_eintraege.extend(eintraege)

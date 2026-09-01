@@ -383,6 +383,20 @@ def _gespeichertes_k_stern(
         st.warning("Dieses historische K* ist nur lesbar und keine aktuelle Schritt-10-Grundlage.")
     else:
         st.success("K* ist fachlich validiert und gespeichert.")
+    behandlungen = k_stern.get("behandlungen_offener_eintraege", [])
+    st.subheader("Gespeicherte menschliche Validierungsentscheidungen")
+    if behandlungen:
+        st.dataframe(behandlungen, hide_index=True, width="stretch")
+    else:
+        st.info("O enthielt keine offenen Einträge, die einzeln behandelt werden mussten.")
+    gesamt = k_stern.get("gesamtvalidierung", {})
+    if isinstance(gesamt, dict):
+        st.write(f"**Gesamtstatus:** {gesamt.get('status', '–')}")
+        st.write(f"**Validierungsvermerk:** {gesamt.get('validierungsvermerk') or '–'}")
+        st.write(
+            "**Fachliche Gesamtbestätigung:** "
+            + ("Ja" if gesamt.get("menschlich_bestaetigt") else "Nein")
+        )
     st.download_button(
         "Validiertes konzeptionelles Modell K* herunterladen",
         service.k_stern_download_laden(validierungslauf_id),

@@ -11,28 +11,29 @@
    hinterlegen. E-Mail allein ist unzulässig.
 4. Die optionale Gast-TTL und Archivgrenzen über die in README dokumentierten Umgebungsvariablen
    setzen. Ohne Angaben gelten 24 Stunden und 250 MB/1 GB/5.000 Dateien.
-5. App deployen. Ohne funktionierende OIDC-Konfiguration muss **Ohne Anmeldung testen** weiter
-   funktionieren; **Anmelden / Kursgruppe öffnen** darf keine Kurs- oder Adminrechte gewähren.
+5. App deployen. Ohne funktionierende OIDC-Konfiguration müssen **Neues Projekt** und
+   **Demoprojekt öffnen** weiter funktionieren; **Anmelden / Kursgruppe öffnen** darf keine
+   Kurs- oder Adminrechte gewähren.
 
 ## Manueller End-to-End-Test
 
 ### Gastprojekt exportieren und importieren
 
-1. **Ohne Anmeldung testen** wählen und den Temporärhinweis prüfen.
+1. **Neues Projekt** wählen und den leeren Projektrahmen sowie Temporärhinweis prüfen.
 2. Projektrahmen ändern und speichern. **Projekt exportieren** und anschließend
    **Projektarchiv herunterladen** wählen.
-3. **Demo beenden und Daten löschen**, Zielname im Dialog prüfen und **Löschen** wählen.
-4. Eine neue Gastdemo starten, das ZIP unter **Projekt importieren** wählen,
+3. **Temporäres Projekt löschen**, Zielname im Dialog prüfen und **Löschen** wählen.
+4. Einen neuen temporären Bereich starten, das ZIP unter **Projekt importieren** wählen,
    **Projektarchiv prüfen** ausführen und danach **Projekt importieren** wählen.
 5. Projektname, gespeicherten Framework-Schritt und Artefakte prüfen. Ein zweiter Browser mit
-   eigener Gastdemo darf das Projekt auch mit bekannter UUID nicht öffnen.
+   eigenem Gastbereich darf das Projekt auch mit bekannter UUID nicht öffnen.
 
 ### Tatsächlicher Projektlebenszyklus
 
 - Ein Gastprojekt bleibt serverseitig bis zum Ablauf seiner Aktivitäts-TTL erhalten. Das
   Schließen eines Browser-Tabs ist weder Löschsignal noch verlässliche Wiederaufnahme; der nur
-  im Session-State gehaltene Besitznachweis geht dabei verloren. **Demo beenden und Daten
-  löschen** ist die einzige sofortige Löschaktion. Vorher steht der vollständige Projektexport
+  im Session-State gehaltene Besitznachweis geht dabei verloren. **Temporäres Projekt löschen**
+  ist die einzige sofortige Löschaktion. Vorher steht der vollständige Projektexport
   zur Verfügung; ein Import bindet das Projekt an die neue Gastsitzung.
 - Einen separaten Projekttyp „privates Einzelprojekt“ gibt es im aktuellen Datenmodell nicht.
   Dauerhafte angemeldete Projekte liegen in privaten Kurs- oder Arbeitsgruppen. Sie überleben

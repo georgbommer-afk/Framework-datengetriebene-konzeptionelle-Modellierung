@@ -147,7 +147,7 @@ def test_projektwechsel_fuehrt_zu_schritt_eins_und_bewahrt_projekt(
     projekt_id = anwendung.session_state["aktuelles_projekt_id"]
     next(e for e in anwendung.button if e.label == "Projekt wechseln").click().run()
     assert not anwendung.exception
-    assert anwendung.radio[0].value == "Schritt 1: Projektrahmen definieren"
+    assert anwendung.radio[0].value == "1 Projektrahmen definieren"
     assert anwendung.session_state["aktuelles_projekt_id"] == projekt_id
 
 

@@ -239,10 +239,27 @@ def _technische_details(vorschau: Modellableitungsvorschau) -> None:
 def _gespeicherte_ableitung(
     service: ModellableitungService, ableitungs_id: UUID, projekt_id: UUID
 ) -> None:
-    ableitung, _, _ = service.laden(ableitungs_id)
+    ableitung, k, o = service.laden(ableitungs_id)
     if ableitung.projekt_id != projekt_id:
         raise Domaenenfehler("Die aktive Modellableitung gehört nicht zum aktiven Projekt.")
     st.success("K und O sind gespeichert und erneut validiert.")
+    entscheidungen = k.get("fachliche_entscheidungen", [])
+    if entscheidungen:
+        st.subheader("Gespeicherte fachliche Entscheidungen")
+        st.dataframe(
+            pd.DataFrame(entscheidungen).rename(
+                columns={
+                    "bestandteil_id": "Modellbestandteil",
+                    "entscheidung": "Entscheidung",
+                    "begruendung": "Begründung",
+                    "entschieden_am": "Entschieden am",
+                }
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+    st.write(f"**Modellbestandteile in K:** {len(k.get('modellbestandteile', []))}")
+    st.write(f"**Offene Einträge in O:** {len(o.get('offene_eintraege', []))}")
     links, rechts = st.columns(2)
     links.download_button(
         "Vorläufiges konzeptionelles Modell K herunterladen",

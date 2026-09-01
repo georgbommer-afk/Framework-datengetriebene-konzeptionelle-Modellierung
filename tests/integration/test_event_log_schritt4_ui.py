@@ -5,7 +5,15 @@ from uuid import UUID, uuid4
 
 from streamlit.testing.v1 import AppTest
 
-from framework_mvp.domain.models import MappingModus, ZeitstempelZuordnung
+from framework_mvp.domain.models import (
+    Aktivitaetsbildungsart,
+    Aktivitaetsdefinition,
+    MappingModus,
+    Mappingstatus,
+    SemantischesMapping,
+    ZeitstempelZuordnung,
+    ZusammengesetzteFallId,
+)
 
 APP = r"""
 from dataclasses import replace
@@ -314,3 +322,55 @@ def test_ereignisorientierter_ablauf_speichert_e_und_setzt_aktiven_kontext() -> 
     assert zustand["event_log_id"] == event_log_id
     assert zustand["konfigurations_id"] == konfigurations_id
     assert "artefakt" in zustand
+
+
+def test_gespeicherte_konfiguration_rehydriert_mindestbestandteile_und_zeitrollen() -> None:
+    projekt_id = UUID("11111111-1111-1111-1111-111111111111")
+    datensatz_id = UUID("22222222-2222-2222-2222-222222222222")
+    konfigurations_id = uuid4()
+    jetzt = datetime.now(UTC)
+    konfiguration = SemantischesMapping(
+        konfigurations_id,
+        projekt_id,
+        datensatz_id,
+        MappingModus.EREIGNISORIENTIERT,
+        ZusammengesetzteFallId(("auftrag",)),
+        "aktion",
+        "zeit",
+        "startzeit",
+        "endzeit",
+        "status",
+        "ressource",
+        (),
+        (),
+        None,
+        jetzt,
+        jetzt,
+        Mappingstatus.VALIDIERT,
+        Aktivitaetsdefinition(Aktivitaetsbildungsart.VORHANDENE_SPALTE, ("aktion",)),
+        UUID("55555555-5555-5555-5555-555555555555"),
+        4,
+    )
+    app = AppTest.from_string(APP)
+    app.session_state["aktuelles_projekt_id"] = str(projekt_id)
+    app.session_state["aktueller_zwischendatensatz_id"] = str(datensatz_id)
+    app.session_state["aktuelle_event_log_konfiguration_id"] = str(konfigurations_id)
+    app.session_state["test_konfiguration"] = konfiguration
+    app = app.run()
+
+    _button(app, "Weiter").click().run()
+    assert next(w for w in app.selectbox if w.label == "Fallidentifikation").value == "auftrag"
+    assert next(w for w in app.selectbox if w.label == "Aktivitätsspalte").value == "aktion"
+    assert next(w for w in app.selectbox if w.label == "Ereigniszeitstempel").value == "zeit"
+    _button(app, "Weiter").click().run()
+    assert (
+        next(w for w in app.selectbox if w.label == "Ist-Startzeitpunkt → start_timestamp").value
+        == "startzeit"
+    )
+    assert (
+        next(w for w in app.selectbox if w.label == "Ist-Endzeitpunkt → end_timestamp").value
+        == "endzeit"
+    )
+    assert next(w for w in app.selectbox if w.label == "Ressourcenspalte → resource").value == (
+        "ressource"
+    )

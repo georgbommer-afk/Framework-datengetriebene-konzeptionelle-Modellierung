@@ -1,4 +1,4 @@
-"""Wizard für Schritt 1: Projektrahmen definieren mit den Ausgaben U und S."""
+"""Wizard für 1 Projektrahmen definieren mit den Ausgaben U und S."""
 
 import logging
 from collections.abc import Callable, MutableMapping
@@ -362,6 +362,7 @@ def _seitenleiste(
     titel_anzeigen: bool = True,
     projekt_loesch_label: str = "Projekt löschen",
     projektloeschung_nachbereiten: Callable[[], None] | None = None,
+    projekt_aktivieren: Callable[[UUID | None], None] | None = None,
 ) -> Projekt | None:
     if titel_anzeigen:
         st.sidebar.header("Projektrahmen")
@@ -380,6 +381,8 @@ def _seitenleiste(
     neue_id = UUID(auswahl) if auswahl else None
     if neue_id != aktuelle_id:
         projekt = _projekt_nach_id(projekte, neue_id)
+        if projekt_aktivieren is not None:
+            projekt_aktivieren(neue_id)
         st.session_state.ausgewaehlte_projekt_id = neue_id
         st.session_state.wizard_entwurf = (
             _neuer_entwurf() if projekt is None else _entwurf_aus_projekt(projekt)
@@ -388,6 +391,8 @@ def _seitenleiste(
         st.session_state.auswahl_generation += 1
         st.rerun()
     if st.sidebar.button("Neues Projekt", width="stretch"):
+        if projekt_aktivieren is not None:
+            projekt_aktivieren(None)
         st.session_state.ausgewaehlte_projekt_id = None
         st.session_state.wizard_entwurf = _neuer_entwurf()
         st.session_state.wizard_schritt = 1
@@ -906,6 +911,7 @@ def zeige_projektverwaltung(
     sidebar_titel_anzeigen: bool = True,
     projekt_loesch_label: str = "Projekt löschen",
     projektloeschung_nachbereiten: Callable[[], None] | None = None,
+    projekt_aktivieren: Callable[[UUID | None], None] | None = None,
 ) -> None:
     """Zeigt ausschließlich die fünf methodisch erforderlichen Unterabschnitte."""
     _initialisieren()
@@ -918,11 +924,12 @@ def zeige_projektverwaltung(
             titel_anzeigen=sidebar_titel_anzeigen,
             projekt_loesch_label=projekt_loesch_label,
             projektloeschung_nachbereiten=projektloeschung_nachbereiten,
+            projekt_aktivieren=projekt_aktivieren,
         )
     except NichtUnterstuetzteSchemaversion as fehler:
         st.error(str(fehler))
         return
-    st.header("Schritt 1: Projektrahmen definieren")
+    st.header("1 Projektrahmen definieren")
     if meldung := st.session_state.pop("erfolgsmeldung", None):
         st.success(meldung)
     schritt = st.session_state.wizard_schritt

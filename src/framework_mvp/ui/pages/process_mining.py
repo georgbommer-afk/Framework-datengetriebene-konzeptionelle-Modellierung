@@ -46,6 +46,33 @@ def _zustand(projekt_id: UUID, freigabe_id: UUID) -> dict[str, Any]:
     return zustand
 
 
+def _persistierte_analyse_rehydrieren(
+    zustand: dict[str, Any],
+    projekt_id: UUID,
+    freigabe_id: UUID,
+    service: ProcessMiningService,
+) -> None:
+    """Öffnet die aktive validierte P/A_D-Generation direkt im Ergebnisabschnitt."""
+    if zustand.get("persistenz_rehydriert"):
+        return
+    zustand["persistenz_rehydriert"] = True
+    try:
+        analyse_id = UUID(str(st.session_state.get("aktuelle_analyse_id")))
+    except (TypeError, ValueError):
+        return
+    analyse, a_d, _ = service.uebergabe_laden(analyse_id, projekt_id, freigabe_id)
+    zustand.update(
+        {
+            "analyse_id": analyse.analyse_id,
+            "gespeicherte_analyse": analyse,
+            "gespeicherte_a_d": a_d,
+            "schwellwert_k": float(a_d["schwellwert_k"]),
+            "prozessnotation": Prozessnotation(a_d["prozessnotation"]),
+            "schritt": 3,
+        }
+    )
+
+
 def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
     links, rechts = st.columns(2)
     if links.button("Zurück", disabled=zustand["schritt"] == 1, width="stretch"):
@@ -185,6 +212,12 @@ def _gespeichertes_ergebnis(a_d: dict[str, Any]) -> None:
     st.subheader("Gespeicherter vollständiger Directly-Follows-Graph")
     if svg.get("dfg_svg"):
         _zeige_svg(svg["dfg_svg"], "Gespeicherter Directly-Follows-Graph")
+        st.download_button(
+            "Gespeicherten DFG als SVG herunterladen",
+            svg["dfg_svg"],
+            "directly-follows-graph.svg",
+            "image/svg+xml",
+        )
     else:
         st.info("Keine DFG-Grafik gespeichert; die vollständigen DFG-Daten sind verfügbar.")
     st.dataframe(
@@ -221,6 +254,12 @@ def zeige_process_mining_seite(
     if freigabe_id is None:
         return
     zustand = _zustand(projekt_id, freigabe_id)
+    _persistierte_analyse_rehydrieren(
+        zustand,
+        projekt_id,
+        freigabe_id,
+        process_mining_service,
+    )
     try:
         freigabe, daten = process_mining_service.grundlage_laden(freigabe_id, projekt_id)
         if zustand["schritt"] == 1:
@@ -303,7 +342,7 @@ def zeige_process_mining_seite(
                 zurueck_spalte, berechnen_spalte = st.columns(2)
                 zurueck = zurueck_spalte.form_submit_button("Zurück", width="stretch")
                 berechnen = berechnen_spalte.form_submit_button(
-                    "Prozessmodell berechnen und zu Schritt 7",
+                    "DFG und Prozessmodell berechnen",
                     type="primary",
                     width="stretch",
                 )
@@ -344,7 +383,7 @@ def zeige_process_mining_seite(
                 if not isinstance(vorschau, ProcessMiningVorschau):
                     raise Domaenenfehler("Die Process-Mining-Vorschau ist ungültig.")
                 analyse = process_mining_service.speichern(
-                    zustand["analyse_id"], freigabe_id, konfiguration, vorschau
+                    uuid4(), freigabe_id, konfiguration, vorschau
                 )
                 analyse, a_d, _ = process_mining_service.uebergabe_laden(
                     analyse.analyse_id, projekt_id, freigabe_id
@@ -354,7 +393,23 @@ def zeige_process_mining_seite(
                 st.session_state.aktuelle_analyse_id = str(analyse.analyse_id)
                 st.session_state.aktuelles_prozessmodell_id = str(analyse.analyse_id)
                 st.session_state.aktuelle_discovery_ergebnisse_id = str(analyse.analyse_id)
-                schritt_abschliessen_und_weiter(aktueller_schritt=6, projekt_id=projekt_id)
+                for schluessel in (
+                    "aktuelle_aggregations_id",
+                    "aktuelle_modellableitungs_id",
+                    "aktuelle_k_id",
+                    "aktuelle_o_id",
+                    "aktuelle_validierungslauf_id",
+                    "aktuelle_k_stern_id",
+                    "ag_vorschau",
+                    "modellableitung_vorschau",
+                    "schritt9_arbeitsfassung",
+                    "schritt9_arbeitsfassung_signatur",
+                    "schritt10_ausgabe",
+                    "schritt10_ausgabe_signatur",
+                ):
+                    st.session_state.pop(schluessel, None)
+                zustand["schritt"] = 3
+                st.rerun()
             return
 
         st.write("### Prozessmodell P und Discovery-Ergebnisse A_D")
@@ -387,9 +442,16 @@ def zeige_process_mining_seite(
                     },
                 }
             )
-        if st.button("Weiter zu Schritt 7: Ergebnisse aggregieren", type="primary"):
+        anpassen, weiter = st.columns(2)
+        if anpassen.button("k und Prozessnotation anpassen", width="stretch"):
+            zustand["schritt"] = 2
+            st.rerun()
+        if weiter.button(
+            "Weiter zu Schritt 7: Ergebnisse aggregieren",
+            type="primary",
+            width="stretch",
+        ):
             schritt_abschliessen_und_weiter(aktueller_schritt=6, projekt_id=projekt_id)
-        _navigation(zustand, False)
     except (Domaenenfehler, Importintegritaetsfehler, KeyError, ValueError) as fehler:
         LOGGER.exception("Process Mining konnte nicht ausgeführt werden.")
         st.error(f"Process Mining konnte nicht ausgeführt werden: {fehler}")

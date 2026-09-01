@@ -194,7 +194,16 @@ class AutorisierungsService:
     def sichtbare_projekt_ids(self, kontext: Zugriffskontext) -> list[UUID]:
         """Liefert nur Kandidaten, die anschließend nochmals einzeln geprüft werden."""
         if kontext.benutzer_id is None:
-            return []
+            if kontext.gast_geheimnis is None:
+                return []
+            kandidaten = self._repository.projekt_ids_fuer_gast_geheimnis_hash(
+                geheimnis_hash(kontext.gast_geheimnis)
+            )
+            return [
+                projekt_id
+                for projekt_id in kandidaten
+                if self.projekt_zugriff_erlaubt(kontext, projekt_id, Projektaktion.ANSEHEN)
+            ]
         kandidaten = set(self._repository.projekt_ids_fuer_benutzer(kontext.benutzer_id))
         for gruppe in self._repository.gruppen_fuer_benutzer(kontext.benutzer_id):
             mitgliedschaft = self._repository.gruppenmitgliedschaft_laden(

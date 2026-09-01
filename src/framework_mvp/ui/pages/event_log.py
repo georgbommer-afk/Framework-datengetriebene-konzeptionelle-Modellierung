@@ -65,6 +65,54 @@ def _zustand(projekt_id: UUID, datensatz_id: UUID) -> dict[str, Any]:
     return zustand
 
 
+def _persistierte_konfiguration_rehydrieren(
+    zustand: dict[str, Any],
+    projekt_id: UUID,
+    datensatz_id: UUID,
+    service: EventLogKonfigurationService,
+) -> None:
+    """Übernimmt eine aktive gespeicherte Konfiguration einmalig als Widgetgrundlage.
+
+    Die gespeicherte Generation bleibt unverändert. Eine spätere explizite Erzeugung
+    verwendet eine neue Konfigurations-ID.
+    """
+    if zustand.get("persistenz_rehydriert"):
+        return
+    zustand["persistenz_rehydriert"] = True
+    try:
+        aktive_id = UUID(str(st.session_state.get("aktuelle_event_log_konfiguration_id")))
+    except (TypeError, ValueError):
+        return
+    konfiguration = service.laden(aktive_id)
+    if (
+        konfiguration is None
+        or konfiguration.projekt_id != projekt_id
+        or konfiguration.zwischendatensatz_id != datensatz_id
+    ):
+        return
+    definition = konfiguration.wirksame_aktivitaetsdefinition
+    zustand.update(
+        {
+            "persistierte_konfiguration_id": str(konfiguration.mapping_id),
+            "konfigurations_id": uuid4(),
+            "erstellt_am": datetime.now(UTC),
+            "mapping_modus": konfiguration.mapping_modus,
+            "fall_id": konfiguration.fall_id.spalten[0],
+            "aktivitaetsquellen": (() if definition is None else definition.quellspalten),
+            "verknuepfungselement": ("" if definition is None else definition.trennzeichen),
+            "zeitstempelspalte": konfiguration.zeitstempelspalte,
+            "startzeitstempelspalte": konfiguration.startzeitstempelspalte,
+            "endzeitstempelspalte": konfiguration.endzeitstempelspalte,
+            "lifecycle_spalte": konfiguration.lifecycle_spalte,
+            "ressourcen_spalte": konfiguration.ressourcen_spalte,
+            "zeitstempelzuordnungen": konfiguration.zeitstempelzuordnungen,
+            "zusaetzliche_attribute": tuple(
+                wert.spaltenname for wert in konfiguration.zusaetzliche_attribute
+            ),
+        }
+    )
+
+
 def _spaltenlabel(mapping: Mappingtabelle | None, spalte: str) -> str:
     if mapping is None:
         return spalte
@@ -682,6 +730,12 @@ def zeige_event_log_seite(
         datensatz, daten = geladen
         _datensatzkontext(transformations_service, datenquelle_service, datensatz)
         zustand = _zustand(projekt_id, datensatz.zwischendatensatz_id)
+        _persistierte_konfiguration_rehydrieren(
+            zustand,
+            projekt_id,
+            datensatz.zwischendatensatz_id,
+            konfigurations_service,
+        )
         mapping = mappingtabelle_service.fuer_datensatz(projekt_id, datensatz.zwischendatensatz_id)
         gespeicherte_konfiguration = zustand.get("konfiguration")
         if gespeicherte_konfiguration is not None:

@@ -121,6 +121,19 @@ def zeige_modellausgabe_seite(
     )
     st.button(f"{xlsx_dateiname} – noch nicht implementiert", disabled=True)
     signatur = (str(validierungslauf_id), str(k_stern_id))
+    if "schritt10_ausgabe" not in st.session_state:
+        try:
+            persistiert = ausgabe_service.persistierte_ausgabe_laden(
+                projekt_id=projekt_id,
+                validierungslauf_id=validierungslauf_id,
+                k_stern_id=k_stern_id,
+            )
+        except Importintegritaetsfehler as fehler:
+            st.error(f"Die gespeicherte Ausgabe ist nicht mehr gültig: {fehler}")
+            persistiert = None
+        if persistiert is not None:
+            st.session_state.schritt10_ausgabe = persistiert
+            st.session_state.schritt10_ausgabe_signatur = signatur
     if st.button("HTML und PDF erzeugen", type="primary"):
         try:
             st.session_state.schritt10_ausgabe = ausgabe_service.erzeugen(

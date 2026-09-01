@@ -17,6 +17,7 @@ from framework_mvp.domain.models import (
     GestaltDerGueter,
     LogistischeZielgroesse,
     Materialflusskontinuitaet,
+    Produktionsklassifikation,
     Projektstatus,
     Quellenart,
     Quellsystemtyp,
@@ -67,9 +68,7 @@ def test_anwendung_startet_mit_fuenf_schritten_und_tooltips(
     """Schritt 1 beginnt kompakt mit genau den beiden fachlichen Textbereichen."""
     anwendung = _anwendung_starten(tmp_path, monkeypatch)
     assert not anwendung.exception
-    assert any(
-        element.value == "Schritt 1: Projektrahmen definieren" for element in anwendung.header
-    )
+    assert any(element.value == "1 Projektrahmen definieren" for element in anwendung.header)
     assert any("Gesamtfortschritt" in element.value for element in anwendung.caption)
     assert len(anwendung.get("progress")) == 1
     assert {element.label for element in anwendung.text_area} == {
@@ -139,6 +138,58 @@ def test_projektwechsel_vermischt_keine_widgetwerte(
     assert (
         next(wert for wert in anwendung.text_area if wert.label == "Problemstellung").value
         == "Problem A"
+    )
+
+
+def test_persistierte_produktionswerte_bleiben_projektbezogen_und_neuer_entwurf_leer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    datenbankpfad = tmp_path / "streamlit.sqlite"
+    monkeypatch.setenv(DATENBANKPFAD_UMGEBUNGSVARIABLE, str(datenbankpfad))
+    klassifikation = Systemklassifikation(
+        gestalt_der_gueter=GestaltDerGueter.STUECKGUT,
+        erzeugnisstrukturtyp=Erzeugnisstrukturtyp.KONVERGIEREND,
+        materialflusskontinuitaet=Materialflusskontinuitaet.DISKONTINUIERLICH,
+        produktion=Produktionsklassifikation(**VOLLSTAENDIGE_PRODUKTION),
+    )
+    erstelle_projekt_service().projekt_anlegen(
+        bezeichnung="Vollständiges Produktionsprojekt",
+        untersuchungsauftrag=Untersuchungsauftrag(
+            "Problem",
+            "System analysieren",
+            Systemtyp.PRODUKTION,
+            "Grenze",
+            systemklassifikation=klassifikation,
+        ),
+    )
+    app = AppTest.from_file(ANWENDUNGSPFAD).run()
+    auswahl = next(w for w in app.selectbox if w.label == "Vorhandenes Projekt auswählen")
+    auswahl.select_index(auswahl.options.index("Vollständiges Produktionsprojekt")).run()
+    app.session_state["wizard_schritt"] = 3
+    app.run()
+
+    assert next(w for w in app.selectbox if w.label == "Auftragsabwicklungsstrategie").value == (
+        "Make-to-Order (MTO)"
+    )
+    assert next(w for w in app.selectbox if w.label == "Auflagegröße").value == "Serienproduktion"
+    assert set(
+        next(w for w in app.multiselect if w.label == "Eingesetzte Produktionsressourcen").value
+    ) == {"Maschinen", "Personal"}
+
+    auswahl = next(w for w in app.selectbox if w.label == "Vorhandenes Projekt auswählen")
+    auswahl.select_index(auswahl.options.index("Neues Projekt")).run()
+    assert app.session_state["wizard_entwurf"]["produktion"] == {}
+    assert app.session_state["wizard_entwurf"]["systemtyp"] is None
+
+    # AppTest behält den Widgetknoten des vorigen Reruns im Testbaum; im Browser
+    # wird er von Streamlit automatisch entsorgt.
+    app.session_state["projektauswahl_1"] = ""
+    auswahl = next(w for w in app.selectbox if w.label == "Vorhandenes Projekt auswählen")
+    auswahl.select_index(auswahl.options.index("Vollständiges Produktionsprojekt")).run()
+    app.session_state["wizard_schritt"] = 3
+    app.run()
+    assert next(w for w in app.selectbox if w.label == "Auftragsabwicklungsstrategie").value == (
+        "Make-to-Order (MTO)"
     )
 
 
@@ -491,7 +542,7 @@ def test_validierungsfehler_verhindert_navigation(
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
     _schaltflaeche(anwendung, "Projektrahmen speichern und zu Schritt 2").click().run()
-    assert anwendung.radio[0].value == "Schritt 1: Projektrahmen definieren"
+    assert anwendung.radio[0].value == "1 Projektrahmen definieren"
     assert any("müssen ausgefüllt sein" in element.value for element in anwendung.error)
     assert not erstelle_projekt_service().projekte_auflisten()
 
@@ -524,7 +575,7 @@ def test_schritte_zwei_bis_zehn_bleiben_in_der_navigation(
     """Die Navigation enthält die validierten Übergabepunkte bis Schritt 10."""
     anwendung = _anwendung_starten(tmp_path, monkeypatch)
     assert anwendung.radio[0].options == [
-        "Schritt 1: Projektrahmen definieren",
+        "1 Projektrahmen definieren",
         "2 ETL durchführen",
         "3 Semantisches Mapping",
         "4 Event Log aufbauen",

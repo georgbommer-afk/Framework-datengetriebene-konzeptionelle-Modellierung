@@ -129,6 +129,12 @@ class Qualitaet:
     def freigaben_fuer_event_log(self, projekt_id, event_log_id): return []
     def freigeben(self, freigabe_id, projekt_id, event_log_id, entscheidungen): return FREIGABE
     def freigabe_laden(self, freigabe_id): return FREIGABE, DATEN.copy(deep=True)
+    def entscheidungen_der_freigabe(self, freigabe_id):
+        assert freigabe_id == F
+        return (
+            FachlicheEntscheidung("q_nachvollziehbar", False, "Q ist nachvollziehbar."),
+            FachlicheEntscheidung("e_interpretierbar", False, "E ist interpretierbar."),
+        )
 
 zeige_datenqualitaet_seite(Projekte(), EventLogs(), Qualitaet())
 """
@@ -186,7 +192,7 @@ def test_nicht_eindeutige_e_ursache_wird_fachlich_einem_vorherigen_schritt_zugeo
 @pytest.mark.parametrize(
     ("block", "bereich"),
     (
-        (1, "Schritt 1: Projektrahmen definieren"),
+        (1, "1 Projektrahmen definieren"),
         (2, "2 ETL durchführen"),
         (3, "3 Semantisches Mapping"),
         (4, "4 Event Log aufbauen"),
@@ -227,3 +233,21 @@ def test_automatische_pruefung_verwendet_die_fachliche_ueberschrift() -> None:
         "Datenqualitätsprüfung der erzeugten Artefakte" in wert.value for wert in app.markdown
     )
     assert not any("Verbindliche Kriterien aus Tabelle 3.14" in wert.value for wert in app.markdown)
+
+
+def test_persistierte_freigabe_rehydriert_entscheidungen_und_begruendungen() -> None:
+    app = AppTest.from_string(APP)
+    app.session_state["aktuelles_projekt_id"] = "11111111-1111-1111-1111-111111111111"
+    app.session_state["aktuelles_event_log_id"] = "22222222-2222-2222-2222-222222222222"
+    app.session_state["aktuelle_freigabe_id"] = "55555555-5555-5555-5555-555555555555"
+    app = app.run()
+
+    zustand = app.session_state["quality_gate_zustaende"]["11111111-1111-1111-1111-111111111111"]
+    assert zustand["schritt"] == 4
+    assert len(zustand["entscheidungen"]) == 2
+    _button(app, "Zurück").click().run()
+    bewertungen = [wert for wert in app.radio if wert.label == "Fachliche Entscheidung"]
+    assert {wert.value for wert in bewertungen} == {"Begründet kein Mangel"}
+    begruendungen = [wert.value for wert in app.text_area]
+    assert "Q ist nachvollziehbar." in begruendungen
+    assert "E ist interpretierbar." in begruendungen

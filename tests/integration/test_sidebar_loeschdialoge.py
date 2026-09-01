@@ -58,7 +58,7 @@ if "test_initialisiert" not in st.session_state:
     st.session_state.aktueller_zwischendatensatz_id = str(D2)
 st.sidebar.radio(
     "Framework-Bereich",
-    ["Schritt 1: Projektrahmen definieren"],
+    ["1 Projektrahmen definieren"],
     key="framework_bereich",
 )
 zeige_projektverwaltung(Projekte(), Transformationen(), Loeschen())
@@ -103,7 +103,7 @@ def test_projektloeschung_setzt_nur_pending_navigation_ohne_widgetabsturz() -> N
     )
     assert aufrufe == [projekt_id]
     assert zustand["framework_bereich"] == "7 Ergebnisse aggregieren"
-    assert zustand["naechster_framework_bereich"] == "Schritt 1: Projektrahmen definieren"
+    assert zustand["naechster_framework_bereich"] == "1 Projektrahmen definieren"
 
 
 def test_datensatzloeschung_trifft_aktive_auswahl_und_oeffnet_schritt_zwei() -> None:
@@ -126,7 +126,7 @@ def test_datensatzloeschung_trifft_aktive_auswahl_und_oeffnet_schritt_zwei() -> 
         spaltenanzahl=3,
     )
     zustand = {
-        "framework_bereich": "Schritt 1: Projektrahmen definieren",
+        "framework_bereich": "1 Projektrahmen definieren",
         "aktueller_zwischendatensatz_id": str(datensatz_id),
     }
     _datensatzloeschung_ausfuehren(
@@ -136,5 +136,5 @@ def test_datensatzloeschung_trifft_aktive_auswahl_und_oeffnet_schritt_zwei() -> 
         zustand,
     )
     assert aufrufe == [(projekt_id, datensatz_id)]
-    assert zustand["framework_bereich"] == "Schritt 1: Projektrahmen definieren"
+    assert zustand["framework_bereich"] == "1 Projektrahmen definieren"
     assert zustand["naechster_framework_bereich"] == "2 ETL durchführen"

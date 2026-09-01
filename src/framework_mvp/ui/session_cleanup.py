@@ -6,10 +6,13 @@ from uuid import UUID
 
 ABHAENGIGE_ID_SCHLUESSEL = (
     "aktuelle_mapping_id",
+    "mapping_id",
     "aktuelle_mappingtabelle_id",
     "aktuelle_event_log_konfiguration_id",
     "aktuelles_event_log_id",
+    "event_log_id",
     "aktuelle_freigabe_id",
+    "freigegebenes_event_log_id",
     "aktuelle_analyse_id",
     "aktuelles_prozessmodell_id",
     "aktuelle_discovery_ergebnisse_id",
@@ -90,4 +93,4 @@ def projekt_zustand_bereinigen(zustand: MutableMapping[str, Any], projekt_id: UU
     for schluessel in tuple(zustand):
         if str(projekt_id) in str(schluessel):
             zustand.pop(schluessel, None)
-    zustand["naechster_framework_bereich"] = "Schritt 1: Projektrahmen definieren"
+    zustand["naechster_framework_bereich"] = "1 Projektrahmen definieren"

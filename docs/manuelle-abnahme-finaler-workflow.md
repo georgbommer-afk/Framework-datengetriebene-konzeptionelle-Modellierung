@@ -23,7 +23,8 @@ python -m streamlit run streamlit_app.py
    Transformation muss auf dem ersten Zwischenstand aufbauen. Folgeartefakte müssen als neu zu
    erzeugen gelten und der Fortschritt muss auf Schritt 2 zurückgesetzt sein.
 4. Die Schritte 3 bis 10 mit den fachlich erforderlichen Eingaben durchlaufen. In Schritt 6 muss
-   `Prozessmodell berechnen und zu Schritt 7`, in Schritt 7
+   `DFG und Prozessmodell berechnen`, im Ergebnis-Unterschritt prüfen und erst mit
+   `Weiter zu Schritt 7: Ergebnisse aggregieren` in Schritt 7
    `A_G berechnen und zu Schritt 8` jeweils ohne nachgeschaltete Speicherbestätigung weiterführen.
 5. In mehreren späteren Frameworkschritten prüfen, dass Projekt- und Datensatzlöschung weiterhin
    links erreichbar sind. Die Dialoge müssen das Ziel nennen und nur `Abbrechen` sowie

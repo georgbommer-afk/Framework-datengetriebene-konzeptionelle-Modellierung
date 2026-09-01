@@ -7,7 +7,15 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from framework_mvp.bootstrap import DATENBANKPFAD_UMGEBUNGSVARIABLE
+from framework_mvp.application.autorisierung import AutorisierungsService
+from framework_mvp.application.mandanten_projekt_service import MandantenProjektService
+from framework_mvp.bootstrap import (
+    DATENBANKPFAD_UMGEBUNGSVARIABLE,
+    erstelle_projekt_service,
+    erstelle_zugriffs_repository,
+)
+from framework_mvp.domain.models import Systemtyp, Untersuchungsauftrag
+from framework_mvp.domain.models.zugriff import Zugriffskontext
 from framework_mvp.ui.oidc import (
     LOKALER_TESTADMIN_UMGEBUNGSVARIABLE,
     LOKALER_TESTMODUS_UMGEBUNGSVARIABLE,
@@ -25,29 +33,65 @@ def _oeffentlich_starten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> App
     return AppTest.from_file(APP).run()
 
 
+def _demo_starten(app: AppTest) -> AppTest:
+    return (
+        next(button for button in app.button if button.label == "Demoprojekt öffnen")
+        .click()
+        .run(timeout=120)
+    )
+
+
+def _gastprojekt_starten(app: AppTest, tmp_path: Path) -> AppTest:
+    next(button for button in app.button if button.label == "Neues Projekt").click().run()
+    geheimnis = str(app.session_state["gast_geheimnis"])
+    datenbank = tmp_path / "cloud.sqlite"
+    repository = erstelle_zugriffs_repository(datenbank)
+    service = MandantenProjektService(
+        erstelle_projekt_service(datenbank),
+        repository,
+        AutorisierungsService(repository),
+    )
+    projekt = service.projekt_anlegen(
+        Zugriffskontext.gast(geheimnis),
+        bezeichnung="Temporäres Testprojekt",
+        untersuchungsauftrag=Untersuchungsauftrag(
+            "Testproblem", "Testzweck", Systemtyp.PRODUKTION, "Testsystem"
+        ),
+    )
+    app.session_state["gast_projekt_id"] = str(projekt.projekt_id)
+    app.session_state["aktuelles_projekt_id"] = str(projekt.projekt_id)
+    app.session_state["ausgewaehlte_projekt_id"] = projekt.projekt_id
+    return app.run()
+
+
 def test_startseite_zeigt_beide_wege_und_keine_stille_adminfreigabe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = _oeffentlich_starten(tmp_path, monkeypatch)
     assert not app.exception
     buttons = {element.label: element for element in app.button}
-    assert "Ohne Anmeldung testen" in buttons
+    assert "Neues Projekt" in buttons
+    assert "Demoprojekt öffnen" in buttons
     assert "Anmelden / Kursgruppe öffnen" in buttons
     assert buttons["Anmelden / Kursgruppe öffnen"].disabled
     assert not any("Systemadministration" in element.value for element in app.markdown)
 
 
-def test_gastmodus_zeigt_warnung_projektaktionen_und_genau_einen_fortschrittsbalken(
+def test_neues_gastprojekt_startet_leer_ohne_vorbelegte_projektzeile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = _oeffentlich_starten(tmp_path, monkeypatch)
-    next(button for button in app.button if button.label == "Ohne Anmeldung testen").click().run()
+    next(button for button in app.button if button.label == "Neues Projekt").click().run()
     assert not app.exception
     assert any("nur temporär gespeichert" in warnung.value for warnung in app.warning)
     labels = {button.label for button in app.button}
     assert "Projekt exportieren" in labels
     assert "Projekt importieren" in labels
-    assert "Demo beenden und Daten löschen" in labels
+    assert "Temporäres Projekt löschen" not in labels
+    assert "aktuelles_projekt_id" not in app.session_state
+    assert "gast_projekt_id" not in app.session_state
+    with sqlite3.connect(tmp_path / "cloud.sqlite") as verbindung:
+        assert verbindung.execute("SELECT COUNT(*) FROM projekte").fetchone() == (0,)
     archivaktionen = [
         button
         for button in app.sidebar.button
@@ -55,6 +99,9 @@ def test_gastmodus_zeigt_warnung_projektaktionen_und_genau_einen_fortschrittsbal
     ]
     assert len(archivaktionen) == 2
     assert all(button.proto.type == "primary" for button in archivaktionen)
+    assert next(
+        button for button in archivaktionen if button.label == "Projekt exportieren"
+    ).disabled
     assert len(app.get("progress")) == 1
     assert not any("Kursgruppen" in element.value for element in app.markdown)
 
@@ -63,10 +110,10 @@ def test_gastprojekt_loeschung_oeffnet_den_kompakten_dialog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = _oeffentlich_starten(tmp_path, monkeypatch)
-    next(button for button in app.button if button.label == "Ohne Anmeldung testen").click().run()
+    _gastprojekt_starten(app, tmp_path)
 
     next(
-        button for button in app.sidebar.button if button.label == "Demo beenden und Daten löschen"
+        button for button in app.sidebar.button if button.label == "Temporäres Projekt löschen"
     ).click().run()
     assert len(app.get("dialog")) == 1
     assert not app.exception
@@ -74,23 +121,43 @@ def test_gastprojekt_loeschung_oeffnet_den_kompakten_dialog(
     assert any("Andere Projekte bleiben unverändert" in warning.value for warning in app.warning)
 
 
+def test_anwendung_beenden_loest_session_ohne_projektloeschung(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _oeffentlich_starten(tmp_path, monkeypatch)
+    _gastprojekt_starten(app, tmp_path)
+    projekt_id = str(app.session_state["aktuelles_projekt_id"])
+
+    beenden = next(button for button in app.sidebar.button if button.label == "Anwendung beenden")
+    assert beenden.proto.type != "primary"
+    beenden.click().run()
+
+    assert "gast_geheimnis" not in app.session_state
+    assert "aktuelles_projekt_id" not in app.session_state
+    assert {button.label for button in app.button} >= {"Neues Projekt", "Demoprojekt öffnen"}
+    with sqlite3.connect(tmp_path / "cloud.sqlite") as verbindung:
+        assert verbindung.execute(
+            "SELECT COUNT(*) FROM projekte WHERE projekt_id=?", (projekt_id,)
+        ).fetchone() == (1,)
+
+
 def test_loeschaktionen_bleiben_auch_in_spaeterem_frameworkschritt_sichtbar(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = _oeffentlich_starten(tmp_path, monkeypatch)
-    next(button for button in app.button if button.label == "Ohne Anmeldung testen").click().run()
+    _gastprojekt_starten(app, tmp_path)
 
     app.radio[0].set_value("7 Ergebnisse aggregieren").run()
 
     assert not app.exception
-    assert any(button.label == "Demo beenden und Daten löschen" for button in app.sidebar.button)
+    assert any(button.label == "Temporäres Projekt löschen" for button in app.sidebar.button)
 
 
 def test_projektimport_oeffnet_lokal_begrenzten_zip_upload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = _oeffentlich_starten(tmp_path, monkeypatch)
-    next(button for button in app.button if button.label == "Ohne Anmeldung testen").click().run()
+    next(button for button in app.button if button.label == "Neues Projekt").click().run()
     next(
         button for button in app.sidebar.button if button.label == "Projekt importieren"
     ).click().run()
@@ -130,7 +197,7 @@ def test_konfliktaktionen_rendern_mit_eindeutigen_stabilen_keys_und_abbruch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = _oeffentlich_starten(tmp_path, monkeypatch)
-    next(button for button in app.button if button.label == "Ohne Anmeldung testen").click().run()
+    _demo_starten(app)
     projekt_id = str(app.session_state["aktuelles_projekt_id"])
     archiv = _gastarchiv_exportieren(app)
     archiv_hash = hashlib.sha256(archiv).hexdigest()
@@ -153,7 +220,7 @@ def test_konfliktaktionen_rendern_mit_eindeutigen_stabilen_keys_und_abbruch(
             "Projekt exportieren",
             "Abbrechen",
             "Vorhandenes Projekt ersetzen",
-            "Demo beenden und Daten löschen",
+            "Temporäres Projekt löschen",
         }
     }
     assert aktionen["Vorhandenes Projekt ersetzen"] == (
@@ -161,7 +228,7 @@ def test_konfliktaktionen_rendern_mit_eindeutigen_stabilen_keys_und_abbruch(
     )
     assert aktionen["Abbrechen"] == f"projektimport_abbrechen_{projekt_id}_{archiv_hash[:16]}"
     assert aktionen["Projekt exportieren"] == f"projektexport_erstellen_{projekt_id}"
-    assert aktionen["Demo beenden und Daten löschen"] == (f"projekt_loeschen_oeffnen_{projekt_id}")
+    assert aktionen["Temporäres Projekt löschen"] == (f"projekt_loeschen_oeffnen_{projekt_id}")
     assert len(set(aktionen.values())) == len(aktionen)
     erste_keys = sorted(
         key for key in aktionen.values() if key and key.startswith("projektimport_")
@@ -193,15 +260,13 @@ def test_neuimport_rendert_zwei_gleich_beschriftete_buttons_ohne_duplicate_eleme
     quellpfad.mkdir()
     zielpfad.mkdir()
     quelle = _oeffentlich_starten(quellpfad, monkeypatch)
-    next(
-        button for button in quelle.button if button.label == "Ohne Anmeldung testen"
-    ).click().run()
+    _gastprojekt_starten(quelle, quellpfad)
     quellprojekt_id = str(quelle.session_state["aktuelles_projekt_id"])
     archiv = _gastarchiv_exportieren(quelle)
     archiv_hash = hashlib.sha256(archiv).hexdigest()
 
     ziel = _oeffentlich_starten(zielpfad, monkeypatch)
-    next(button for button in ziel.button if button.label == "Ohne Anmeldung testen").click().run()
+    next(button for button in ziel.button if button.label == "Neues Projekt").click().run()
     _konfliktimport_oeffnen(ziel, archiv)
 
     importbuttons = [button for button in ziel.button if button.label == "Projekt importieren"]
@@ -220,7 +285,7 @@ def test_bestaetigter_konfliktimport_oeffnet_projekt_mit_importiertem_fortschrit
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = _oeffentlich_starten(tmp_path, monkeypatch)
-    next(button for button in app.button if button.label == "Ohne Anmeldung testen").click().run()
+    _gastprojekt_starten(app, tmp_path)
     projekt_id = str(app.session_state["aktuelles_projekt_id"])
     archiv = _gastarchiv_exportieren(app)
     with sqlite3.connect(tmp_path / "cloud.sqlite") as verbindung:
@@ -246,4 +311,4 @@ def test_bestaetigter_konfliktimport_oeffnet_projekt_mit_importiertem_fortschrit
     with sqlite3.connect(tmp_path / "cloud.sqlite") as verbindung:
         assert verbindung.execute(
             "SELECT bezeichnung FROM projekte WHERE projekt_id=?", (projekt_id,)
-        ).fetchone() == ("Temporäres Demoprojekt",)
+        ).fetchone() == ("Temporäres Testprojekt",)

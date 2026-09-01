@@ -419,6 +419,19 @@ class SQLiteZugriffsRepository:
             ).fetchall()
         return [UUID(zeile["projekt_id"]) for zeile in zeilen]
 
+    def projekt_ids_fuer_gast_geheimnis_hash(self, geheimnis_sha256: str) -> list[UUID]:
+        """Liefert Gastkandidaten anhand des nicht rückrechenbaren Besitznachweis-Hashes."""
+        with self._verbindung() as verbindung:
+            zeilen = verbindung.execute(
+                """
+                SELECT projekt_id FROM projektzugehoerigkeiten
+                WHERE zugriffsart = 'gast' AND gast_geheimnis_sha256 = ?
+                ORDER BY projekt_id
+                """,
+                (geheimnis_sha256,),
+            ).fetchall()
+        return [UUID(zeile["projekt_id"]) for zeile in zeilen]
+
     def legacy_projekt_ids(self) -> list[UUID]:
         with self._verbindung() as verbindung:
             zeilen = verbindung.execute(

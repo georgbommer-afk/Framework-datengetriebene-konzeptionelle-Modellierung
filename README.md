@@ -34,12 +34,15 @@ Nicht zum Funktionsumfang gehören insbesondere:
 
 ## Betriebsarten, Authentifizierung und Mandantentrennung
 
-Die Anwendung bietet zwei voneinander getrennte Einstiege:
+Die Anwendung bietet getrennte öffentliche und private Einstiege:
 
-- **Ohne Anmeldung testen** erzeugt ein isoliertes Gastprojekt. Der kryptografisch zufällige
-  Besitznachweis liegt nur im Streamlit Session State. Die Standard-TTL beträgt 24 Stunden seit
-  der letzten Aktivität; bei Appstarts werden abgelaufene Gastprojekte opportunistisch
-  bereinigt. Vor Ablauf kann das Projekt als portables Archiv exportiert werden.
+- **Neues Projekt** öffnet einen leeren, temporären Bereich ohne vorab erzeugtes Projekt und
+  ohne Demowerte. **Demoprojekt öffnen** erzeugt dagegen bewusst einen vollständigen,
+  isolierten Durchlauf der Schritte 1–10 aus den versionierten synthetischen Produktionsdaten.
+  Der kryptografisch zufällige Besitznachweis liegt nur im Streamlit Session State. Die
+  Standard-TTL beträgt 24 Stunden seit der letzten Aktivität; bei Appstarts werden abgelaufene
+  Gastprojekte opportunistisch bereinigt. Vor Ablauf kann jedes Projekt als portables Archiv
+  exportiert werden.
 - **Anmelden / Kursgruppe öffnen** verwendet Streamlits native OIDC-Funktionen `st.login`,
   `st.user` und `st.logout`. Die Anwendung speichert weder Passwörter noch OIDC-Token. Private
   Kursgruppen, Mitgliedschaften, Projektteams, Einladungen, Fortschritt, Aufbewahrung und

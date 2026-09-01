@@ -43,6 +43,35 @@ def _zustand(projekt_id: UUID, event_log_id: UUID) -> dict[str, Any]:
     return zustand
 
 
+def _persistierte_freigabe_rehydrieren(
+    zustand: dict[str, Any],
+    projekt_id: UUID,
+    event_log_id: UUID,
+    service: DatenqualitaetService,
+) -> None:
+    """Lädt E* und seine menschlichen Entscheidungen einmalig in den Seitenzustand."""
+    if zustand.get("persistenz_rehydriert"):
+        return
+    zustand["persistenz_rehydriert"] = True
+    try:
+        freigabe_id = UUID(str(st.session_state.get("aktuelle_freigabe_id")))
+    except (TypeError, ValueError):
+        return
+    freigabe, _ = service.freigabe_laden(freigabe_id)
+    if freigabe.projekt_id != projekt_id or freigabe.event_log_id != event_log_id:
+        raise Importintegritaetsfehler(
+            "Die aktive E*-Freigabe gehört nicht zum aktuellen Projekt und Event Log."
+        )
+    zustand.update(
+        {
+            "freigabe_id": freigabe_id,
+            "freigabe": freigabe,
+            "entscheidungen": service.entscheidungen_der_freigabe(freigabe_id),
+            "schritt": 4,
+        }
+    )
+
+
 def _aktives_event_log(projekt_id: UUID, service: EventLogService) -> UUID | None:
     try:
         event_log_id = UUID(str(st.session_state.get("aktuelles_event_log_id")))
@@ -382,6 +411,12 @@ def zeige_datenqualitaet_seite(
         if event_log_id is None:
             return
         zustand = _zustand(projekt_id, event_log_id)
+        _persistierte_freigabe_rehydrieren(
+            zustand,
+            projekt_id,
+            event_log_id,
+            qualitaet_service,
+        )
         kontext = event_log_service.kontext_laden(event_log_id)
         ergebnis = qualitaet_service.quality_gate_pruefen(
             projekt_id,

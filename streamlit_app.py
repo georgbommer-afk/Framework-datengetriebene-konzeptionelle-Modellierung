@@ -15,10 +15,7 @@ from framework_mvp.application.autorisierung import AutorisierungsService
 from framework_mvp.application.gast_service import GAST_HINWEIS, GastService
 from framework_mvp.application.kursdashboard_service import KursdashboardService
 from framework_mvp.application.kursgruppen_service import KursgruppenLoeschService
-from framework_mvp.application.mandanten_projekt_service import (
-    AutorisierterLoeschService,
-    MandantenProjektService,
-)
+from framework_mvp.application.mandanten_projekt_service import MandantenProjektService
 from framework_mvp.application.systemadmin_service import SystemadminService
 from framework_mvp.bootstrap import (
     ermittle_datenbankpfad,
@@ -27,6 +24,7 @@ from framework_mvp.bootstrap import (
     erstelle_datenimport_service,
     erstelle_datenqualitaet_service,
     erstelle_datenquelle_service,
+    erstelle_demoprojekt_service,
     erstelle_einladungs_service,
     erstelle_ergebnisaggregation_service,
     erstelle_event_log_konfigurations_service,
@@ -44,6 +42,7 @@ from framework_mvp.bootstrap import (
     erstelle_process_mining_service,
     erstelle_projekt_service,
     erstelle_projektarchiv_service,
+    erstelle_projektkontext_service,
     erstelle_transformations_service,
     erstelle_zugriffs_repository,
 )
@@ -84,7 +83,7 @@ from framework_mvp.ui.projektimport import (
     projektimport_session_zuruecksetzen,
     projektimport_widget_key,
 )
-from framework_mvp.ui.session_cleanup import projekt_zustand_bereinigen
+from framework_mvp.ui.projektkontext import projektkontext_bereinigen, projektkontext_setzen
 from framework_mvp.workspace import WorkspaceKonfiguration
 
 st.set_page_config(page_title="Framework-MVP", page_icon="🏭", layout="wide")
@@ -149,15 +148,34 @@ except NichtUnterstuetzteSchemaversion as fehler:
 
 
 def _gast_starten() -> None:
-    mandanten = MandantenProjektService(
-        roh_projekte, zugriff, autorisierung, gast_ttl=ermittle_gast_ttl()
-    )
-    loeschen = AutorisierterLoeschService(roh_loeschen, autorisierung)
-    demo = GastService(mandanten, loeschen).demo_starten()
-    st.session_state.gast_geheimnis = demo.kontext.gast_geheimnis
+    sitzung = GastService().sitzung_starten()
+    projektkontext_bereinigen(cast(MutableMapping[str, Any], st.session_state))
+    st.session_state.gast_geheimnis = sitzung.kontext.gast_geheimnis
+    st.session_state.pop("gast_projekt_id", None)
+    st.session_state.naechster_framework_bereich = FRAMEWORK_BEREICHE[0]
+    st.rerun()
+
+
+def _demoprojekt_starten() -> None:
+    sitzung = GastService().sitzung_starten()
+    with st.spinner("Vollständiges Demoprojekt wird über die Schritte 1–10 erzeugt …"):
+        demo = erstelle_demoprojekt_service(datenbankpfad, workspace).erstellen(sitzung.kontext)
+        wiederhergestellt = erstelle_projektkontext_service(datenbankpfad, workspace).pruefen(
+            demo.projekt.projekt_id
+        )
+    projektkontext_setzen(cast(MutableMapping[str, Any], st.session_state), wiederhergestellt)
+    st.session_state.gast_geheimnis = sitzung.kontext.gast_geheimnis
     st.session_state.gast_projekt_id = str(demo.projekt.projekt_id)
-    st.session_state.aktuelles_projekt_id = str(demo.projekt.projekt_id)
-    st.session_state.ausgewaehlte_projekt_id = demo.projekt.projekt_id
+    st.session_state.projektkontext_rehydriert = str(demo.projekt.projekt_id)
+    st.session_state.naechster_framework_bereich = FRAMEWORK_BEREICHE[9]
+    st.rerun()
+
+
+def _anwendung_beenden() -> None:
+    """Löst ausschließlich den aktiven UI-Kontext; persistierte Projekte bleiben erhalten."""
+    zustand = cast(MutableMapping[str, Any], st.session_state)
+    zustand.clear()
+    zustand["anwendung_beendet"] = True
     st.rerun()
 
 
@@ -169,10 +187,19 @@ def _startseite() -> None:
     )
     links, rechts = st.columns(2)
     with links:
-        st.subheader("Temporärer Demomodus")
+        st.subheader("Temporärer Bereich")
         st.caption("Keine Anmeldung · isoliertes Projekt · Export als portable Sicherung")
-        if st.button("Ohne Anmeldung testen", type="primary", width="stretch"):
+        if st.button("Neues Projekt", type="primary", width="stretch"):
             _gast_starten()
+        st.caption("Ohne Anmeldung arbeiten")
+        if st.button("Demoprojekt öffnen", width="stretch"):
+            try:
+                _demoprojekt_starten()
+            except Exception:
+                st.error(
+                    "Das Demoprojekt konnte nicht vollständig erzeugt werden. "
+                    "Es wurden keine Teildaten beibehalten."
+                )
     with rechts:
         st.subheader("Private Kursgruppe")
         st.caption("OIDC-Anmeldung · nur ausdrücklich zugewiesene Gruppen und Projekte")
@@ -185,6 +212,10 @@ def _startseite() -> None:
         if not auth_konfiguration.konfiguriert:
             st.info("Für Kursgruppen ist in diesem Deployment noch kein OIDC konfiguriert.")
 
+
+if st.session_state.pop("anwendung_beendet", False):
+    _startseite()
+    st.stop()
 
 if kontext is None:
     _startseite()
@@ -449,6 +480,25 @@ def _projekt_id_aus_session() -> UUID | None:
         return None
 
 
+def _projekt_aktivieren(projekt_id: UUID | None) -> None:
+    """Wechselt ausschließlich über die zentrale persistente Projektlineage."""
+    zustand = cast(MutableMapping[str, Any], st.session_state)
+    if projekt_id is None:
+        projektkontext_bereinigen(zustand)
+        st.session_state.naechster_framework_bereich = FRAMEWORK_BEREICHE[0]
+        return
+    wiederhergestellt = erstelle_projektkontext_service(datenbankpfad, workspace).wiederherstellen(
+        projekt_id
+    )
+    projektkontext_setzen(zustand, wiederhergestellt)
+    st.session_state.projektkontext_rehydriert = str(projekt_id)
+    fortschritt = erstelle_fortschritt_service(datenbankpfad).laden(kontext, projekt_id)
+    st.session_state.naechster_framework_bereich = FRAMEWORK_BEREICHE[fortschritt.schritt - 1]
+    fortschrittszustand_aus_persistenz_setzen(zustand, fortschritt)
+    if kontext.gast_geheimnis is not None:
+        st.session_state.gast_projekt_id = str(projekt_id)
+
+
 def _gastmodus_nach_projektloeschung_beenden() -> None:
     for schluessel in ("gast_geheimnis", "gast_projekt_id", "projektarchiv"):
         st.session_state.pop(schluessel, None)
@@ -692,6 +742,9 @@ def _projektaktionen(projekt_id: UUID | None) -> None:
                                 ziel_gruppen_id=importzustand.ziel_gruppen_id,
                                 vorhandenes_projekt_ersetzen=(importzustand.bereits_vorhanden),
                             )
+                            projektkontext = erstelle_projektkontext_service(
+                                datenbankpfad, workspace
+                            ).pruefen(ergebnis.projekt_id)
                             fortschritt = erstelle_fortschritt_service(datenbankpfad).laden(
                                 kontext, ergebnis.projekt_id
                             )
@@ -706,12 +759,9 @@ def _projektaktionen(projekt_id: UUID | None) -> None:
                                 "Projektstand wurde beibehalten."
                             )
                             st.rerun()
-                        projekt_zustand_bereinigen(
-                            cast(MutableMapping[str, Any], st.session_state),
-                            ergebnis.projekt_id,
+                        projektkontext_setzen(
+                            cast(MutableMapping[str, Any], st.session_state), projektkontext
                         )
-                        st.session_state.aktuelles_projekt_id = str(ergebnis.projekt_id)
-                        st.session_state.ausgewaehlte_projekt_id = ergebnis.projekt_id
                         st.session_state.auswahl_generation = (
                             int(st.session_state.get("auswahl_generation", 0)) + 1
                         )
@@ -771,7 +821,7 @@ def _projektaktionen(projekt_id: UUID | None) -> None:
         erstelle_transformations_service(datenbankpfad, workspace),
         GebundenerLoeschService(kontext, roh_loeschen, autorisierung),
         projekt_loesch_label=(
-            "Demo beenden und Daten löschen"
+            "Temporäres Projekt löschen"
             if kontext.gast_geheimnis is not None
             else "Projekt löschen"
         ),
@@ -784,6 +834,34 @@ def _projektaktionen(projekt_id: UUID | None) -> None:
 
 
 aktive_projekt_id = _projekt_id_aus_session()
+if (
+    aktive_projekt_id is not None
+    and not st.session_state.get("projektkontext_rehydriert")
+    and autorisierung.projekt_zugriff_erlaubt(kontext, aktive_projekt_id, Projektaktion.ANSEHEN)
+):
+    try:
+        zustand = cast(MutableMapping[str, Any], st.session_state)
+        angeforderter_bereich = st.session_state.get("framework_bereich")
+        angeforderter_naechster_bereich = st.session_state.get("naechster_framework_bereich")
+        wiederhergestellt = erstelle_projektkontext_service(
+            datenbankpfad, workspace
+        ).wiederherstellen(aktive_projekt_id)
+        projektkontext_setzen(zustand, wiederhergestellt)
+        if angeforderter_bereich is not None:
+            st.session_state.framework_bereich = angeforderter_bereich
+        if angeforderter_naechster_bereich is not None:
+            st.session_state.naechster_framework_bereich = angeforderter_naechster_bereich
+    except Exception:
+        projektkontext_bereinigen(cast(MutableMapping[str, Any], st.session_state))
+    else:
+        st.session_state.projektkontext_rehydriert = str(aktive_projekt_id)
+        aktive_projekt_id = _projekt_id_aus_session()
+if (
+    kontext.gast_geheimnis is not None
+    and aktive_projekt_id is not None
+    and not st.session_state.get("gast_projekt_id")
+):
+    st.session_state.gast_projekt_id = str(aktive_projekt_id)
 _projektaktionen(aktive_projekt_id)
 if importmeldung := st.session_state.pop("projektimport_erfolgsmeldung", None):
     st.success(importmeldung)
@@ -908,6 +986,12 @@ if naechster_bereich := st.session_state.pop("naechster_framework_bereich", None
     st.session_state.framework_bereich = naechster_bereich
 
 seite = st.sidebar.radio("Framework-Bereich", FRAMEWORK_BEREICHE, key="framework_bereich")
+if st.sidebar.button(
+    "Anwendung beenden",
+    width="stretch",
+    help="Aktiven Anwendungskontext lösen und zur Startansicht zurückkehren.",
+):
+    _anwendung_beenden()
 
 mandanten_projekte = MandantenProjektService(
     roh_projekte, zugriff, autorisierung, gast_ttl=ermittle_gast_ttl()
@@ -975,20 +1059,21 @@ if aktive_projekt_id is not None and autorisierung.projekt_zugriff_erlaubt(
     except Domaenenfehler:
         pass
 
-if seite == "Schritt 1: Projektrahmen definieren":
+if seite == "1 Projektrahmen definieren":
     zeige_projektverwaltung(
         gebundene_projekte,
         None,
         None,
         sidebar_titel_anzeigen=False,
         projekt_loesch_label=(
-            "Demo beenden und Daten löschen"
+            "Temporäres Projekt löschen"
             if kontext.gast_geheimnis is not None
             else "Projekt löschen"
         ),
         projektloeschung_nachbereiten=(
             _gastmodus_nach_projektloeschung_beenden if kontext.gast_geheimnis is not None else None
         ),
+        projekt_aktivieren=_projekt_aktivieren,
     )
 elif seite == "2 ETL durchführen":
     zeige_etl_seite(
