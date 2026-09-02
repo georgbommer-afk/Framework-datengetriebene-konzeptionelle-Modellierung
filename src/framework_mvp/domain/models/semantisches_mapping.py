@@ -7,8 +7,8 @@ from uuid import UUID
 
 from framework_mvp.domain.exceptions import Domaenenfehler
 
-AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION = 4
-UNTERSTUETZTE_EVENT_LOG_KONFIGURATIONSVERSIONEN = frozenset({1, 2, 3, 4})
+AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION = 5
+UNTERSTUETZTE_EVENT_LOG_KONFIGURATIONSVERSIONEN = frozenset({1, 2, 3, 4, 5})
 
 
 class MappingModus(StrEnum):
@@ -204,6 +204,8 @@ class SemantischesMapping:
     aktivitaetsdefinition: Aktivitaetsdefinition | None = None
     mappingtabelle_id: UUID | None = None
     konfigurationsversion: int = 1
+    plan_startzeitstempelspalte: str = ""
+    plan_endzeitstempelspalte: str = ""
 
     def __post_init__(self) -> None:
         """Bereinigt Namen und normalisiert Zeitstempel nach UTC."""
@@ -212,6 +214,8 @@ class SemantischesMapping:
             "zeitstempelspalte",
             "startzeitstempelspalte",
             "endzeitstempelspalte",
+            "plan_startzeitstempelspalte",
+            "plan_endzeitstempelspalte",
             "lifecycle_spalte",
             "ressourcen_spalte",
         ):
@@ -302,6 +306,8 @@ class SemantischesMapping:
             self._rollen_der_version_drei_pruefen()
         elif self.konfigurationsversion == 4:
             self._rollen_der_version_vier_pruefen()
+        elif self.konfigurationsversion == 5:
+            self._rollen_der_version_fuenf_pruefen()
 
     def _rollen_der_version_drei_pruefen(self) -> None:
         """Stellt die eindeutige technische Belegung der Rollen von Version 3 sicher."""
@@ -396,6 +402,67 @@ class SemantischesMapping:
                 "Eine technische Quellspalte darf in Version 4 nur den "
                 "Ereigniszeitstempel und zusätzlich genau den Ist-Startzeitpunkt oder "
                 f"Ist-Endzeitpunkt belegen: {spalte}."
+            )
+
+    def _rollen_der_version_fuenf_pruefen(self) -> None:
+        """Trennt Plan- und Ist-Zeitrollen bei kontrollierter timestamp-Doppelrolle."""
+        if self.mapping_modus is MappingModus.BREITER_ZEITSTEMPELDATENSATZ:
+            if self.plan_startzeitstempelspalte or self.plan_endzeitstempelspalte:
+                raise Domaenenfehler(
+                    "Ein breiter Datensatz unterstützt keine globalen Planzeitrollen."
+                )
+            self._rollen_der_version_drei_pruefen()
+            return
+        if self.startzeitstempelspalte and self.startzeitstempelspalte == self.endzeitstempelspalte:
+            raise Domaenenfehler(
+                "Ist-Startzeitpunkt und Ist-Endzeitpunkt dürfen nicht aus derselben "
+                f"Quellspalte stammen: {self.startzeitstempelspalte}."
+            )
+        if (
+            self.plan_startzeitstempelspalte
+            and self.plan_startzeitstempelspalte == self.plan_endzeitstempelspalte
+        ):
+            raise Domaenenfehler(
+                "Plan-Startzeitpunkt und Plan-Endzeitpunkt dürfen nicht aus derselben "
+                f"Quellspalte stammen: {self.plan_startzeitstempelspalte}."
+            )
+        rollen_nach_spalte: dict[str, list[str]] = {}
+
+        def belegen(spalte: str, rolle: str) -> None:
+            if spalte:
+                rollen_nach_spalte.setdefault(spalte, []).append(rolle)
+
+        for spalte in self.fall_id.spalten:
+            belegen(spalte, "case_id")
+        definition = self.wirksame_aktivitaetsdefinition
+        if definition is not None:
+            for spalte in definition.quellspalten:
+                belegen(spalte, "activity")
+        for spalte, rolle in (
+            (self.zeitstempelspalte, "timestamp"),
+            (self.startzeitstempelspalte, "start_timestamp"),
+            (self.endzeitstempelspalte, "end_timestamp"),
+            (self.plan_startzeitstempelspalte, "plan_start_timestamp"),
+            (self.plan_endzeitstempelspalte, "plan_end_timestamp"),
+            (self.lifecycle_spalte, "lifecycle"),
+            (self.ressourcen_spalte, "resource"),
+        ):
+            belegen(spalte, rolle)
+        for zuordnung in self.spaltenzuordnungen:
+            if zuordnung.rolle is not Attributrolle.IGNORIERT:
+                belegen(zuordnung.spaltenname, "allgemeines Attribut")
+        erlaubte_doppelrollen = {
+            frozenset(("timestamp", "start_timestamp")),
+            frozenset(("timestamp", "end_timestamp")),
+        }
+        for spalte, rollen in rollen_nach_spalte.items():
+            if len(rollen) == 1:
+                continue
+            if len(rollen) == 2 and frozenset(rollen) in erlaubte_doppelrollen:
+                continue
+            raise Domaenenfehler(
+                "Plan- und Ist-Zeitrollen müssen semantisch getrennten Quellspalten "
+                f"zugeordnet sein: {spalte}."
             )
 
     @property

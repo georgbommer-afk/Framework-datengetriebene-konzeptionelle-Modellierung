@@ -892,7 +892,60 @@ def _performance_und_engpassanalyse(
     sollartefakt = None
     solltabelle = None
     performance_konfiguration = None
-    if dt_aktiv or db_aktiv:
+    kanonische_rollen = {
+        "Fall": "case_id",
+        "Aktivität": "activity",
+        "Ist-Start": "start_timestamp",
+        "Ist-Ende": "end_timestamp",
+        "Plan-Start": "plan_start_timestamp",
+        "Plan-Ende": "plan_end_timestamp",
+        "Ressource": "resource",
+    }
+    st.write("**Zeitinformationen aus dem freigegebenen Event Log E\***")
+    for bezeichnung, spalte in kanonische_rollen.items():
+        if spalte in basis.event_log.columns:
+            st.write(f"✓ {bezeichnung}: {spalte}")
+        else:
+            st.write(f"○ {bezeichnung}: nicht vorhanden")
+    erforderlich = {"case_id", "activity", "end_timestamp", "plan_end_timestamp"}
+    if db_aktiv:
+        erforderlich.update({"start_timestamp", "plan_start_timestamp"})
+    kanonisch_berechenbar = erforderlich <= set(basis.event_log.columns)
+    if (dt_aktiv or db_aktiv) and kanonisch_berechenbar:
+        st.success(
+            "Die bestätigten kanonischen Rollen werden ohne erneute Spaltenauswahl verwendet."
+        )
+        regel = Vorkommensregel(
+            st.selectbox(
+                "Explizite Regel bei wiederholten Aktivitäten",
+                [
+                    Vorkommensregel.ERSTES.value,
+                    Vorkommensregel.LETZTES.value,
+                ],
+                key="ag_performance_regel_kanonisch",
+            )
+        )
+        solltabelle = basis.event_log
+        performance_konfiguration = PerformanceZeitvergleichKonfiguration(
+            "E*",
+            "case_id",
+            "activity",
+            "case_id",
+            "activity",
+            "plan_end_timestamp",
+            "end_timestamp",
+            "plan_start_timestamp" if db_aktiv else "",
+            "start_timestamp" if db_aktiv else "",
+            vorkommensregel=regel,
+            fertigstellungsabweichung_aktiv=dt_aktiv,
+            bearbeitungszeitabweichung_aktiv=db_aktiv,
+        )
+    elif dt_aktiv or db_aktiv:
+        fehlend = ", ".join(sorted(erforderlich - set(basis.event_log.columns)))
+        st.warning(
+            "Die bestätigten Plan-/Ist-Rollen reichen nicht aus. Fehlend: "
+            f"{fehlend}. Wählen Sie nur deshalb eine explizite Ersatzquelle."
+        )
         quelle = st.radio(
             "Soll-Zeitdatenquelle für dT/dB",
             ["T", "E*", "Externe CSV-/XLSX-Datei"],
@@ -1025,7 +1078,49 @@ def _performance_und_engpassanalyse(
                 db_aktiv,
             )
     busy_konfiguration = None
-    if busy_aktiv:
+    busy_auto = {"resource", "start_timestamp", "end_timestamp"} <= set(basis.event_log.columns)
+    if busy_aktiv and busy_auto:
+        st.success(
+            "✓ Ressource, Ist-Start und Ist-Ende werden aus E* übernommen. "
+            "Nur der Betrachtungszeitraum ist fachlich festzulegen."
+        )
+        zeitwerte = pd.concat(
+            [
+                pd.to_datetime(basis.event_log["start_timestamp"], errors="coerce", utc=True),
+                pd.to_datetime(basis.event_log["end_timestamp"], errors="coerce", utc=True),
+            ]
+        ).dropna()
+        if zeitwerte.empty:
+            st.warning("Busy Ratio nicht berechenbar: Die bestätigten Ist-Zeiten sind leer.")
+        else:
+            bereich_von = zeitwerte.min().date()
+            bereich_bis = zeitwerte.max().date()
+            zeitraum_von = st.date_input(
+                "Betrachtungszeitraum von",
+                value=bereich_von,
+                min_value=bereich_von,
+                max_value=bereich_bis,
+                key="ag_busy_von_kanonisch",
+            )
+            zeitraum_bis = st.date_input(
+                "Betrachtungszeitraum bis",
+                value=bereich_bis,
+                min_value=bereich_von,
+                max_value=bereich_bis,
+                key="ag_busy_bis_kanonisch",
+            )
+            busy_konfiguration = BusyRatioKonfiguration(
+                "resource",
+                "start_timestamp",
+                "end_timestamp",
+                datetime.combine(zeitraum_von, time.min, tzinfo=UTC),
+                datetime.combine(zeitraum_bis, time.max, tzinfo=UTC),
+            )
+    elif busy_aktiv:
+        st.warning(
+            "Busy Ratio nicht automatisch berechenbar: resource, start_timestamp oder "
+            "end_timestamp fehlt. Eine Ersatzzuordnung muss ausdrücklich bestätigt werden."
+        )
         ist_spalten = [str(wert) for wert in basis.event_log.columns]
         resource = _auswahl(
             "Bestätigte Ressourcenspalte",

@@ -314,8 +314,6 @@ class DemoProjektService:
             Spaltenzuordnung(name, Attributrolle.EREIGNISATTRIBUT)
             for name in (
                 "Quellereignis_ID",
-                "Soll_Start",
-                "Soll_Ende",
                 "Artikelnummer",
                 "Produktvariante",
                 "Prozessvariante",
@@ -351,7 +349,9 @@ class DemoProjektService:
             Mappingstatus.ENTWURF,
             Aktivitaetsdefinition(Aktivitaetsbildungsart.VORHANDENE_SPALTE, ("Vorgang",)),
             mappingtabelle.mapping_id,
-            4,
+            5,
+            "Soll_Start",
+            "Soll_Ende",
         )
         konfiguration, validierung = self._event_log_konfiguration.validieren(
             konfiguration, t_daten

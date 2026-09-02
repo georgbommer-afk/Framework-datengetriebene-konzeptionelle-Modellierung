@@ -46,6 +46,7 @@ _TABELLEN_REIHENFOLGE = (
     "projekte",
     "datenquellen",
     "importvorgaenge",
+    "datenprofil_generationen",
     "transformationsplaene",
     "zwischendatensaetze",
     "semantische_mappings",
@@ -59,6 +60,7 @@ _TABELLEN_REIHENFOLGE = (
     "modellableitungen",
     "modellvalidierungen",
     "projektfortschritt",
+    "aktive_projektlineage",
 )
 
 _ARTEFAKT_ENDUNGEN = {

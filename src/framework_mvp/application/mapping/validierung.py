@@ -66,6 +66,8 @@ def _ereignisorientiert(daten: pd.DataFrame, mapping: SemantischesMapping) -> pd
     optionen = {
         "start_timestamp": mapping.startzeitstempelspalte,
         "end_timestamp": mapping.endzeitstempelspalte,
+        "plan_start_timestamp": mapping.plan_startzeitstempelspalte,
+        "plan_end_timestamp": mapping.plan_endzeitstempelspalte,
         "lifecycle": mapping.lifecycle_spalte,
         "resource": mapping.ressourcen_spalte,
     }
@@ -163,6 +165,8 @@ def validiere_mapping(daten: pd.DataFrame, mapping: SemantischesMapping) -> Mapp
         mapping.zeitstempelspalte,
         mapping.startzeitstempelspalte,
         mapping.endzeitstempelspalte,
+        mapping.plan_startzeitstempelspalte,
+        mapping.plan_endzeitstempelspalte,
         mapping.lifecycle_spalte,
         mapping.ressourcen_spalte,
         *(wert.zeitstempelspalte for wert in mapping.zeitstempelzuordnungen),
@@ -186,6 +190,8 @@ def validiere_mapping(daten: pd.DataFrame, mapping: SemantischesMapping) -> Mapp
         mapping.zeitstempelspalte,
         mapping.startzeitstempelspalte,
         mapping.endzeitstempelspalte,
+        mapping.plan_startzeitstempelspalte,
+        mapping.plan_endzeitstempelspalte,
         mapping.lifecycle_spalte,
         mapping.ressourcen_spalte,
         *(wert.zeitstempelspalte for wert in mapping.zeitstempelzuordnungen),
@@ -205,6 +211,8 @@ def validiere_mapping(daten: pd.DataFrame, mapping: SemantischesMapping) -> Mapp
         rolle_erfassen(mapping.zeitstempelspalte, "timestamp")
         rolle_erfassen(mapping.startzeitstempelspalte, "start_timestamp")
         rolle_erfassen(mapping.endzeitstempelspalte, "end_timestamp")
+        rolle_erfassen(mapping.plan_startzeitstempelspalte, "plan_start_timestamp")
+        rolle_erfassen(mapping.plan_endzeitstempelspalte, "plan_end_timestamp")
         rolle_erfassen(mapping.lifecycle_spalte, "lifecycle")
         rolle_erfassen(mapping.ressourcen_spalte, "resource")
         for wert in mapping.zeitstempelzuordnungen:

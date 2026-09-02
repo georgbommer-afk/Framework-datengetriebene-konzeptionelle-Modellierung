@@ -11,6 +11,7 @@ from uuid import UUID
 
 import pandas as pd
 
+from framework_mvp.application.aktive_lineage_service import AktiveLineageService, LineageEndpunkt
 from framework_mvp.application.datenqualitaet import (
     Massnahmenergebnis,
     QualitaetspruefungErgebnis,
@@ -53,6 +54,7 @@ class DatenqualitaetService:
         transformations_service: TransformationsService | None = None,
         datenquelle_service: DatenquelleService | None = None,
         mappingtabelle_service: MappingtabelleService | None = None,
+        aktive_lineage: AktiveLineageService | None = None,
     ) -> None:
         self._repository = repository
         self._event_log_service = event_log_service
@@ -60,6 +62,7 @@ class DatenqualitaetService:
         self._transformations_service = transformations_service
         self._datenquelle_service = datenquelle_service
         self._mappingtabelle_service = mappingtabelle_service
+        self._aktive_lineage = aktive_lineage
 
     def _quality_gate_kontext(self, projekt_id: UUID, event_log_id: UUID) -> QualityGateKontext:
         """Leitet Q, T, optional M und Konfiguration ausschließlich aus E ab."""
@@ -180,6 +183,17 @@ class DatenqualitaetService:
         gespeichert = self._artefakte.artefakt_speichern(report_pfad, report_bytes)
         try:
             self._repository.freigabe_speichern(freigabe, report, report_sha256)
+            if self._aktive_lineage is not None:
+                self._aktive_lineage.aktivieren(
+                    projekt_id,
+                    LineageEndpunkt.E_STERN,
+                    {
+                        "aktuelles_event_log_id": event_log_id,
+                        "event_log_id": event_log_id,
+                        "aktuelle_freigabe_id": freigabe_id,
+                        "freigegebenes_event_log_id": event_log_id,
+                    },
+                )
         except Exception:
             self._artefakte.neu_erstelltes_artefakt_entfernen(gespeichert)
             raise

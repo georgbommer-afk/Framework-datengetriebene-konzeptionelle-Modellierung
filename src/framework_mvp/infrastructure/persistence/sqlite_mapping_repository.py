@@ -164,4 +164,6 @@ class SQLiteMappingRepository:
             aktivitaetsdefinition,
             UUID(struktur["mappingtabelle_id"]) if struktur.get("mappingtabelle_id") else None,
             int(struktur.get("konfigurationsversion", 1)),
+            struktur.get("plan_startzeitstempelspalte", ""),
+            struktur.get("plan_endzeitstempelspalte", ""),
         )

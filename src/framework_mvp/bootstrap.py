@@ -4,8 +4,10 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from framework_mvp.application.aktive_lineage_service import AktiveLineageService
 from framework_mvp.application.autorisierung import AutorisierungsService
 from framework_mvp.application.datenimport_service import DatenimportService
+from framework_mvp.application.datenprofil_service import DatenprofilService
 from framework_mvp.application.datenqualitaet_service import DatenqualitaetService
 from framework_mvp.application.datenquelle_service import DatenquelleService
 from framework_mvp.application.demoprojekt_service import DemoProjektService
@@ -194,7 +196,10 @@ def erstelle_fortschritt_service(
     pfad = ermittle_datenbankpfad(datenbankpfad)
     repository = SQLiteZugriffsRepository(pfad)
     return FortschrittService(
-        repository, SQLiteFortschrittRepository(pfad), AutorisierungsService(repository)
+        repository,
+        SQLiteFortschrittRepository(pfad),
+        AutorisierungsService(repository),
+        AktiveLineageService(pfad),
     )
 
 
@@ -283,6 +288,21 @@ def erstelle_importvorgang_service(
     )
 
 
+def erstelle_datenprofil_service(
+    datenbankpfad: Path | str | None = None,
+    workspace: WorkspaceKonfiguration | None = None,
+) -> DatenprofilService:
+    """Erzeugt den Dienst für additive, unveränderliche R-Generationen."""
+    pfad = ermittle_datenbankpfad(datenbankpfad)
+    workspace_konfiguration = workspace or WorkspaceKonfiguration.ermitteln()
+    return DatenprofilService(
+        pfad,
+        erstelle_importvorgang_service(pfad, workspace_konfiguration),
+        erstelle_datenimport_service(),
+        ImportartefaktSpeicher(workspace_konfiguration),
+    )
+
+
 def erstelle_transformations_service(
     datenbankpfad: Path | str | None = None,
     workspace: WorkspaceKonfiguration | None = None,
@@ -295,6 +315,7 @@ def erstelle_transformations_service(
         erstelle_importvorgang_service(pfad, workspace_konfiguration),
         erstelle_datenimport_service(),
         ImportartefaktSpeicher(workspace_konfiguration),
+        AktiveLineageService(pfad),
     )
 
 
@@ -310,6 +331,7 @@ def erstelle_event_log_konfigurations_service(
         SQLiteMappingRepository(pfad),
         transformations_service,
         ImportartefaktSpeicher(workspace_konfiguration),
+        AktiveLineageService(pfad),
     )
 
 
@@ -332,6 +354,7 @@ def erstelle_mappingtabelle_service(
         SQLiteMappingtabelleRepository(pfad),
         erstelle_transformations_service(pfad, workspace_konfiguration),
         ImportartefaktSpeicher(workspace_konfiguration),
+        AktiveLineageService(pfad),
     )
 
 
@@ -354,6 +377,7 @@ def erstelle_event_log_service(
         transformation,
         ImportartefaktSpeicher(workspace_konfiguration),
         erstelle_mappingtabelle_service(pfad, workspace_konfiguration),
+        AktiveLineageService(pfad),
     )
 
 
@@ -372,6 +396,7 @@ def erstelle_datenqualitaet_service(
         transformationen,
         erstelle_datenquelle_service(pfad),
         erstelle_mappingtabelle_service(pfad, workspace_konfiguration),
+        AktiveLineageService(pfad),
     )
 
 
@@ -386,6 +411,7 @@ def erstelle_process_mining_service(
         SQLiteProcessMiningRepository(pfad),
         erstelle_datenqualitaet_service(pfad, workspace_konfiguration),
         ImportartefaktSpeicher(workspace_konfiguration),
+        aktive_lineage=AktiveLineageService(pfad),
     )
 
 
@@ -403,6 +429,8 @@ def erstelle_ergebnisaggregation_service(
         erstelle_datenqualitaet_service(pfad, workspace_konfiguration),
         erstelle_process_mining_service(pfad, workspace_konfiguration),
         ImportartefaktSpeicher(workspace_konfiguration),
+        AktiveLineageService(pfad),
+        erstelle_datenprofil_service(pfad, workspace_konfiguration),
     )
 
 
@@ -419,6 +447,7 @@ def erstelle_modellableitung_service(
         erstelle_transformations_service(pfad, workspace_konfiguration),
         erstelle_datenquelle_service(pfad),
         ImportartefaktSpeicher(workspace_konfiguration),
+        AktiveLineageService(pfad),
     )
 
 
@@ -433,6 +462,7 @@ def erstelle_modellvalidierung_service(
         SQLiteModellvalidierungRepository(pfad),
         erstelle_modellableitung_service(pfad, workspace_konfiguration),
         ImportartefaktSpeicher(workspace_konfiguration),
+        AktiveLineageService(pfad),
     )
 
 
@@ -469,6 +499,7 @@ def erstelle_projektkontext_service(
         ergebnisaggregation=erstelle_ergebnisaggregation_service(pfad, workspace_konfiguration),
         modellableitung=erstelle_modellableitung_service(pfad, workspace_konfiguration),
         modellvalidierung=erstelle_modellvalidierung_service(pfad, workspace_konfiguration),
+        aktive_lineage=AktiveLineageService(pfad),
     )
 
 

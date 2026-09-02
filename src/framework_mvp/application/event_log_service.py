@@ -12,6 +12,7 @@ from uuid import UUID
 
 import pandas as pd
 
+from framework_mvp.application.aktive_lineage_service import AktiveLineageService, LineageEndpunkt
 from framework_mvp.application.event_log import EventLogErgebnis, erzeuge_event_log
 from framework_mvp.application.mapping_service import EventLogKonfigurationService
 from framework_mvp.application.mappingtabelle_service import MappingtabelleService
@@ -55,12 +56,14 @@ class EventLogService:
         transformations_service: TransformationsService,
         artefakte: ImportartefaktSpeicher,
         mappingtabelle_service: MappingtabelleService | None = None,
+        aktive_lineage: AktiveLineageService | None = None,
     ) -> None:
         self._repository = repository
         self._konfigurations_service = konfigurations_service
         self._transformations_service = transformations_service
         self._artefakte = artefakte
         self._mappingtabelle_service = mappingtabelle_service
+        self._aktive_lineage = aktive_lineage
 
     def _kontext_laden(
         self, konfigurations_id: UUID
@@ -138,7 +141,15 @@ class EventLogService:
                 if wert in {"case_id", "activity", "timestamp"}
                 or (
                     konfiguration.konfigurationsversion >= 3
-                    and wert in {"start_timestamp", "end_timestamp", "lifecycle", "resource"}
+                    and wert
+                    in {
+                        "start_timestamp",
+                        "end_timestamp",
+                        "plan_start_timestamp",
+                        "plan_end_timestamp",
+                        "lifecycle",
+                        "resource",
+                    }
                 )
                 or wert in ergebnis.attributherkunft
             ],
@@ -226,6 +237,19 @@ class EventLogService:
                 jetzt,
             )
             self._repository.speichern(artefakt)
+            if self._aktive_lineage is not None:
+                self._aktive_lineage.aktivieren(
+                    artefakt.projekt_id,
+                    LineageEndpunkt.E,
+                    {
+                        "aktueller_zwischendatensatz_id": artefakt.zwischendatensatz_id,
+                        "aktuelle_mapping_id": artefakt.mapping_id,
+                        "mapping_id": artefakt.mapping_id,
+                        "aktuelle_event_log_konfiguration_id": artefakt.mapping_id,
+                        "aktuelles_event_log_id": artefakt.event_log_id,
+                        "event_log_id": artefakt.event_log_id,
+                    },
+                )
             return artefakt
         except Exception:
             for wert in reversed(erzeugt):

@@ -6,7 +6,7 @@ from typing import Any
 
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
 
-SCHEMAVERSION = 11
+SCHEMAVERSION = 12
 
 PROJEKT_SCHEMA_VERSION_2 = """
 CREATE TABLE IF NOT EXISTS projekte (
@@ -484,6 +484,32 @@ CREATE TABLE IF NOT EXISTS bereinigungsprotokoll (
 );
 """
 
+AKTIVE_PROJEKTLINEAGE_SCHEMA_VERSION_12 = """
+CREATE TABLE IF NOT EXISTS aktive_projektlineage (
+    projekt_id TEXT PRIMARY KEY NOT NULL,
+    endpunkt TEXT NOT NULL,
+    referenzen_json TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+    aktualisiert_am_utc TEXT NOT NULL,
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS datenprofil_generationen (
+    profil_id TEXT PRIMARY KEY NOT NULL,
+    projekt_id TEXT NOT NULL,
+    import_id TEXT NOT NULL,
+    vorgaenger_profil_id TEXT,
+    fachversion INTEGER NOT NULL CHECK (fachversion > 1),
+    relativer_profil_pfad TEXT NOT NULL,
+    sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+    erstellt_am_utc TEXT NOT NULL,
+    UNIQUE (import_id, fachversion),
+    FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id) ON DELETE CASCADE,
+    FOREIGN KEY (import_id) REFERENCES importvorgaenge(import_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_datenprofil_generationen_import
+    ON datenprofil_generationen(import_id, fachversion)
+"""
+
 _PROJEKTSPALTEN_VERSION_2 = """
     projekt_id, bezeichnung, beteiligte_personen_json, status,
     erstellt_am_utc, geaendert_am_utc, untersuchungsauftrag_json
@@ -560,7 +586,7 @@ def _migriere_version_1_auf_2(verbindung: sqlite3.Connection) -> None:
 
 
 def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
-    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 11."""
+    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 12."""
     verbindung.execute("PRAGMA foreign_keys = ON")
     verbindung.execute("PRAGMA busy_timeout = 5000")
     verbindung.execute("PRAGMA journal_mode = WAL")
@@ -602,6 +628,9 @@ def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
             if anweisung.strip():
                 verbindung.execute(anweisung)
         for anweisung in PORTABILITAET_UND_MANDANTEN_SCHEMA_VERSION_11.split(";"):
+            if anweisung.strip():
+                verbindung.execute(anweisung)
+        for anweisung in AKTIVE_PROJEKTLINEAGE_SCHEMA_VERSION_12.split(";"):
             if anweisung.strip():
                 verbindung.execute(anweisung)
         projekt_tabelle = verbindung.execute(

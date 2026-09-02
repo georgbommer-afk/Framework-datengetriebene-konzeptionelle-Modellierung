@@ -403,6 +403,53 @@ def _gespeichertes_k_stern(
         "validiertes-konzeptionelles-modell-k-stern.json",
         "application/json",
     )
+    links, rechts = st.columns(2)
+    if links.button("Validierung überarbeiten", width="stretch"):
+        praefix = f"schritt9_{projekt_id}_{validierung.modellableitungs_id}"
+        for behandlung in behandlungen:
+            eintrag_id = str(behandlung["offener_eintrag_id"])
+            st.session_state[f"{praefix}_entscheidung_{eintrag_id}"] = str(
+                behandlung["entscheidung"]
+            )
+            st.session_state[f"{praefix}_inhalt_{eintrag_id}"] = str(
+                behandlung.get("fachlicher_inhalt", "")
+            )
+            st.session_state[f"{praefix}_begruendung_{eintrag_id}"] = str(
+                behandlung.get("begruendung", "")
+            )
+        anpassungen = [
+            (bestandteil["bestandteil_id"], eintrag)
+            for bestandteil in k_stern.get("modellbestandteile", [])
+            for eintrag in bestandteil.get("menschliche_eintraege", [])
+            if str(eintrag.get("eintragstyp")) == "zusaetzliche_anpassung"
+        ]
+        st.session_state[f"{praefix}_anpassungsanzahl"] = len(anpassungen)
+        for index, (bestandteil_id, eintrag) in enumerate(anpassungen):
+            st.session_state[f"{praefix}_anpassung_{index}_bestandteil"] = bestandteil_id
+            st.session_state[f"{praefix}_anpassung_{index}_inhalt"] = str(
+                eintrag.get("fachlicher_inhalt", "")
+            )
+            st.session_state[f"{praefix}_anpassung_{index}_begruendung"] = str(
+                eintrag.get("begruendung", "")
+            )
+        st.session_state[f"{praefix}_gesamtstatus"] = (
+            Gesamtvalidierungsstatus.FACHLICH_VALIDIERT.value
+        )
+        st.session_state[f"{praefix}_validierungsvermerk"] = str(
+            gesamt.get("validierungsvermerk", "") if isinstance(gesamt, dict) else ""
+        )
+        st.session_state[f"{praefix}_gesamtbestaetigung"] = bool(
+            gesamt.get("menschlich_bestaetigt") if isinstance(gesamt, dict) else False
+        )
+        st.session_state.pop("aktuelle_validierungslauf_id", None)
+        st.session_state.pop("aktuelle_k_stern_id", None)
+        st.rerun()
+    if rechts.button(
+        "Weiter zu Schritt 10: Konzeptionelles Modell ausgeben",
+        type="primary",
+        width="stretch",
+    ):
+        framework_bereich_oeffnen(schritt=10, projekt_id=projekt_id)
 
 
 def zeige_modellvalidierung_seite(
@@ -470,6 +517,22 @@ def zeige_modellvalidierung_seite(
             fehlend.append(str(fehler))
     _bereitschaft_und_vorschau(basis.k, basis.o, behandlungen, anpassungen, fehlend)
     _technische_details(basis, arbeitsfassung)
+    if status is Gesamtvalidierungsstatus.ANPASSUNGSBEDARF:
+        unvollstaendig = any(
+            not wert["fachlicher_inhalt"] or not wert["begruendung"] for wert in roh_anpassungen
+        )
+        if st.button(
+            "Anpassungen übernehmen und erneut validieren",
+            type="primary",
+            disabled=not roh_anpassungen or unvollstaendig,
+        ):
+            runden_key = f"{praefix}_validierungsrunden"
+            st.session_state[runden_key] = int(st.session_state.get(runden_key, 0)) + 1
+            st.session_state[f"{praefix}_gesamtbestaetigung"] = False
+            st.rerun()
+        runden = int(st.session_state.get(f"{praefix}_validierungsrunden", 0))
+        if runden:
+            st.info(f"Erneute fachliche Validierung · Runde {runden + 1}")
     st.subheader("5. K* speichern und zu Schritt 10")
     if st.button(
         "K* fachlich validieren und zu Schritt 10",

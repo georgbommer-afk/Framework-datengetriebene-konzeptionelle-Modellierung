@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+from framework_mvp.application.aktive_lineage_service import AktiveLineageService
 from framework_mvp.application.autorisierung import AutorisierungsService
 from framework_mvp.application.ports.fortschritt_repository import FortschrittRepository
 from framework_mvp.application.ports.zugriffs_repository import ZugriffsRepository
@@ -43,7 +44,6 @@ FACHLICHE_UNTERSCHRITTE: dict[int, tuple[str, ...]] = {
         "Mindestbestandteile konfigurieren",
         "Semantische Rollen und Attribute auswählen",
         "Event Log erzeugen und prüfen",
-        "Event Log ausgeben und speichern",
     ),
     5: (
         "Artefaktkette übernehmen",
@@ -98,10 +98,12 @@ class FortschrittService:
         zugriffs_repository: ZugriffsRepository,
         artefakt_repository: FortschrittRepository,
         autorisierung: AutorisierungsService,
+        aktive_lineage: AktiveLineageService | None = None,
     ) -> None:
         self._zugriff = zugriffs_repository
         self._artefakte = artefakt_repository
         self._autorisierung = autorisierung
+        self._aktive_lineage = aktive_lineage
 
     def aktualisieren(
         self,
@@ -113,8 +115,8 @@ class FortschrittService:
         status: str = "in_bearbeitung",
     ) -> Fortschrittsanzeige:
         self._autorisierung.projekt_zugriff_pruefen(kontext, projekt_id, Projektaktion.BEARBEITEN)
-        gespeicherter_schritt = self._artefakte.hoechster_gespeicherter_schritt(projekt_id)
-        effektiver_schritt = max(schritt, gespeicherter_schritt)
+        lineage = self._aktive_lineage.laden(projekt_id) if self._aktive_lineage else None
+        effektiver_schritt = lineage.framework_schritt if lineage is not None else schritt
         effektiver_unterschritt = unterschritt if effektiver_schritt == schritt else ""
         zaehler, nenner = berechne_fortschritt(effektiver_schritt, effektiver_unterschritt)
         jetzt = datetime.now(UTC)
@@ -166,8 +168,22 @@ class FortschrittService:
         aktion = Projektaktion.FORTSCHRITT_ANSEHEN if dashboard else Projektaktion.ANSEHEN
         self._autorisierung.projekt_zugriff_pruefen(kontext, projekt_id, aktion)
         gespeichert = self._zugriff.fortschritt_laden(projekt_id)
-        artefaktschritt = self._artefakte.hoechster_gespeicherter_schritt(projekt_id)
-        if gespeichert is None or artefaktschritt > gespeichert.framework_schritt:
+        lineage = self._aktive_lineage.laden(projekt_id) if self._aktive_lineage else None
+        artefaktschritt = (
+            lineage.framework_schritt
+            if lineage is not None
+            else self._artefakte.hoechster_gespeicherter_schritt(projekt_id)
+        )
+        abweichend = (
+            lineage is not None
+            and gespeichert is not None
+            and gespeichert.framework_schritt != artefaktschritt
+        ) or (
+            lineage is None
+            and gespeichert is not None
+            and artefaktschritt > gespeichert.framework_schritt
+        )
+        if gespeichert is None or abweichend:
             schritt = max(1, artefaktschritt)
             zaehler, nenner = berechne_fortschritt(schritt)
             gespeichert = Projektfortschritt(

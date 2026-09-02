@@ -103,6 +103,8 @@ def _persistierte_konfiguration_rehydrieren(
             "zeitstempelspalte": konfiguration.zeitstempelspalte,
             "startzeitstempelspalte": konfiguration.startzeitstempelspalte,
             "endzeitstempelspalte": konfiguration.endzeitstempelspalte,
+            "plan_startzeitstempelspalte": konfiguration.plan_startzeitstempelspalte,
+            "plan_endzeitstempelspalte": konfiguration.plan_endzeitstempelspalte,
             "lifecycle_spalte": konfiguration.lifecycle_spalte,
             "ressourcen_spalte": konfiguration.ressourcen_spalte,
             "zeitstempelzuordnungen": konfiguration.zeitstempelzuordnungen,
@@ -307,6 +309,8 @@ def _mindestbestandteile(
     for schluessel in (
         "startzeitstempelspalte",
         "endzeitstempelspalte",
+        "plan_startzeitstempelspalte",
+        "plan_endzeitstempelspalte",
         "lifecycle_spalte",
         "ressourcen_spalte",
     ):
@@ -351,6 +355,16 @@ def _attribute(
             ("ressourcen_spalte", "Ressourcenspalte", "resource"),
             ("startzeitstempelspalte", "Ist-Startzeitpunkt", "start_timestamp"),
             ("endzeitstempelspalte", "Ist-Endzeitpunkt", "end_timestamp"),
+            (
+                "plan_startzeitstempelspalte",
+                "Plan-/Soll-Startzeitpunkt",
+                "plan_start_timestamp",
+            ),
+            (
+                "plan_endzeitstempelspalte",
+                "Plan-/Soll-Endzeitpunkt",
+                "plan_end_timestamp",
+            ),
             ("lifecycle_spalte", "Lifecycle-/Statusspalte", "lifecycle"),
         )
         for zustandsschluessel, rollenlabel, zielname in rollendefinitionen:
@@ -504,6 +518,8 @@ def _konfiguration(
         definition,
         mapping.mapping_id if mapping is not None else None,
         AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION,
+        zustand.get("plan_startzeitstempelspalte", ""),
+        zustand.get("plan_endzeitstempelspalte", ""),
     )
 
 
@@ -514,6 +530,8 @@ def _fachspalten(ergebnis: EventLogErgebnis) -> list[str]:
         "timestamp",
         "start_timestamp",
         "end_timestamp",
+        "plan_start_timestamp",
+        "plan_end_timestamp",
         "lifecycle",
         "resource",
     }
@@ -666,22 +684,32 @@ def _speichern(
     datensatz: Zwischendatensatz,
     mapping: Mappingtabelle | None,
     zustand: dict[str, Any],
+    *,
+    ergebnis_anzeigen: bool = True,
 ) -> None:
     konfiguration = zustand["konfiguration"]
-    _ergebnis(zustand["ergebnis"], konfiguration, projektname, datensatz, mapping)
+    if ergebnis_anzeigen:
+        _ergebnis(zustand["ergebnis"], konfiguration, projektname, datensatz, mapping)
     event_log_id = zustand.setdefault("event_log_id", uuid4())
     artefakt = zustand.get("artefakt")
     if artefakt is not None:
         st.success("Der fallbezogene Event Log (E) wurde gespeichert.")
-    if artefakt is None and st.button(
-        "Event Log E speichern und zu Schritt 5",
+    links, rechts = st.columns(2)
+    if links.button("Zurück", width="stretch"):
+        zustand["schritt"] -= 1
+        st.rerun()
+    if artefakt is None and rechts.button(
+        "Event Log E speichern und zu Schritt 5: Datenqualität prüfen",
         type="primary",
+        width="stretch",
     ):
         zustand["artefakt"] = service.speichern(event_log_id, konfiguration.mapping_id)
         st.session_state.aktuelles_event_log_id = str(event_log_id)
         st.session_state.event_log_id = event_log_id
         schritt_abschliessen_und_weiter(aktueller_schritt=4, projekt_id=projekt_id)
-    if artefakt is not None and st.button("Weiter zu Schritt 5", type="primary"):
+    if artefakt is not None and rechts.button(
+        "Weiter zu Schritt 5: Datenqualität prüfen", type="primary", width="stretch"
+    ):
         st.session_state.aktuelles_event_log_id = str(event_log_id)
         st.session_state.event_log_id = event_log_id
         schritt_abschliessen_und_weiter(aktueller_schritt=4, projekt_id=projekt_id)
@@ -690,12 +718,12 @@ def _speichern(
 
 
 def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
+    if zustand["schritt"] == len(SCHRITTE):
+        return
     links, rechts = st.columns(2)
     if links.button("Zurück", disabled=zustand["schritt"] == 1, width="stretch"):
         zustand["schritt"] -= 1
         st.rerun()
-    if zustand["schritt"] == len(SCHRITTE):
-        return
     if rechts.button(
         "Weiter",
         disabled=not weiter,
@@ -778,15 +806,16 @@ def zeige_event_log_seite(
                 mapping,
                 zustand,
             )
-        else:
-            _speichern(
-                event_log_service,
-                projekt_id,
-                projektname,
-                datensatz,
-                mapping,
-                zustand,
-            )
+            if weiter:
+                _speichern(
+                    event_log_service,
+                    projekt_id,
+                    projektname,
+                    datensatz,
+                    mapping,
+                    zustand,
+                    ergebnis_anzeigen=False,
+                )
         _navigation(zustand, weiter)
     except (Domaenenfehler, Importintegritaetsfehler) as fehler:
         st.error(str(fehler))

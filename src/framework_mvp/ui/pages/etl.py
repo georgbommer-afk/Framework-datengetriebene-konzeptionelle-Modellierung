@@ -3,7 +3,7 @@
 import logging
 import re
 from collections.abc import MutableMapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any, cast
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -17,6 +17,7 @@ from framework_mvp.application.datenimport_service import (
     Profilierungsergebnis,
     schlage_quellenart_vor,
 )
+from framework_mvp.application.datenprofil_service import DatenprofilService
 from framework_mvp.application.datenquelle_service import DatenquelleService
 from framework_mvp.application.importvorgang_service import (
     GeladenerImport,
@@ -163,6 +164,7 @@ def _abhaengige_zustaende_verwerfen(zustand: dict[str, Any]) -> None:
 def _gespeicherten_import_wiederherstellen(
     *,
     importvorgang_service: ImportvorgangService,
+    datenprofil_service: DatenprofilService | None,
     datenimport_service: DatenimportService,
     import_id: UUID,
     zustand: dict[str, Any],
@@ -656,6 +658,7 @@ def _datenprofil_und_bestaetigung(
     *,
     datenimport_service: DatenimportService,
     importvorgang_service: ImportvorgangService,
+    datenprofil_service: DatenprofilService | None,
     projekt_id: UUID,
     zustand: dict[str, Any],
 ) -> None:
@@ -663,7 +666,8 @@ def _datenprofil_und_bestaetigung(
     st.subheader("Datenprofil")
     vorschau: Datenvorschau = zustand["vorschau"]
     vorhandene_platzhalter = tuple(zustand.get("zusaetzliche_platzhalter", ()))
-    bearbeitbar = zustand.get("bestaetigter_import") is None
+    import_bearbeitbar = zustand.get("bestaetigter_import") is None
+    indikator_bearbeitbar = import_bearbeitbar or bool(zustand.get("profil_bearbeiten"))
     with st.container(border=True):
         st.markdown("**Fehlwertplatzhalter bestätigen**")
         platzhaltertext = st.text_input(
@@ -673,7 +677,7 @@ def _datenprofil_und_bestaetigung(
                 "Beispiele: -, n/a oder unbekannt. Die Kennzeichnung verändert den "
                 "Quelldatensatz nicht. Bestätigen Sie die Eingabe mit Enter."
             ),
-            disabled=not bearbeitbar,
+            disabled=not import_bearbeitbar,
             key=(f"etl_platzhalter_{projekt_id}_{zustand['datei_metadaten'].sha256}"),
         )
     zusaetzliche_platzhalter = tuple(
@@ -698,7 +702,7 @@ def _datenprofil_und_bestaetigung(
         ergebnis,
         session_key=f"etl_profildetail_{projekt_id}_{zustand['datei_metadaten'].sha256}",
         daten=vorschau.vollstaendige_tabelle,
-        indikator_bearbeitbar=bearbeitbar,
+        indikator_bearbeitbar=indikator_bearbeitbar,
     )
     if indikatoraktion is not None and indikatoraktion.entfernen is not None:
         zu_entfernen = indikatoraktion.entfernen
@@ -728,6 +732,35 @@ def _datenprofil_und_bestaetigung(
             st.rerun()
     if zustand.get("bestaetigter_import") is not None:
         st.success("Diese Tabelle ist als Ausgangsdaten bestätigt.")
+        importvorgang = cast(Importvorgang, zustand["bestaetigter_import"])
+        if datenprofil_service is None:
+            return
+        if not zustand.get("profil_bearbeiten"):
+            if st.button("Indikatorbedingungen bearbeiten"):
+                aktuell = datenprofil_service.aktuellste(importvorgang.import_id)
+                zustand["indikatorbedingungen"] = aktuell.profil.indikatorbedingungen
+                zustand["profil_vorgaenger_id"] = aktuell.profil_id
+                zustand["profil_bearbeiten"] = True
+                zustand.pop("profil_schluessel", None)
+                st.rerun()
+            return
+        st.info(
+            "Sie bearbeiten einen Entwurf. Das bestätigte Profil bleibt unverändert; "
+            "T und die Schritte 3–6 bleiben aktiv."
+        )
+        links, rechts = st.columns(2)
+        if links.button("Bearbeitung abbrechen"):
+            zustand["profil_bearbeiten"] = False
+            st.rerun()
+        if rechts.button("Neue Profilversion R speichern", type="primary"):
+            generation = datenprofil_service.erweitern(
+                importvorgang.import_id,
+                tuple(zustand.get("indikatorbedingungen", ())),
+                vorgaenger_profil_id=UUID(str(zustand["profil_vorgaenger_id"])),
+            )
+            zustand["profil_bearbeiten"] = False
+            zustand["profil_vorgaenger_id"] = generation.profil_id
+            st.success(f"Datenprofil R{generation.fachversion} wurde gespeichert.")
         return
     if st.button("Diese Tabelle als Ausgangsdaten verwenden", type="primary"):
         import_id = zustand.setdefault("import_id", uuid4())
@@ -802,127 +835,226 @@ def _join_konfigurieren(
     plan: Transformationsplan,
     linke_daten: pd.DataFrame,
 ) -> Transformationsplan:
-    """Prüft und ergänzt eine fachlich geführte Tabellenverknüpfung."""
+    """Zeigt, rehydriert, ergänzt oder ersetzt genau einen fachlich geführten Join."""
+    widget_praefix = f"etl_join_{projekt_id}_{plan.transformationsplan_id}"
+    vorhandener_join = next(
+        (
+            wert
+            for wert in sorted(plan.schritte, key=lambda eintrag: eintrag.reihenfolge)
+            if wert.aktiviert and wert.typ is Transformationsart.TABELLEN_JOIN
+        ),
+        None,
+    )
+    if vorhandener_join is not None:
+        parameter_alt = vorhandener_join.parameter
+        st.write("### Bestehende Verknüpfung")
+        st.write(
+            f"Haupttabelle n:{parameter_alt.get('pruefung', {}).get('kardinalitaet', '–')} "
+            f"Zusatztabelle · {parameter_alt.get('join_art', '–')} JOIN"
+        )
+        st.write(
+            f"Schlüssel: {', '.join(parameter_alt.get('linke_schluessel', []))} ↔ "
+            f"{', '.join(parameter_alt.get('rechte_schluessel', []))} · "
+            f"Erwartete Ergebniszeilen: "
+            f"{parameter_alt.get('pruefung', {}).get('erwartete_zeilen', '–')}"
+        )
+        if st.button("Verknüpfung ändern"):
+            st.session_state[f"{widget_praefix}_offen"] = True
+    elif st.button("Tabelle verknüpfen", type="primary"):
+        st.session_state[f"{widget_praefix}_offen"] = True
+    if not st.session_state.get(f"{widget_praefix}_offen"):
+        return plan
+
+    st.write("### Tabelle verknüpfen")
+    st.caption(
+        "Wählen Sie eine bestätigte Tabelle oder bereiten Sie ein weiteres Blatt derselben "
+        "XLSX-Arbeitsmappe direkt für die Verknüpfung auf."
+    )
+    if vorhandener_join is not None:
+        vorherige_schritte = tuple(
+            wert for wert in plan.schritte if wert.reihenfolge < vorhandener_join.reihenfolge
+        )
+        linke_daten = service.vorschau(replace(plan, schritte=vorherige_schritte)).daten
+    vorhandene_rechte_id = (
+        UUID(str(vorhandener_join.parameter["rechter_zwischendatensatz_id"]))
+        if vorhandener_join is not None
+        else None
+    )
     datensaetze = [
         wert
         for wert in service.datensaetze_fuer_projekt(projekt_id)
-        if not set(wert.import_ids).intersection(plan.import_ids)
+        if not set(wert.import_ids).intersection((plan.import_ids[0],))
+        or wert.zwischendatensatz_id == vorhandene_rechte_id
     ]
-    with st.expander("Weitere Tabelle verknüpfen (optional)"):
-        st.caption(
-            "Verknüpft wird ausschließlich ein bereits separat bestätigter und aufbereiteter "
-            "Zwischendatensatz."
-        )
-        with st.expander("Was bedeuten die Verknüpfungsarten?"):
-            st.write("Haupttabelle: A, B, C · Zusatztabelle: B, C, D")
-            st.write("Alle Hauptzeilen behalten: A, B, C (LEFT JOIN)")
-            st.write("Nur passende Zeilen: B, C (INNER JOIN)")
-            st.write("Alle Zeilen der Zusatztabelle: B, C, D (RIGHT JOIN)")
-            st.write("Alle Zeilen beider Tabellen: A, B, C, D (OUTER JOIN)")
-        if not datensaetze:
-            st.caption("Es ist kein weiterer separat aufbereiteter Zwischendatensatz verfügbar.")
-            return plan
+    basis_geladen = service.import_laden(plan.import_ids[0])
+    if basis_geladen is None:
+        raise Domaenenfehler("Der Hauptimport wurde nicht gefunden.")
+    weitere_blaetter = tuple(
+        wert
+        for wert in service.excel_tabellenblaetter(plan.import_ids[0])
+        if wert != basis_geladen.importvorgang.tabellenbezeichnung
+    )
+    wege = []
+    if datensaetze:
+        wege.append("Bereits aufbereitete Tabelle verwenden")
+    if weitere_blaetter:
+        wege.append("Weiteres Tabellenblatt derselben Arbeitsmappe verwenden")
+    if not wege:
+        st.info("Es ist keine zusätzliche Tabelle oder weiteres XLSX-Blatt verfügbar.")
+        return plan
+    weg = st.radio("Quelle der Zusatztabelle", wege, key=f"{widget_praefix}_quelle")
+    rechter_datensatz = None
+    rechte_daten = None
+    if weg == "Bereits aufbereitete Tabelle verwenden":
         rechter_datensatz_id = st.selectbox(
-            "Zusätzlicher aufbereiteter Zwischendatensatz",
+            "Zusatztabelle",
             [wert.zwischendatensatz_id for wert in datensaetze],
-            format_func=lambda wert: next(
-                f"{eintrag.zeilenanzahl:,} Zeilen · {eintrag.spaltenanzahl:,} Spalten"
-                for eintrag in datensaetze
-                if eintrag.zwischendatensatz_id == wert
+            index=(
+                next(
+                    (
+                        index
+                        for index, wert in enumerate(datensaetze)
+                        if wert.zwischendatensatz_id == vorhandene_rechte_id
+                    ),
+                    0,
+                )
             ),
+            key=f"{widget_praefix}_datensatz",
         )
         rechter_datensatz, rechte_daten = service.zwischendatensatz_laden(rechter_datensatz_id)
-        widget_praefix = f"etl_join_{projekt_id}_{plan.transformationsplan_id}"
-        linke_optionen = [str(wert) for wert in linke_daten.columns]
-        linke_key = f"{widget_praefix}_links"
-        st.session_state[linke_key] = [
-            wert for wert in st.session_state.get(linke_key, ()) if wert in linke_optionen
-        ]
-        linke_schluessel = st.multiselect(
-            "Schlüsselspalte im Hauptdatensatz",
-            linke_optionen,
-            key=linke_key,
+    else:
+        tabellenblatt = st.selectbox(
+            "Weiteres Tabellenblatt", weitere_blaetter, key=f"{widget_praefix}_blatt"
         )
-        rechte_optionen = [str(wert) for wert in rechte_daten.columns]
-        rechte_key = f"{widget_praefix}_rechts_{rechter_datensatz_id}"
-        st.session_state[rechte_key] = [
-            wert for wert in st.session_state.get(rechte_key, ()) if wert in rechte_optionen
-        ]
-        rechte_schluessel = st.multiselect(
-            "Schlüsselspalte in der zusätzlichen Tabelle",
-            rechte_optionen,
-            key=rechte_key,
+        blattdaten, profil = service.excel_arbeitsblatt_vorschau(plan.import_ids[0], tabellenblatt)
+        st.write("**Vorschau und Datenprofil der Zusatztabelle**")
+        st.dataframe(blattdaten.head(200), width="stretch")
+        zeige_datenprofil(
+            profil,
+            session_key=f"{widget_praefix}_profil_{tabellenblatt}",
+            daten=blattdaten,
         )
-        join_texte = {
-            "Alle Zeilen der Haupttabelle behalten (LEFT JOIN)": "LEFT",
-            "Alle Zeilen der zusätzlichen Tabelle behalten (RIGHT JOIN)": "RIGHT",
-            "Nur passende Zeilen beider Tabellen behalten (INNER JOIN)": "INNER",
-            "Alle Zeilen beider Tabellen behalten (OUTER JOIN)": "OUTER",
-        }
-        join_art = join_texte[st.selectbox("Art der Verknüpfung", list(join_texte))]
-        if not linke_schluessel or len(linke_schluessel) != len(rechte_schluessel):
-            st.caption("Wählen Sie gleich viele Schlüsselspalten auf beiden Seiten.")
-            return plan
-        pruefung = pruefe_join(
-            linke_daten,
-            rechte_daten,
-            tuple(linke_schluessel),
-            tuple(rechte_schluessel),
-            join_art=join_art,
-        )
-        passende_hauptzeilen = max(len(linke_daten) - pruefung.nicht_zuordenbar_links, 0)
-        trefferquote = passende_hauptzeilen / len(linke_daten) if len(linke_daten) else 0.0
-        st.write(
-            f"**Hauptzeilen:** {len(linke_daten):,} · "
-            f"**Zusatzzeilen:** {len(rechte_daten):,} · "
-            f"**Trefferquote:** {trefferquote:.1%} · "
-            f"**Ohne Treffer:** {pruefung.nicht_zuordenbar_links:,}/"
-            f"{pruefung.nicht_zuordenbar_rechts:,} · "
-            f"**Erwartete {join_art}-Zeilen:** {pruefung.erwartete_zeilen:,}"
-        )
-        for warnung in pruefung.warnungen:
-            st.warning(warnung)
-        parameter = {
-            "rechter_zwischendatensatz_id": str(rechter_datensatz_id),
-            "linke_schluessel": linke_schluessel,
-            "rechte_schluessel": rechte_schluessel,
-            "join_art": join_art,
-            "suffixe": ["_haupt", "_zusatz"],
-            "nm_bestaetigt": pruefung.moegliche_zeilenvervielfachung,
-            "pruefung": {
-                "kardinalitaet": pruefung.kardinalitaet,
-                "erwartete_zeilen": pruefung.erwartete_zeilen,
-                "moeglicher_datenverlust": pruefung.moeglicher_datenverlust,
-                "moegliche_zeilenvervielfachung": (pruefung.moegliche_zeilenvervielfachung),
-            },
-        }
-        with st.expander("Technische Details", expanded=False):
-            st.json(parameter)
-        if st.button(
-            "Verknüpfung anwenden",
-            type="primary",
-            width="stretch",
-        ):
-            schritt = Transformationsschritt.neu(
-                typ=Transformationsart.TABELLEN_JOIN,
-                betroffene_spalten=tuple(linke_schluessel),
-                parameter=parameter,
-                reihenfolge=len(plan.schritte) + 1,
-                beschreibung=f"{join_art}-Verknüpfung",
+        bestaetigt_id = st.session_state.get(f"{widget_praefix}_bestaetigtes_blatt_id")
+        if bestaetigt_id:
+            rechter_datensatz, rechte_daten = service.zwischendatensatz_laden(
+                UUID(str(bestaetigt_id))
             )
+        elif st.button("Zusätzliche Tabelle fachlich bestätigen", type="primary"):
+            _, _, rechter_datensatz, rechte_daten = service.excel_arbeitsblatt_aufbereiten(
+                plan.import_ids[0], tabellenblatt
+            )
+            st.session_state[f"{widget_praefix}_bestaetigtes_blatt_id"] = str(
+                rechter_datensatz.zwischendatensatz_id
+            )
+            st.rerun()
+    if rechter_datensatz is None or rechte_daten is None:
+        st.info("Bestätigen Sie die Zusatztabelle, bevor Sie den Join konfigurieren.")
+        return plan
+    st.write(f"**Haupttabelle:** {len(linke_daten):,} Zeilen")
+    st.write(f"**Zusatztabelle:** {len(rechte_daten):,} Zeilen")
+    linke_schluessel = st.multiselect(
+        "Schlüssel Haupttabelle",
+        [str(wert) for wert in linke_daten.columns],
+        default=(
+            vorhandener_join.parameter.get("linke_schluessel", []) if vorhandener_join else []
+        ),
+        key=f"{widget_praefix}_links",
+    )
+    rechte_schluessel = st.multiselect(
+        "Schlüssel Zusatztabelle",
+        [str(wert) for wert in rechte_daten.columns],
+        default=(
+            vorhandener_join.parameter.get("rechte_schluessel", []) if vorhandener_join else []
+        ),
+        key=f"{widget_praefix}_rechts",
+    )
+    join_arten = ["LEFT", "RIGHT", "INNER", "OUTER"]
+    join_art = st.selectbox(
+        "Join-Art",
+        join_arten,
+        index=(
+            join_arten.index(str(vorhandener_join.parameter.get("join_art", "LEFT")))
+            if vorhandener_join
+            else 0
+        ),
+        key=f"{widget_praefix}_art",
+    )
+    if not linke_schluessel or len(linke_schluessel) != len(rechte_schluessel):
+        st.info("Wählen Sie auf beiden Seiten gleich viele Schlüsselspalten.")
+        return plan
+    pruefung = pruefe_join(
+        linke_daten,
+        rechte_daten,
+        tuple(linke_schluessel),
+        tuple(rechte_schluessel),
+        join_art=join_art,
+    )
+    gefunden = max(len(linke_daten) - pruefung.nicht_zuordenbar_links, 0)
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Zeilen links": len(linke_daten),
+                    "Zeilen rechts": len(rechte_daten),
+                    "Gefundene Zuordnungen": gefunden,
+                    "Nicht zuordenbar links": pruefung.nicht_zuordenbar_links,
+                    "Nicht zuordenbar rechts": pruefung.nicht_zuordenbar_rechts,
+                    "Kardinalität": pruefung.kardinalitaet,
+                    "Erwartete Ergebniszeilen": pruefung.erwartete_zeilen,
+                }
+            ]
+        ),
+        hide_index=True,
+        width="stretch",
+    )
+    for warnung in pruefung.warnungen:
+        st.warning(warnung)
+    parameter = {
+        "rechter_zwischendatensatz_id": str(rechter_datensatz.zwischendatensatz_id),
+        "linke_schluessel": linke_schluessel,
+        "rechte_schluessel": rechte_schluessel,
+        "join_art": join_art,
+        "suffixe": ["_haupt", "_zusatz"],
+        "nm_bestaetigt": pruefung.moegliche_zeilenvervielfachung,
+        "pruefung": {
+            "kardinalitaet": pruefung.kardinalitaet,
+            "erwartete_zeilen": pruefung.erwartete_zeilen,
+            "moeglicher_datenverlust": pruefung.moeglicher_datenverlust,
+            "moegliche_zeilenvervielfachung": pruefung.moegliche_zeilenvervielfachung,
+        },
+    }
+    if st.button("Verknüpfung anwenden", type="primary", width="stretch"):
+        schritt = Transformationsschritt.neu(
+            typ=Transformationsart.TABELLEN_JOIN,
+            betroffene_spalten=tuple(linke_schluessel),
+            parameter=parameter,
+            reihenfolge=(
+                vorhandener_join.reihenfolge if vorhandener_join else len(plan.schritte) + 1
+            ),
+            beschreibung=f"{join_art}-Verknüpfung",
+        )
+        if vorhandener_join is None:
             plan, ergebnis, datensatz = service.transformation_anwenden(
                 plan,
                 schritt,
                 uuid4(),
                 zusaetzliche_import_ids=rechter_datensatz.import_ids,
             )
-            st.session_state.etl_transformationsanwendung = (plan, ergebnis, datensatz)
-            folgeartefakte_zustand_invalidieren(
-                cast("MutableMapping[str, Any]", st.session_state),
-                projekt_id,
-                datensatz.zwischendatensatz_id,
+        else:
+            plan, ergebnis, datensatz = service.join_schritt_ersetzen(
+                plan,
+                vorhandener_join.transformationsschritt_id,
+                schritt,
+                uuid4(),
+                zusaetzliche_import_ids=rechter_datensatz.import_ids,
             )
-            st.rerun()
+        st.session_state.etl_transformationsanwendung = (plan, ergebnis, datensatz)
+        folgeartefakte_zustand_invalidieren(
+            cast("MutableMapping[str, Any]", st.session_state),
+            projekt_id,
+            datensatz.zwischendatensatz_id,
+        )
+        st.rerun()
     return plan
 
 
@@ -1109,6 +1241,7 @@ def _zwischendatensatz(
     datenquelle_service: DatenquelleService,
     projekt_id: UUID,
     zustand: dict[str, Any],
+    datenprofil_service: DatenprofilService | None = None,
 ) -> None:
     """Fasst Q, R und T vollständig zusammen und ermöglicht die Wiederaufnahme."""
     st.subheader("Ausgabe dieses Schritts")
@@ -1136,6 +1269,15 @@ def _zwischendatensatz(
         ergebnis=ergebnis,
         datensatz=datensatz,
     )
+    if datenprofil_service is not None and st.button("Indikatorbedingungen bearbeiten"):
+        zustand["schritt"] = 3
+        zustand["profil_bearbeiten"] = True
+        importvorgang = cast(Importvorgang, zustand["bestaetigter_import"])
+        aktuell = datenprofil_service.aktuellste(importvorgang.import_id)
+        zustand["indikatorbedingungen"] = aktuell.profil.indikatorbedingungen
+        zustand["profil_vorgaenger_id"] = aktuell.profil_id
+        zustand.pop("profil_schluessel", None)
+        st.rerun()
     if datensatz is not None and st.button("Weiteren Datensatz separat aufbereiten"):
         version = int(zustand.get("durchlauf_version", 0)) + 1
         zustand.clear()
@@ -1205,6 +1347,7 @@ def zeige_etl_seite(
     importvorgang_service: ImportvorgangService,
     transformations_service: TransformationsService,
     workspace: WorkspaceKonfiguration,
+    datenprofil_service: DatenprofilService | None = None,
 ) -> None:
     """Zeigt Framework-Schritt 2 als fokussierten fünfstufigen ETL-Ablauf."""
     st.header("Schritt 2: ETL durchführen")
@@ -1236,6 +1379,7 @@ def zeige_etl_seite(
             _datenprofil_und_bestaetigung(
                 datenimport_service=datenimport_service,
                 importvorgang_service=importvorgang_service,
+                datenprofil_service=datenprofil_service,
                 projekt_id=projekt_id,
                 zustand=zustand,
             )
@@ -1247,6 +1391,7 @@ def zeige_etl_seite(
                 datenquelle_service,
                 projekt_id,
                 zustand,
+                datenprofil_service,
             )
         _navigation(zustand)
     except (Domaenenfehler, Datenimportfehler) as fehler:

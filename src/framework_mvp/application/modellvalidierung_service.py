@@ -10,6 +10,7 @@ from pathlib import PurePosixPath
 from typing import Any, cast
 from uuid import UUID
 
+from framework_mvp.application.aktive_lineage_service import AktiveLineageService, LineageEndpunkt
 from framework_mvp.application.modellableitung import MODELLBESTANDTEILE
 from framework_mvp.application.modellableitung_service import ModellableitungService
 from framework_mvp.application.ports.modellvalidierung_repository import (
@@ -116,10 +117,12 @@ class ModellvalidierungService:
         repository: ModellvalidierungRepository,
         modellableitungen: ModellableitungService,
         artefakte: ImportartefaktSpeicher,
+        aktive_lineage: AktiveLineageService | None = None,
     ) -> None:
         self._repository = repository
         self._modellableitungen = modellableitungen
         self._artefakte = artefakte
+        self._aktive_lineage = aktive_lineage
 
     def grundlage_laden(
         self,
@@ -449,7 +452,20 @@ class ModellvalidierungService:
             if erzeugt is not None:
                 self._artefakte.neu_erstelltes_artefakt_entfernen(erzeugt)
             raise
-        return self.laden(validierungslauf_id)[0]
+        gespeichert = self.laden(validierungslauf_id)[0]
+        if self._aktive_lineage is not None:
+            self._aktive_lineage.aktivieren(
+                validierung.projekt_id,
+                LineageEndpunkt.K_STERN,
+                {
+                    "aktuelle_modellableitungs_id": validierung.modellableitungs_id,
+                    "aktuelle_k_id": validierung.k_id,
+                    "aktuelle_o_id": validierung.o_id,
+                    "aktuelle_validierungslauf_id": validierung.validierungslauf_id,
+                    "aktuelle_k_stern_id": validierung.k_stern_id,
+                },
+            )
+        return gespeichert
 
     @staticmethod
     def _k_stern_json_pruefen(inhalt: bytes) -> dict[str, Any]:

@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from framework_mvp.application.aktive_lineage_service import (
+    AktiveLineageService,
+    LineageEndpunkt,
+    kanonische_projekt_id,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class Projektkontext:
@@ -41,6 +47,7 @@ class ProjektkontextService:
         ergebnisaggregation: Any,
         modellableitung: Any,
         modellvalidierung: Any,
+        aktive_lineage: AktiveLineageService | None = None,
     ) -> None:
         self._datenbankpfad = Path(datenbankpfad)
         self._transformationen = transformationen
@@ -52,9 +59,17 @@ class ProjektkontextService:
         self._ergebnisaggregation = ergebnisaggregation
         self._modellableitung = modellableitung
         self._modellvalidierung = modellvalidierung
+        self._aktive_lineage = aktive_lineage or AktiveLineageService(self._datenbankpfad)
 
-    def wiederherstellen(self, projekt_id: UUID) -> Projektkontext:
-        """Liefert die tiefste valide Lineage oder einen leeren Schritt-1-Kontext."""
+    def wiederherstellen(self, projekt_id: UUID | str) -> Projektkontext:
+        """Liefert primär die persistierte aktive, andernfalls einmalig die Legacy-Lineage."""
+        projekt_id = UUID(kanonische_projekt_id(projekt_id))
+        checkpoint = self._aktive_lineage.laden(projekt_id)
+        if checkpoint is not None:
+            referenzen = self._checkpoint_aufloesen(
+                projekt_id, checkpoint.endpunkt, checkpoint.referenzen
+            )
+            return Projektkontext(projekt_id, checkpoint.framework_schritt, referenzen)
         stufen: tuple[tuple[str, str, int, Callable[[UUID, UUID], dict[str, str]]], ...] = (
             ("modellvalidierungen", "validierungslauf_id", 10, self._aus_validierung),
             ("modellableitungen", "modellableitungs_id", 9, self._aus_modellableitung),
@@ -72,17 +87,68 @@ class ProjektkontextService:
                     referenzen = aufloesen(projekt_id, kandidat)
                 except Exception:
                     continue
+                self._aktive_lineage.legacy_uebernehmen(
+                    projekt_id, self._endpunkt_fuer_schritt(schritt), referenzen
+                )
                 return Projektkontext(projekt_id, schritt, referenzen)
         return Projektkontext(projekt_id, 1, {})
 
-    def pruefen(self, projekt_id: UUID) -> Projektkontext:
-        """Prüft vor Importaktivierung jede persistierte Projektlineage vollständig."""
-        kontext = self.wiederherstellen(projekt_id)
-        hoechste = self._hoechste_persistierte_stufe(projekt_id)
-        if kontext.framework_schritt < hoechste:
+    @staticmethod
+    def _endpunkt_fuer_schritt(schritt: int) -> LineageEndpunkt:
+        return {
+            2: LineageEndpunkt.T,
+            3: LineageEndpunkt.M,
+            4: LineageEndpunkt.EVENT_LOG_KONFIGURATION,
+            5: LineageEndpunkt.E,
+            6: LineageEndpunkt.E_STERN,
+            7: LineageEndpunkt.P_A_D,
+            8: LineageEndpunkt.A_G,
+            9: LineageEndpunkt.K_O,
+            10: LineageEndpunkt.K_STERN,
+        }[schritt]
+
+    def _checkpoint_aufloesen(
+        self,
+        projekt_id: UUID,
+        endpunkt: LineageEndpunkt,
+        gespeichert: dict[str, str],
+    ) -> dict[str, str]:
+        """Prüft den aktiven Endpunkt und sämtliche darin gespeicherten Referenzen."""
+        schluessel, aufloesen = {
+            LineageEndpunkt.T: ("aktueller_zwischendatensatz_id", self._aus_datensatz),
+            LineageEndpunkt.M: ("aktuelle_mappingtabelle_id", self._aus_mappingtabelle),
+            LineageEndpunkt.EVENT_LOG_KONFIGURATION: (
+                "aktuelle_event_log_konfiguration_id",
+                self._aus_konfiguration,
+            ),
+            LineageEndpunkt.E: ("aktuelles_event_log_id", self._aus_event_log),
+            LineageEndpunkt.E_STERN: ("aktuelle_freigabe_id", self._aus_freigabe),
+            LineageEndpunkt.P_A_D: ("aktuelle_analyse_id", self._aus_analyse),
+            LineageEndpunkt.A_G: ("aktuelle_aggregations_id", self._aus_aggregation),
+            LineageEndpunkt.K_O: ("aktuelle_modellableitungs_id", self._aus_modellableitung),
+            LineageEndpunkt.K_STERN: (
+                "aktuelle_validierungslauf_id",
+                self._aus_validierung,
+            ),
+        }[endpunkt]
+        try:
+            artefakt_id = UUID(gespeichert[schluessel])
+        except (KeyError, TypeError, ValueError) as fehler:
             raise ValueError(
-                "Die höchste persistierte Projektlineage ist nicht vollständig oder integer."
-            )
+                "Der aktive Lineage-Checkpoint besitzt keinen gültigen Endpunkt."
+            ) from fehler
+        rekonstruiert = aufloesen(projekt_id, artefakt_id)
+        for name, wert in gespeichert.items():
+            if name in rekonstruiert and rekonstruiert[name] != wert:
+                raise ValueError(
+                    f"Die aktive Lineage-Referenz {name} stimmt nicht mit dem Artefakt überein."
+                )
+        return rekonstruiert
+
+    def pruefen(self, projekt_id: UUID | str) -> Projektkontext:
+        """Prüft vor Importaktivierung jede persistierte Projektlineage vollständig."""
+        projekt_id = UUID(kanonische_projekt_id(projekt_id))
+        kontext = self.wiederherstellen(projekt_id)
         for tabelle, id_spalte, aufloesen in (
             ("modellvalidierungen", "validierungslauf_id", self._aus_validierung),
             ("modellableitungen", "modellableitungs_id", self._aus_modellableitung),

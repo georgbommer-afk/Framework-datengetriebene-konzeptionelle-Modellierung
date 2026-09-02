@@ -31,7 +31,7 @@ def framework_bereich_oeffnen(*, schritt: int, projekt_id: UUID | None = None) -
         raise ValueError("Der angeforderte Framework-Schritt ist nicht vorhanden.")
     if projekt_id is not None:
         st.session_state.aktuelles_projekt_id = str(projekt_id)
-        st.session_state.ausgewaehlte_projekt_id = projekt_id
+        st.session_state.ausgewaehlte_projekt_id = str(projekt_id)
     st.session_state.naechster_framework_bereich = FRAMEWORK_BEREICHE[schritt - 1]
     st.rerun()
 

@@ -12,6 +12,7 @@ from uuid import UUID
 
 import pandas as pd
 
+from framework_mvp.application.aktive_lineage_service import AktiveLineageService, LineageEndpunkt
 from framework_mvp.application.datenquelle_service import DatenquelleService
 from framework_mvp.application.ergebnisaggregation_service import ErgebnisaggregationService
 from framework_mvp.application.modellableitung import (
@@ -152,12 +153,14 @@ class ModellableitungService:
         transformationen: TransformationsService,
         datenquellen: DatenquelleService,
         artefakte: ImportartefaktSpeicher,
+        aktive_lineage: AktiveLineageService | None = None,
     ) -> None:
         self._repository = repository
         self._aggregationen = aggregationen
         self._transformationen = transformationen
         self._datenquellen = datenquellen
         self._artefakte = artefakte
+        self._aktive_lineage = aktive_lineage
 
     def grundlage_laden(self, projekt_id: UUID, aggregations_id: UUID) -> Modellableitungsgrundlage:
         """Löst U,S,Q,R,T,E*,P,A_G ausschließlich über die aktive A_G-Lineage auf."""
@@ -467,7 +470,22 @@ class ModellableitungService:
             for artefakt in reversed(erzeugt):
                 self._artefakte.neu_erstelltes_artefakt_entfernen(artefakt)
             raise
-        return self.laden(ableitung.modellableitungs_id)[0]
+        gespeichert = self.laden(ableitung.modellableitungs_id)[0]
+        if self._aktive_lineage is not None:
+            self._aktive_lineage.aktivieren(
+                ableitung.projekt_id,
+                LineageEndpunkt.K_O,
+                {
+                    "aktuelle_aggregations_id": ableitung.aggregations_id,
+                    "aktuelle_analyse_id": ableitung.analyse_id,
+                    "aktuelles_event_log_id": ableitung.event_log_id,
+                    "event_log_id": ableitung.event_log_id,
+                    "aktuelle_modellableitungs_id": ableitung.modellableitungs_id,
+                    "aktuelle_k_id": ableitung.k_id,
+                    "aktuelle_o_id": ableitung.o_id,
+                },
+            )
+        return gespeichert
 
     @staticmethod
     def _json_pruefen(inhalt: bytes, artefaktart: str, artefaktversion: int) -> dict[str, Any]:

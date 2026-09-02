@@ -273,6 +273,36 @@ def _gespeicherte_ableitung(
         f"{ableitung.o_id}.o.json",
         "application/json",
     )
+    zurueck, weiter = st.columns(2)
+    if zurueck.button("Entscheidungen überarbeiten", width="stretch"):
+        basis = service.grundlage_laden(projekt_id, ableitung.aggregations_id)
+        label_nach_art = {
+            FachlicheEntscheidungsart.UEBERNEHMEN.value: "Vorschlag übernehmen",
+            FachlicheEntscheidungsart.OFFEN_UNSICHER.value: "Offen / fachlich unsicher",
+            FachlicheEntscheidungsart.NICHT_UEBERNEHMEN.value: "Vorschlag nicht übernehmen",
+        }
+        for entscheidung in entscheidungen:
+            bestandteil_id = str(entscheidung["bestandteil_id"])
+            basis_key = f"schritt8_{basis.eingabefingerabdruck}_{bestandteil_id}"
+            st.session_state[f"{basis_key}_auswahl"] = label_nach_art[
+                str(entscheidung["entscheidung"])
+            ]
+            st.session_state[f"{basis_key}_begruendung"] = str(entscheidung.get("begruendung", ""))
+        for schluessel in (
+            "aktuelle_modellableitungs_id",
+            "aktuelle_k_id",
+            "aktuelle_o_id",
+            "aktuelle_validierungslauf_id",
+            "aktuelle_k_stern_id",
+        ):
+            st.session_state.pop(schluessel, None)
+        st.rerun()
+    if weiter.button(
+        "Weiter zu Schritt 9: Modell ergänzen und validieren",
+        type="primary",
+        width="stretch",
+    ):
+        framework_bereich_oeffnen(schritt=9, projekt_id=projekt_id)
 
 
 def zeige_modellableitung_seite(

@@ -22,6 +22,7 @@ from framework_mvp.bootstrap import (
     ermittle_gast_ttl,
     erstelle_bereinigungs_service,
     erstelle_datenimport_service,
+    erstelle_datenprofil_service,
     erstelle_datenqualitaet_service,
     erstelle_datenquelle_service,
     erstelle_demoprojekt_service,
@@ -1083,6 +1084,7 @@ elif seite == "2 ETL durchführen":
         erstelle_importvorgang_service(datenbankpfad, workspace),
         erstelle_transformations_service(datenbankpfad, workspace),
         workspace,
+        erstelle_datenprofil_service(datenbankpfad, workspace),
     )
 elif seite == "3 Semantisches Mapping":
     zeige_semantisches_mapping(

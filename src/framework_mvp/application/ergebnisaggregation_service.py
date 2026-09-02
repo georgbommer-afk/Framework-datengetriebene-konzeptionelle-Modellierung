@@ -11,6 +11,8 @@ from uuid import UUID
 
 import pandas as pd
 
+from framework_mvp.application.aktive_lineage_service import AktiveLineageService, LineageEndpunkt
+from framework_mvp.application.datenprofil_service import DatenprofilService
 from framework_mvp.application.datenqualitaet_service import DatenqualitaetService
 from framework_mvp.application.ergebnisaggregation.kpi import (
     KpiDatenbasis,
@@ -168,6 +170,8 @@ class ErgebnisaggregationService:
         qualitaet_service: DatenqualitaetService,
         process_mining_service: ProcessMiningService,
         artefakte: ImportartefaktSpeicher,
+        aktive_lineage: AktiveLineageService | None = None,
+        datenprofile: DatenprofilService | None = None,
     ) -> None:
         self._repository = repository
         self._projekte = projekt_service
@@ -175,6 +179,8 @@ class ErgebnisaggregationService:
         self._qualitaet = qualitaet_service
         self._process_mining = process_mining_service
         self._artefakte = artefakte
+        self._aktive_lineage = aktive_lineage
+        self._datenprofile = datenprofile
 
     def grundlage_laden(
         self,
@@ -228,7 +234,12 @@ class ErgebnisaggregationService:
             geladen = self._transformationen.import_laden(import_id)
             if geladen is None or geladen.importvorgang.projekt_id != projekt_id:
                 raise Importintegritaetsfehler("Ein in T referenziertes Datenprofil R fehlt.")
-            profil = geladen.profil
+            profilgeneration = (
+                self._datenprofile.aktuellste(import_id) if self._datenprofile else None
+            )
+            profil = profilgeneration.profil if profilgeneration is not None else geladen.profil
+            fachversion = profilgeneration.fachversion if profilgeneration is not None else 1
+            profil_id = profilgeneration.profil_id if profilgeneration is not None else import_id
             importvorgang = geladen.importvorgang
             datenquellen_id = str(getattr(geladen.importvorgang, "datenquellen_id", ""))
             if datenquellen_id:
@@ -244,6 +255,8 @@ class ErgebnisaggregationService:
                 "import_id": str(import_id),
                 "raw_sha256": geladen.importvorgang.sha256,
                 "profil_version": profil.profil_version,
+                "profil_id": str(profil_id),
+                "fachversion": fachversion,
                 "datei_pruefsumme": profil.datei_pruefsumme,
                 "datenquellen_id": datenquellen_id,
                 "datenquelle_bezeichnung": datenquelle_bezeichnung,
@@ -276,7 +289,7 @@ class ErgebnisaggregationService:
                     wert=float(zeilen),
                     auswertbare_beobachtungen=zeilen,
                     grundgesamtheit=zeilen,
-                    profilversion=profil.profil_version,
+                    profilversion=fachversion,
                     profil_sha256=snapshot["profil_sha256"],
                 )
             )
@@ -315,7 +328,7 @@ class ErgebnisaggregationService:
                             vergleichswert=vergleichswert,
                             auswertbare_beobachtungen=auswertbar,
                             grundgesamtheit=zeilen,
-                            profilversion=profil.profil_version,
+                            profilversion=fachversion,
                             profil_sha256=snapshot["profil_sha256"],
                         )
                     )
@@ -355,7 +368,7 @@ class ErgebnisaggregationService:
                             wert=float(wert),
                             auswertbare_beobachtungen=auswertbar,
                             grundgesamtheit=zeilen,
-                            profilversion=profil.profil_version,
+                            profilversion=fachversion,
                             profil_sha256=snapshot["profil_sha256"],
                         )
                     )
@@ -1089,6 +1102,21 @@ class ErgebnisaggregationService:
                 self._artefakte.neu_erstelltes_artefakt_entfernen(artefakt)
             raise
         self.laden(aggregations_id)
+        if self._aktive_lineage is not None:
+            self._aktive_lineage.aktivieren(
+                projekt_id,
+                LineageEndpunkt.A_G,
+                {
+                    "aktuelle_freigabe_id": basis.freigabe.freigabe_id,
+                    "freigegebenes_event_log_id": basis.freigabe.event_log_id,
+                    "aktuelles_event_log_id": basis.freigabe.event_log_id,
+                    "event_log_id": basis.freigabe.event_log_id,
+                    "aktuelle_analyse_id": basis.analyse.analyse_id,
+                    "aktuelles_prozessmodell_id": basis.analyse.analyse_id,
+                    "aktuelle_discovery_ergebnisse_id": basis.analyse.analyse_id,
+                    "aktuelle_aggregations_id": aggregation.aggregations_id,
+                },
+            )
         return aggregation
 
     def _a_g_struktur(

@@ -117,7 +117,16 @@ def _ausgabenamen(
     haeufigkeit = {basis: list(basen.values()).count(basis) for basis in set(basen.values())}
     reserviert = {"case_id", "activity", "timestamp", "event_id"}
     if konfiguration.konfigurationsversion >= 3:
-        reserviert.update({"start_timestamp", "end_timestamp", "lifecycle", "resource"})
+        reserviert.update(
+            {
+                "start_timestamp",
+                "end_timestamp",
+                "plan_start_timestamp",
+                "plan_end_timestamp",
+                "lifecycle",
+                "resource",
+            }
+        )
     verwendet = set(reserviert)
     ausgabenamen: dict[str, str] = {}
     herkunft: dict[str, str] = {}
@@ -250,6 +259,8 @@ def _ereignisorientiert(
         for ziel, quelle in {
             "start_timestamp": konfiguration.startzeitstempelspalte,
             "end_timestamp": konfiguration.endzeitstempelspalte,
+            "plan_start_timestamp": konfiguration.plan_startzeitstempelspalte,
+            "plan_end_timestamp": konfiguration.plan_endzeitstempelspalte,
             "lifecycle": konfiguration.lifecycle_spalte,
             "resource": konfiguration.ressourcen_spalte,
         }.items():
@@ -388,6 +399,8 @@ def _referenzen_pruefen(daten: pd.DataFrame, konfiguration: SemantischesMapping)
             {
                 konfiguration.startzeitstempelspalte,
                 konfiguration.endzeitstempelspalte,
+                konfiguration.plan_startzeitstempelspalte,
+                konfiguration.plan_endzeitstempelspalte,
                 konfiguration.lifecycle_spalte,
                 konfiguration.ressourcen_spalte,
                 *(wert.ressourcenspalte for wert in konfiguration.zeitstempelzuordnungen),
@@ -493,7 +506,12 @@ def erzeuge_event_log(
             "Zeitstempel sind zeitzonenlos; es wurde keine Zeitzone oder UTC-Annahme ergänzt."
         )
     ereignisse["timestamp"] = zeit
-    for name in ("start_timestamp", "end_timestamp"):
+    for name in (
+        "start_timestamp",
+        "end_timestamp",
+        "plan_start_timestamp",
+        "plan_end_timestamp",
+    ):
         if name in ereignisse:
             ereignisse[name] = pd.to_datetime(
                 ereignisse[name],

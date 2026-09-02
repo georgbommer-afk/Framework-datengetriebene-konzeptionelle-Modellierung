@@ -8,10 +8,11 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import PurePosixPath
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pandas as pd
 
+from framework_mvp.application.aktive_lineage_service import AktiveLineageService, LineageEndpunkt
 from framework_mvp.application.datenimport_service import (
     DatenimportService,
     Profilierungsergebnis,
@@ -28,7 +29,11 @@ from framework_mvp.application.transformation import (
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     TRANSFORMATIONSART_BEZEICHNUNGEN,
+    DateiMetadaten,
+    Dateityp,
+    ExcelImportparameter,
     Importvorgang,
+    Transformationsart,
     Transformationshistorie,
     Transformationsplan,
     Transformationsschritt,
@@ -54,11 +59,13 @@ class TransformationsService:
         import_service: ImportvorgangService,
         datenimport_service: DatenimportService,
         artefakte: ImportartefaktSpeicher,
+        aktive_lineage: AktiveLineageService | None = None,
     ) -> None:
         self._repository = repository
         self._import_service = import_service
         self._datenimport_service = datenimport_service
         self._artefakte = artefakte
+        self._aktive_lineage = aktive_lineage
 
     @staticmethod
     def schritt_hinzufuegen(
@@ -153,6 +160,73 @@ class TransformationsService:
     def import_laden(self, import_id: UUID) -> GeladenerImport | None:
         """Lädt einen Ausgangsimport über dessen vollständige Integritätsprüfung."""
         return self._import_service.import_laden(import_id)
+
+    def excel_tabellenblaetter(self, import_id: UUID) -> tuple[str, ...]:
+        """Listet weitere Blätter derselben unveränderten XLSX-Importdatei."""
+        vorgang, inhalt = self._import_service.originaldatei_laden(import_id)
+        if vorgang.dateityp is not Dateityp.XLSX:
+            return ()
+        return tuple(wert.name for wert in self._datenimport_service.excel_tabellenblaetter(inhalt))
+
+    def excel_arbeitsblatt_vorschau(
+        self, basis_import_id: UUID, tabellenblatt: str
+    ) -> tuple[pd.DataFrame, Profilierungsergebnis]:
+        """Liest und profiliert ein vorhandenes Blatt, ohne es bereits zu bestätigen."""
+        vorgang, inhalt = self._import_service.originaldatei_laden(basis_import_id)
+        if not isinstance(vorgang.importparameter, ExcelImportparameter):
+            raise Domaenenfehler("Die Ausgangsdatei ist keine XLSX-Arbeitsmappe.")
+        parameter = ExcelImportparameter(tabellenblatt, vorgang.importparameter.kopfzeile)
+        vorschau = self._datenimport_service.vorschau_erstellen(inhalt, parameter)
+        profil = self._datenimport_service.profil_erstellen(vorschau.vollstaendige_tabelle)
+        return vorschau.vollstaendige_tabelle, profil
+
+    def excel_arbeitsblatt_aufbereiten(
+        self,
+        basis_import_id: UUID,
+        tabellenblatt: str,
+        *,
+        import_id: UUID | None = None,
+        plan_id: UUID | None = None,
+        datensatz_id: UUID | None = None,
+    ) -> tuple[Importvorgang, Transformationsplan, Zwischendatensatz, pd.DataFrame]:
+        """Bestätigt ein zweites Blatt und erzeugt ein nicht aktiviertes Hilfs-T für den Join."""
+        vorgang, inhalt = self._import_service.originaldatei_laden(basis_import_id)
+        if vorgang.dateityp is not Dateityp.XLSX or not isinstance(
+            vorgang.importparameter, ExcelImportparameter
+        ):
+            raise Domaenenfehler("Weitere Tabellenblätter sind nur für XLSX verfügbar.")
+        blaetter = self.excel_tabellenblaetter(basis_import_id)
+        if tabellenblatt not in blaetter or tabellenblatt == vorgang.importparameter.tabellenblatt:
+            raise Domaenenfehler("Wählen Sie ein anderes vorhandenes Tabellenblatt aus.")
+        parameter = ExcelImportparameter(tabellenblatt, vorgang.importparameter.kopfzeile)
+        vorschau = self._datenimport_service.vorschau_erstellen(inhalt, parameter)
+        metadaten = DateiMetadaten(
+            vorgang.originaldateiname,
+            vorgang.sicherer_dateiname,
+            vorgang.dateigroesse_bytes,
+            vorgang.dateityp,
+            vorgang.sha256,
+        )
+        bestaetigt = self._import_service.import_bestaetigen(
+            import_id=import_id or uuid4(),
+            projekt_id=vorgang.projekt_id,
+            datenquellen_id=vorgang.datenquellen_id,
+            datei_metadaten=metadaten,
+            dateiinhalt=inhalt,
+            importparameter=parameter,
+            tabellenbezeichnung=tabellenblatt,
+            profil=self._datenimport_service.profil_erstellen(
+                vorschau.vollstaendige_tabelle
+            ).profil,
+        )
+        plan = Transformationsplan.neu(vorgang.projekt_id, (bestaetigt.import_id,))
+        if plan_id is not None:
+            plan = replace(plan, transformationsplan_id=plan_id)
+        ergebnis = self.vorschau(plan)
+        datensatz = self.zwischendatensatz_erzeugen(
+            plan, ergebnis, datensatz_id or uuid4(), aktivieren=False
+        )
+        return bestaetigt, plan, datensatz, ergebnis.daten
 
     def _importe_des_plans(self, plan: Transformationsplan) -> list[Importvorgang]:
         """Validiert den Projektbezug und liefert die Importe in Planreihenfolge."""
@@ -371,6 +445,7 @@ class TransformationsService:
         *,
         vorgaenger: Zwischendatensatz | None = None,
         angewendeter_schritt: Transformationsschritt | None = None,
+        aktivieren: bool = True,
     ) -> Zwischendatensatz:
         """Speichert CSV.GZ, Schema und Transformation mit Kompensation."""
         vorhanden = self._repository.datensatz_laden(datensatz_id)
@@ -545,11 +620,52 @@ class TransformationsService:
                 jetzt,
             )
             self._repository.datensatz_speichern(datensatz)
+            if aktivieren and self._aktive_lineage is not None:
+                self._aktive_lineage.aktivieren(
+                    plan.projekt_id,
+                    LineageEndpunkt.T,
+                    {"aktueller_zwischendatensatz_id": datensatz.zwischendatensatz_id},
+                )
             return datensatz
         except Exception:
             for artefakt in reversed(erzeugt):
                 self._artefakte.neu_erstelltes_artefakt_entfernen(artefakt)
             raise
+
+    def join_schritt_ersetzen(
+        self,
+        plan: Transformationsplan,
+        bisheriger_schritt_id: UUID,
+        neuer_schritt: Transformationsschritt,
+        datensatz_id: UUID,
+        *,
+        zusaetzliche_import_ids: tuple[UUID, ...] = (),
+    ) -> tuple[Transformationsplan, Transformationsergebnis, Zwischendatensatz]:
+        """Ersetzt einen Join auf seiner Vorgängerbasis und erzeugt eine neue T-Generation."""
+        if not any(
+            wert.transformationsschritt_id == bisheriger_schritt_id
+            and wert.typ is Transformationsart.TABELLEN_JOIN
+            for wert in plan.schritte
+        ):
+            raise Domaenenfehler("Der zu ersetzende Join-Schritt wurde nicht gefunden.")
+        jetzt = datetime.now(UTC)
+        schritte = tuple(
+            replace(neuer_schritt, reihenfolge=wert.reihenfolge)
+            if wert.transformationsschritt_id == bisheriger_schritt_id
+            else wert
+            for wert in plan.schritte
+        )
+        neuer_plan = Transformationsplan(
+            uuid4(),
+            plan.projekt_id,
+            tuple(dict.fromkeys((*plan.import_ids, *zusaetzliche_import_ids))),
+            schritte,
+            jetzt,
+            jetzt,
+        )
+        ergebnis = self.vorschau(neuer_plan)
+        datensatz = self.zwischendatensatz_erzeugen(neuer_plan, ergebnis, datensatz_id)
+        return neuer_plan, ergebnis, datensatz
 
     def zwischendatensatz_laden(self, datensatz_id: UUID) -> tuple[Zwischendatensatz, pd.DataFrame]:
         """Lädt CSV.GZ nach Prüfsummenprüfung und stellt technische Typen wieder her."""

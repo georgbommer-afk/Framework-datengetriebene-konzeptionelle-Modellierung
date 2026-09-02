@@ -366,7 +366,11 @@ def _seitenleiste(
 ) -> Projekt | None:
     if titel_anzeigen:
         st.sidebar.header("Projektrahmen")
-    aktuelle_id = st.session_state.ausgewaehlte_projekt_id
+    aktuelle_id_roh = st.session_state.ausgewaehlte_projekt_id
+    try:
+        aktuelle_id = UUID(str(aktuelle_id_roh)) if aktuelle_id_roh else None
+    except (TypeError, ValueError):
+        aktuelle_id = None
     if aktuelle_id not in {projekt.projekt_id for projekt in projekte}:
         aktuelle_id = None
     optionen = ["", *(str(projekt.projekt_id) for projekt in projekte)]
@@ -383,7 +387,7 @@ def _seitenleiste(
         projekt = _projekt_nach_id(projekte, neue_id)
         if projekt_aktivieren is not None:
             projekt_aktivieren(neue_id)
-        st.session_state.ausgewaehlte_projekt_id = neue_id
+        st.session_state.ausgewaehlte_projekt_id = str(neue_id) if neue_id else None
         st.session_state.wizard_entwurf = (
             _neuer_entwurf() if projekt is None else _entwurf_aus_projekt(projekt)
         )
@@ -869,7 +873,7 @@ def _speichern(
             "nicht gespeichert werden."
         )
         return None
-    st.session_state.ausgewaehlte_projekt_id = gespeichert.projekt_id
+    st.session_state.ausgewaehlte_projekt_id = str(gespeichert.projekt_id)
     st.session_state.auswahl_generation += 1
     st.session_state.wizard_entwurf = _entwurf_aus_projekt(gespeichert)
     st.session_state.aktuelles_projekt_id = str(gespeichert.projekt_id)

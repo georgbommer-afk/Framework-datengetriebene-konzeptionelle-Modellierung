@@ -344,8 +344,8 @@ def _indikatorbereich(
                 )
     if not bearbeitbar:
         st.caption(
-            "Das bestätigte Datenprofil ist unveränderlich. Für andere Bedingungen "
-            "muss ein neuer Import bestätigt werden."
+            "Das bestätigte Datenprofil ist unveränderlich. Zusätzliche Bedingungen "
+            "werden als neue Profilversion gespeichert."
         )
         return None
     with st.form(f"{session_key}_indikator_neu", clear_on_submit=True, border=True):

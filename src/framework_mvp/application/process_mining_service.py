@@ -12,6 +12,7 @@ from uuid import UUID
 
 import pandas as pd
 
+from framework_mvp.application.aktive_lineage_service import AktiveLineageService, LineageEndpunkt
 from framework_mvp.application.datenqualitaet_service import DatenqualitaetService
 from framework_mvp.application.ports.process_mining_repository import ProcessMiningRepository
 from framework_mvp.application.process_mining import (
@@ -64,11 +65,13 @@ class ProcessMiningService:
         qualitaet_service: DatenqualitaetService,
         artefakte: ImportartefaktSpeicher,
         adapter: Pm4pyAdapter | None = None,
+        aktive_lineage: AktiveLineageService | None = None,
     ) -> None:
         self._repository = repository
         self._qualitaet = qualitaet_service
         self._artefakte = artefakte
         self._adapter = adapter or Pm4pyAdapter()
+        self._aktive_lineage = aktive_lineage
 
     def grundlage_laden(
         self, freigabe_id: UUID, projekt_id: UUID | None = None
@@ -286,6 +289,20 @@ class ProcessMiningService:
                 self._artefakte.neu_erstelltes_artefakt_entfernen(artefakt)
             raise
         pd.testing.assert_frame_equal(daten, original, check_dtype=True)
+        if self._aktive_lineage is not None:
+            self._aktive_lineage.aktivieren(
+                analyse.projekt_id,
+                LineageEndpunkt.P_A_D,
+                {
+                    "aktuelle_freigabe_id": analyse.qualitaetspruefung_id,
+                    "freigegebenes_event_log_id": analyse.event_log_id,
+                    "aktuelles_event_log_id": analyse.event_log_id,
+                    "event_log_id": analyse.event_log_id,
+                    "aktuelle_analyse_id": analyse.analyse_id,
+                    "aktuelles_prozessmodell_id": analyse.analyse_id,
+                    "aktuelle_discovery_ergebnisse_id": analyse.analyse_id,
+                },
+            )
         return analyse
 
     def laden(self, analyse_id: UUID) -> tuple[ProcessMiningAnalyse, dict[str, Any]]:

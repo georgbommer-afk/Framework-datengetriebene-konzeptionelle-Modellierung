@@ -8,6 +8,7 @@ from uuid import UUID
 
 import pandas as pd
 
+from framework_mvp.application.aktive_lineage_service import AktiveLineageService, LineageEndpunkt
 from framework_mvp.application.transformations_service import TransformationsService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
@@ -45,10 +46,12 @@ class MappingtabelleService:
         repository: SQLiteMappingtabelleRepository,
         transformations_service: TransformationsService,
         artefakte: ImportartefaktSpeicher,
+        aktive_lineage: AktiveLineageService | None = None,
     ) -> None:
         self._repository = repository
         self._transformations_service = transformations_service
         self._artefakte = artefakte
+        self._aktive_lineage = aktive_lineage
 
     def datensatz_laden(self, datensatz_id: UUID) -> tuple[Zwischendatensatz, pd.DataFrame]:
         """Lädt T ausschließlich über dessen bestehende Integritätsprüfung."""
@@ -126,6 +129,15 @@ class MappingtabelleService:
         vorher = self._artefakte.artefakt_ersetzen(relativer_pfad, inhalt)
         try:
             self._repository.speichern(mapping, relativer_pfad, sha256)
+            if self._aktive_lineage is not None:
+                self._aktive_lineage.aktivieren(
+                    mapping.projekt_id,
+                    LineageEndpunkt.M,
+                    {
+                        "aktueller_zwischendatensatz_id": mapping.zwischendatensatz_id,
+                        "aktuelle_mappingtabelle_id": mapping.mapping_id,
+                    },
+                )
         except Exception:
             if vorher is None:
                 self._artefakte.neu_erstelltes_artefakt_entfernen(
