@@ -90,6 +90,28 @@ class SQLiteModellableitungRepository:
             ).fetchone()
         return None if zeile is None else self._ableitung(zeile)
 
+    def neueste_vorgaengerin(
+        self,
+        projekt_id: UUID,
+        analyse_id: UUID,
+        event_log_id: UUID,
+        aktuelle_aggregations_id: UUID,
+    ) -> Modellableitung | None:
+        """Findet nur eine nachvollziehbare Vorgängerableitung derselben Eingangslineage."""
+        with self._verbindung() as verbindung:
+            zeile = verbindung.execute(
+                "SELECT * FROM modellableitungen WHERE projekt_id=? AND analyse_id=? "
+                "AND event_log_id=? AND aggregations_id<>? "
+                "ORDER BY erstellt_am_utc DESC, rowid DESC LIMIT 1",
+                (
+                    str(projekt_id),
+                    str(analyse_id),
+                    str(event_log_id),
+                    str(aktuelle_aggregations_id),
+                ),
+            ).fetchone()
+        return None if zeile is None else self._ableitung(zeile)
+
     @staticmethod
     def _ableitung(zeile: sqlite3.Row) -> Modellableitung:
         return Modellableitung(

@@ -21,3 +21,11 @@ class ModellableitungRepository(Protocol):
         mappingversion: int,
         unsicherheitsfingerabdruck: str,
     ) -> Modellableitung | None: ...
+
+    def neueste_vorgaengerin(
+        self,
+        projekt_id: UUID,
+        analyse_id: UUID,
+        event_log_id: UUID,
+        aktuelle_aggregations_id: UUID,
+    ) -> Modellableitung | None: ...

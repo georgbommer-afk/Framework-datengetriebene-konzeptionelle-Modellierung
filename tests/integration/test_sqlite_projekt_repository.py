@@ -305,7 +305,7 @@ def test_schemaversion_ist_fuenf(tmp_path: Path) -> None:
     with sqlite3.connect(datenbankpfad) as verbindung:
         schemaversion = verbindung.execute("PRAGMA user_version").fetchone()[0]
 
-    assert schemaversion == 11
+    assert schemaversion == 12
 
 
 def test_neuere_schemaversion_wird_abgelehnt_und_nicht_zurueckgesetzt(
@@ -314,7 +314,7 @@ def test_neuere_schemaversion_wird_abgelehnt_und_nicht_zurueckgesetzt(
     """Eine neuere Datenbankversion bleibt unverändert und verhindert den Zugriff."""
     datenbankpfad = tmp_path / "projekte.sqlite"
     with sqlite3.connect(datenbankpfad) as verbindung:
-        verbindung.execute("PRAGMA user_version = 12")
+        verbindung.execute("PRAGMA user_version = 13")
     repository = SQLiteProjektRepository(datenbankpfad)
 
     with pytest.raises(NichtUnterstuetzteSchemaversion):
@@ -323,7 +323,7 @@ def test_neuere_schemaversion_wird_abgelehnt_und_nicht_zurueckgesetzt(
     with sqlite3.connect(datenbankpfad) as verbindung:
         schemaversion = verbindung.execute("PRAGMA user_version").fetchone()[0]
 
-        assert schemaversion == 12
+        assert schemaversion == 13
 
 
 def test_upsert_erhaelt_urspruenglichen_erstellungszeitpunkt(tmp_path: Path) -> None:

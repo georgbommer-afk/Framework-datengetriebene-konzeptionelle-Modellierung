@@ -14,7 +14,7 @@ def test_migration_7_zu_8_ergaenzt_a_g_ohne_bestandsverlust(tmp_path: Path) -> N
         verbindung.execute("PRAGMA user_version = 7")
         verbindung.commit()
         initialisiere_schema(verbindung)
-        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 12
         assert verbindung.execute("SELECT wert FROM bestand").fetchone()[0] == "unveraendert"
         spalten = {
             wert[1]

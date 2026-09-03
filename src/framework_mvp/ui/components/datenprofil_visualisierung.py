@@ -151,30 +151,72 @@ def _fehlwertdiagramm(ergebnis: Profilierungsergebnis) -> None:
     )
 
 
+def histogramm_spezifikation(
+    profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten
+) -> dict[str, object]:
+    """Bindet alle Layer an den vollständigen numerischen Wertebereich."""
+    assert profil.numerisch is not None and diagramm.numerisch is not None
+    numerisch = profil.numerisch
+    histogramm = diagramm.numerisch.histogramm
+    domain = [numerisch.minimum, numerisch.maximum]
+    return {
+        "layer": [
+            {
+                "mark": "bar",
+                "encoding": {
+                    "x": {
+                        "field": "untergrenze",
+                        "type": "quantitative",
+                        "title": "Wert",
+                        "scale": {"domain": domain},
+                    },
+                    "x2": {"field": "obergrenze"},
+                    "y": {"field": "anzahl", "type": "quantitative", "title": "Häufigkeit"},
+                },
+            },
+            {
+                "data": {"values": [{"median": histogramm.median}]},
+                "mark": {"type": "rule", "color": "#d62728", "strokeWidth": 3},
+                "encoding": {
+                    "x": {
+                        "field": "median",
+                        "type": "quantitative",
+                        "scale": {"domain": domain},
+                    }
+                },
+            },
+        ]
+    }
+
+
 def _numerische_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) -> None:
     numerisch = profil.numerisch
     assert numerisch is not None and diagramm.numerisch is not None
     if numerisch.gueltige_werte == 0:
         st.info("Diese Spalte enthält keine endlichen numerischen Werte für eine Detailanalyse.")
         return
-    kennzahlen = st.columns(6)
-    for spalte, (name, wert) in zip(
-        kennzahlen,
+    kennzahlen = st.columns(4)
+    for index, (name, wert) in enumerate(
         (
             ("Minimum", numerisch.minimum),
-            ("Maximum", numerisch.maximum),
-            ("Mittelwert", numerisch.mittelwert),
-            ("Median", numerisch.median),
             ("Q1", numerisch.q1),
+            ("Median", numerisch.median),
             ("Q3", numerisch.q3),
-        ),
-        strict=True,
+            ("Maximum", numerisch.maximum),
+            ("IQR", numerisch.interquartilsabstand),
+            ("Mittelwert", numerisch.mittelwert),
+        )
     ):
-        spalte.metric(name, _zahl(wert))
+        kennzahlen[index % len(kennzahlen)].metric(name, _zahl(wert))
     st.write(
         f"Gültige endliche Werte: **{numerisch.gueltige_werte:,}** · "
         f"Unendliche Werte: **{numerisch.unendliche_werte:,}** · "
         f"Potenzielle Ausreißer: **{numerisch.potenzielle_ausreisser:,}**"
+    )
+    st.caption(
+        "IQR-Regel: ["
+        f"{_zahl(numerisch.untere_ausreissergrenze)}, "
+        f"{_zahl(numerisch.obere_ausreissergrenze)}]"
     )
     histogramm = diagramm.numerisch.histogramm
     histogrammdaten = [asdict(wert) for wert in histogramm.klassen]
@@ -182,23 +224,7 @@ def _numerische_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) -
     st.caption("Das Diagramm verwendet aggregierte Histogrammklassen.")
     st.vega_lite_chart(
         {"values": histogrammdaten},
-        {
-            "layer": [
-                {
-                    "mark": "bar",
-                    "encoding": {
-                        "x": {"field": "untergrenze", "type": "quantitative", "title": "Wert"},
-                        "x2": {"field": "obergrenze"},
-                        "y": {"field": "anzahl", "type": "quantitative", "title": "Häufigkeit"},
-                    },
-                },
-                {
-                    "data": {"values": [{"median": histogramm.median}]},
-                    "mark": {"type": "rule", "color": "#d62728", "strokeWidth": 3},
-                    "encoding": {"x": {"field": "median", "type": "quantitative"}},
-                },
-            ]
-        },
+        histogramm_spezifikation(profil, diagramm),
         width="stretch",
     )
     box = diagramm.numerisch.boxplot
@@ -234,8 +260,13 @@ def _numerische_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) -
 def _kategoriale_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) -> None:
     kategorial = profil.kategorial
     assert kategorial is not None
-    st.metric("Eindeutige reguläre Ausprägungen", kategorial.eindeutige_auspraegungen)
-    st.metric("Häufigster Wert (Modus)", kategorial.haeufigster_wert or "–")
+    st.subheader("Häufigkeitsverteilung")
+    kennzahlen = st.columns(3)
+    kennzahlen[0].metric("Gültige reguläre Werte", kategorial.gueltige_werte)
+    kennzahlen[1].metric(
+        "Eindeutige reguläre Ausprägungen", kategorial.eindeutige_auspraegungen
+    )
+    kennzahlen[2].metric("Häufigster Wert (Modus)", kategorial.haeufigster_wert or "–")
     st.write(
         f"Gültige reguläre Werte: **{kategorial.gueltige_werte:,}** · "
         f"Seltene Werte unter 1 %: **{kategorial.seltene_werte:,}**"
@@ -246,6 +277,18 @@ def _kategoriale_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) 
         st.info("Diese Spalte enthält keine regulären kategorialen Werte.")
         return
     daten = [asdict(wert) for wert in diagramm.kategorien]
+    st.dataframe(
+        pd.DataFrame(
+            {
+                "Ausprägung": [wert["bezeichnung"] for wert in daten],
+                "Absolute Häufigkeit": [wert["anzahl"] for wert in daten],
+                "Relative Häufigkeit": [wert["anteil"] for wert in daten],
+            }
+        ),
+        hide_index=True,
+        width="stretch",
+        column_config={"Relative Häufigkeit": st.column_config.NumberColumn(format="percent")},
+    )
     st.vega_lite_chart(
         {"values": daten},
         {
@@ -381,6 +424,78 @@ def _indikatorbereich(
     return None
 
 
+def zeige_indikatorbedingungen(
+    ergebnis: Profilierungsergebnis,
+    *,
+    session_key: str,
+    bearbeitbar: bool,
+) -> IndikatorUiAktion | None:
+    """Bündelt vorhandene und neue Indikatorbedingungen spaltenübergreifend."""
+    profile = ergebnis.profil.spaltenprofile
+    auswertungen = [wert for profil in profile for wert in profil.indikatorauswertungen]
+    if auswertungen:
+        for index, auswertung in enumerate(auswertungen):
+            with st.container(border=True):
+                inhalt, aktion = st.columns((5, 1))
+                inhalt.markdown(
+                    f"**{auswertung.spaltenname}** "
+                    f"{_operatorbezeichnung(auswertung.operator)} "
+                    f"**{auswertung.vergleichswert}**"
+                )
+                inhalt.markdown(
+                    f"Ergebnis: **{auswertung.absolute_haeufigkeit:,} Beobachtungen**"
+                )
+                inhalt.markdown(f"$n_B = {auswertung.absolute_haeufigkeit:,}$")
+                inhalt.caption(
+                    "Auswertbare reguläre Beobachtungen: "
+                    f"{auswertung.auswertbare_beobachtungen:,}"
+                )
+                if bearbeitbar and aktion.button(
+                    "Entfernen",
+                    key=f"{session_key}_indikator_entfernen_{index}",
+                    width="stretch",
+                ):
+                    return IndikatorUiAktion(
+                        entfernen=Indikatorbedingung(
+                            auswertung.spaltenname,
+                            auswertung.operator,
+                            auswertung.vergleichswert,
+                        )
+                    )
+    else:
+        st.info("Noch keine Indikatorbedingung definiert.")
+    if not bearbeitbar:
+        st.caption(
+            "Das bestätigte Datenprofil ist unveränderlich. Änderungen werden als neue "
+            "Profilgeneration gespeichert."
+        )
+        return None
+    namen = [wert.spaltenname for wert in profile]
+    with st.form(f"{session_key}_indikator_neu", clear_on_submit=True, border=True):
+        st.markdown("**Neue Bedingung**")
+        spaltenname = st.selectbox("Spalte", namen)
+        profil = next(wert for wert in profile if wert.spaltenname == spaltenname)
+        operator = st.selectbox(
+            "Operator",
+            zulaessige_indikatoroperatoren(profil.technischer_datentyp),
+            format_func=_operatorbezeichnung,
+        )
+        if profil.technischer_datentyp is TechnischerDatentyp.BOOLEAN:
+            vergleichswert = st.selectbox(
+                "Vergleichswert",
+                ("true", "false"),
+                format_func=lambda wert: "Wahr" if wert == "true" else "Falsch",
+            )
+        else:
+            vergleichswert = st.text_input("Vergleichswert")
+        hinzufuegen = st.form_submit_button("Bedingung hinzufügen", type="primary")
+    if hinzufuegen:
+        return IndikatorUiAktion(
+            hinzufuegen=Indikatorbedingung(spaltenname, operator, vergleichswert)
+        )
+    return None
+
+
 def zeige_datenprofil(
     ergebnis: Profilierungsergebnis,
     *,
@@ -413,11 +528,7 @@ def zeige_datenprofil(
         _zeit_details(spaltenprofil, diagramm)
     else:
         st.info("Für den erkannten Datentyp ist keine technische Detailanalyse verfügbar.")
-    return _indikatorbereich(
-        spaltenprofil,
-        session_key=session_key,
-        bearbeitbar=indikator_bearbeitbar,
-    )
+    return None
 
 
 def zeige_gespeichertes_datenprofil(struktur: dict[str, object]) -> None:

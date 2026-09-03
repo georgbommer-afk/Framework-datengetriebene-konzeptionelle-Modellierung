@@ -187,8 +187,10 @@ class ErgebnisaggregationService:
         projekt_id: UUID,
         freigabe_id: UUID,
         analyse_id: UUID,
+        *,
+        profilreferenzen: tuple[dict[str, Any], ...] | None = None,
     ) -> Aggregationsgrundlage:
-        """Leitet U, R, T und E* aus der aktiven Kette ab und validiert P sowie A_D neu."""
+        """Lädt die Grundlage mit aktuellen oder ausdrücklich fixierten R-Generationen."""
         projekt = self._projekte.projekt_laden(projekt_id)
         if projekt is None:
             raise Domaenenfehler("Das aktive Projekt wurde nicht gefunden.")
@@ -230,13 +232,47 @@ class ErgebnisaggregationService:
         profilwerte: dict[str, float] = {}
         profilkennzahlen: list[ProfilkennzahlReferenz] = []
         datenquellen_ids: list[str] = []
+        referenzen_nach_import = {
+            str(wert.get("import_id")): wert for wert in (profilreferenzen or ())
+        }
+        if profilreferenzen is not None and set(referenzen_nach_import) != {
+            str(wert) for wert in datensatz.import_ids
+        }:
+            raise Importintegritaetsfehler(
+                "Die in der Ergebnisaggregation gespeicherten Profilreferenzen sind unvollständig."
+            )
         for import_id in datensatz.import_ids:
             geladen = self._transformationen.import_laden(import_id)
             if geladen is None or geladen.importvorgang.projekt_id != projekt_id:
                 raise Importintegritaetsfehler("Ein in T referenziertes Datenprofil R fehlt.")
-            profilgeneration = (
-                self._datenprofile.aktuellste(import_id) if self._datenprofile else None
-            )
+            gespeicherte_referenz = referenzen_nach_import.get(str(import_id))
+            if gespeicherte_referenz is not None:
+                if not gespeicherte_referenz.get("profil_id"):
+                    raise Importintegritaetsfehler(
+                        "Die explizit referenzierte Profilgeneration kann nicht geladen werden."
+                    )
+                if self._datenprofile is None:
+                    if (
+                        str(gespeicherte_referenz["profil_id"]) != str(import_id)
+                        or int(gespeicherte_referenz.get("fachversion", -1)) != 1
+                    ):
+                        raise Importintegritaetsfehler(
+                            "Die explizit referenzierte Profilgeneration kann nicht geladen werden."
+                        )
+                    profilgeneration = None
+                else:
+                    try:
+                        profilgeneration = self._datenprofile.laden(
+                            UUID(str(gespeicherte_referenz["profil_id"])), import_id=import_id
+                        )
+                    except (KeyError, TypeError, ValueError) as fehler:
+                        raise Importintegritaetsfehler(
+                            "Die Profilreferenz der Ergebnisaggregation ist ungültig."
+                        ) from fehler
+            else:
+                profilgeneration = (
+                    self._datenprofile.aktuellste(import_id) if self._datenprofile else None
+                )
             profil = profilgeneration.profil if profilgeneration is not None else geladen.profil
             fachversion = profilgeneration.fachversion if profilgeneration is not None else 1
             profil_id = profilgeneration.profil_id if profilgeneration is not None else import_id
@@ -265,6 +301,15 @@ class ErgebnisaggregationService:
                 "gesamtprofil": profil.gesamtprofil,
             }
             snapshot["profil_sha256"] = _sha(snapshot)
+            if gespeicherte_referenz is not None:
+                if (
+                    int(gespeicherte_referenz.get("fachversion", -1)) != fachversion
+                    or str(gespeicherte_referenz.get("profil_sha256", ""))
+                    != snapshot["profil_sha256"]
+                ):
+                    raise Importintegritaetsfehler(
+                        "Die gespeicherte Profilgeneration oder ihre Prüfsumme ist ungültig."
+                    )
             profil_snapshot.append(snapshot)
             gesamt = profil.gesamtprofil
             zeilen = int(gesamt.get("zeilen", 0))
@@ -800,11 +845,28 @@ class ErgebnisaggregationService:
                 or vorhanden.konfigurationsfingerabdruck != vorschau.konfigurationsfingerabdruck
             ):
                 raise Domaenenfehler("Die Aggregations-ID gehört bereits zu einem anderen Lauf.")
-            return self.laden(aggregations_id)[0]
+            gespeichert = self.laden(aggregations_id)[0]
+            if self._aktive_lineage is not None:
+                self._aktive_lineage.aktivieren(
+                    gespeichert.projekt_id,
+                    LineageEndpunkt.A_G,
+                    {
+                        "aktuelle_freigabe_id": gespeichert.freigabe_id,
+                        "freigegebenes_event_log_id": gespeichert.event_log_id,
+                        "aktuelles_event_log_id": gespeichert.event_log_id,
+                        "event_log_id": gespeichert.event_log_id,
+                        "aktuelle_analyse_id": gespeichert.analyse_id,
+                        "aktuelles_prozessmodell_id": gespeichert.analyse_id,
+                        "aktuelle_discovery_ergebnisse_id": gespeichert.analyse_id,
+                        "aktuelle_aggregations_id": gespeichert.aggregations_id,
+                    },
+                )
+            return gespeichert
         basis = self.grundlage_laden(
             vorschau.grundlage.projekt.projekt_id,
             vorschau.grundlage.freigabe.freigabe_id,
             vorschau.grundlage.analyse.analyse_id,
+            profilreferenzen=vorschau.grundlage.profilreferenzen,
         )
         if basis.eingabefingerabdruck != vorschau.grundlage.eingabefingerabdruck:
             raise Domaenenfehler(
@@ -1262,10 +1324,16 @@ class ErgebnisaggregationService:
             or _sha(a_g) != gesamtpruefsumme
         ):
             raise Importintegritaetsfehler("Metadaten oder Gesamtprüfsumme von A_G sind ungültig.")
+        gespeicherte_profile = tuple(
+            wert
+            for wert in a_g.get("lineage", {}).get("datenprofil_r", {}).get("profile", ())
+            if isinstance(wert, dict)
+        )
         basis = self.grundlage_laden(
             aggregation.projekt_id,
             aggregation.freigabe_id,
             aggregation.analyse_id,
+            profilreferenzen=gespeicherte_profile or None,
         )
         lineage = a_g.get("lineage", {})
         if (
@@ -1286,6 +1354,21 @@ class ErgebnisaggregationService:
                 )
         a_g["gesamtpruefsumme"] = gesamtpruefsumme
         return aggregation, a_g
+
+    def grundlage_fuer_aggregation(self, aggregations_id: UUID) -> Aggregationsgrundlage:
+        """Lädt die in A_G unveränderlich fixierten R-Generationen erneut."""
+        aggregation, a_g = self.laden(aggregations_id)
+        profile = tuple(
+            wert
+            for wert in a_g.get("lineage", {}).get("datenprofil_r", {}).get("profile", ())
+            if isinstance(wert, dict)
+        )
+        return self.grundlage_laden(
+            aggregation.projekt_id,
+            aggregation.freigabe_id,
+            aggregation.analyse_id,
+            profilreferenzen=profile or None,
+        )
 
     def a_g_download_laden(self, aggregations_id: UUID) -> bytes:
         """Liefert nach vollständiger Validierung exakt die gespeicherten A_G-Bytes."""

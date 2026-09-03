@@ -160,6 +160,8 @@ def test_katalog_besitzt_genau_16_versionierte_definitionen() -> None:
     assert all(
         wert.formel and wert.operanden and wert.bezugsmenge for wert in KPI_DEFINITIONEN.values()
     )
+    assert all(wert.formel_latex for wert in KPI_DEFINITIONEN.values())
+    assert len({wert.formel_latex for wert in KPI_DEFINITIONEN.values()}) == 16
 
 
 def test_nullnenner_ist_kontrolliert_nicht_berechenbar() -> None:

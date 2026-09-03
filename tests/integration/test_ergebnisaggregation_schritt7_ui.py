@@ -25,6 +25,7 @@ E = UUID("33333333-3333-3333-3333-333333333333")
 A = UUID("44444444-4444-4444-4444-444444444444")
 T = UUID("55555555-5555-5555-5555-555555555555")
 AG = UUID("66666666-6666-6666-6666-666666666666")
+ALTES_AG = UUID("77777777-7777-7777-7777-777777777777")
 JETZT = datetime(2026, 1, 1, tzinfo=UTC)
 AUFTRAG = Untersuchungsauftrag(
     "Problem", "Leistung bewerten", Systemtyp.KOMBINIERT, "Werk",
@@ -77,20 +78,33 @@ class Aggregation:
     def grundlage_laden(self, projekt_id, freigabe_id, analyse_id):
         assert (projekt_id, freigabe_id, analyse_id) == (P, F, A)
         return BASIS
-    def konfigurationsfingerabdruck(self, **kwargs): return "6" * 64
+    def konfigurationsfingerabdruck(self, **kwargs):
+        return str(st.session_state.get("test_konfigurationsfingerabdruck", "6" * 64))
     def vorschau(self, **kwargs):
         return SimpleNamespace(
             grundlage=BASIS, kpi_ergebnisse=(), conformance_ergebnis=None,
-            zeitvergleich_ergebnis=None, warnungen=(), konfigurationsfingerabdruck="6" * 64,
+            zeitvergleich_ergebnis=None, warnungen=(),
+            konfigurationsfingerabdruck=self.konfigurationsfingerabdruck(),
         )
     def speichern(self, aggregations_id, vorschau, menschlich_bestaetigt):
         assert menschlich_bestaetigt
+        st.session_state["test_speicheraufrufe"] = int(
+            st.session_state.get("test_speicheraufrufe", 0)
+        ) + 1
         return SimpleNamespace(aggregations_id=AG)
     def uebergabe_schritt8(self, aggregations_id, projekt_id, freigabe_id, analyse_id):
-        assert (aggregations_id, projekt_id, freigabe_id, analyse_id) == (AG, P, F, A)
+        assert aggregations_id in {AG, ALTES_AG}
+        assert (projekt_id, freigabe_id, analyse_id) == (P, F, A)
         st.session_state["test_uebergabe_schritt8"] = True
     def laden(self, aggregations_id):
-        return SimpleNamespace(aggregations_id=AG), {}
+        return SimpleNamespace(
+            aggregations_id=aggregations_id,
+            projekt_id=P,
+            freigabe_id=F,
+            analyse_id=A,
+            eingabefingerabdruck="5" * 64,
+            konfigurationsfingerabdruck="6" * 64,
+        ), {}
     def a_g_download_laden(self, aggregations_id): return b"{}"
 
 zeige_ergebnisaggregation_seite(Projekte(), Aggregation())
@@ -111,7 +125,7 @@ def _app(*, aktiv: bool = True, ressourcen_vollstaendig: bool = False) -> AppTes
 def test_fehlende_aktive_kette_blockiert_und_verweist_auf_schritt_sechs() -> None:
     app = _app(aktiv=False)
     assert not app.exception
-    assert any("U, R, T, E*, P und A_D" in wert.value for wert in app.error)
+    assert any("aktuellen Projektstand" in wert.value for wert in app.error)
     assert any(
         wert.label == "Zurück zu Schritt 6: Process Mining durchführen" for wert in app.button
     )
@@ -170,19 +184,83 @@ def test_unvollstaendige_ressourcen_zeigen_kompakte_manuelle_tabelle() -> None:
         "Offen / nicht bekannt",
     ]
     assert not next(
-        wert for wert in app.button if wert.label == "A_G berechnen und zu Schritt 8"
+        wert
+        for wert in app.button
+        if wert.label
+        == "Ergebnisaggregation berechnen und weiter zu Schritt 8: Modellbestandteile ableiten"
     ).disabled
 
 
 def test_a_g_speichern_setzt_id_uebergabe_und_schritt_acht() -> None:
     app = _app()
     next(
-        wert for wert in app.button if wert.label == "A_G berechnen und zu Schritt 8"
+        wert
+        for wert in app.button
+        if wert.label
+        == "Ergebnisaggregation berechnen und weiter zu Schritt 8: Modellbestandteile ableiten"
     ).click().run()
 
     assert app.session_state["aktuelle_aggregations_id"] == ("66666666-6666-6666-6666-666666666666")
     assert app.session_state["test_uebergabe_schritt8"] is True
     assert app.session_state["naechster_framework_bereich"] == ("8 Modellbestandteile ableiten")
+
+
+def test_unveraenderte_a_g_konfiguration_bewahrt_aktive_folgeartefakte() -> None:
+    app = _app()
+    projekt_id = "11111111-1111-1111-1111-111111111111"
+    alte_ag = "77777777-7777-7777-7777-777777777777"
+    app.session_state["aktuelle_aggregations_id"] = alte_ag
+    app.session_state[f"ag_konfiguration_bearbeiten_{projekt_id}"] = True
+    app.session_state["aktuelle_modellableitungs_id"] = "8" * 32
+    app.session_state["aktuelle_k_id"] = "9" * 32
+    app.session_state["aktuelle_o_id"] = "a" * 32
+    app.session_state["aktuelle_validierungslauf_id"] = "b" * 32
+    app.session_state["aktuelle_k_stern_id"] = "c" * 32
+    app = app.run()
+
+    next(
+        wert
+        for wert in app.button
+        if wert.label
+        == "Ergebnisaggregation berechnen und weiter zu Schritt 8: Modellbestandteile ableiten"
+    ).click().run()
+
+    assert app.session_state["aktuelle_aggregations_id"] == alte_ag
+    assert (
+        app.session_state["test_speicheraufrufe"]
+        if "test_speicheraufrufe" in app.session_state
+        else 0
+    ) == 0
+    assert app.session_state["aktuelle_modellableitungs_id"] == "8" * 32
+    assert app.session_state["aktuelle_validierungslauf_id"] == "b" * 32
+    assert app.session_state["aktuelle_k_stern_id"] == "c" * 32
+    assert app.session_state["naechster_framework_bereich"] == "8 Modellbestandteile ableiten"
+
+
+def test_geaenderte_a_g_konfiguration_loest_folgeartefakte_und_oeffnet_schritt_acht() -> None:
+    app = _app()
+    projekt_id = "11111111-1111-1111-1111-111111111111"
+    app.session_state["aktuelle_aggregations_id"] = "77777777-7777-7777-7777-777777777777"
+    app.session_state[f"ag_konfiguration_bearbeiten_{projekt_id}"] = True
+    app.session_state["test_konfigurationsfingerabdruck"] = "7" * 64
+    app.session_state["aktuelle_modellableitungs_id"] = "8" * 32
+    app.session_state["aktuelle_validierungslauf_id"] = "b" * 32
+    app.session_state["aktuelle_k_stern_id"] = "c" * 32
+    app = app.run()
+
+    next(
+        wert
+        for wert in app.button
+        if wert.label
+        == "Ergebnisaggregation berechnen und weiter zu Schritt 8: Modellbestandteile ableiten"
+    ).click().run()
+
+    assert app.session_state["aktuelle_aggregations_id"] == ("66666666-6666-6666-6666-666666666666")
+    assert app.session_state["test_speicheraufrufe"] == 1
+    assert "aktuelle_modellableitungs_id" not in app.session_state
+    assert "aktuelle_validierungslauf_id" not in app.session_state
+    assert "aktuelle_k_stern_id" not in app.session_state
+    assert app.session_state["naechster_framework_bereich"] == "8 Modellbestandteile ableiten"
 
 
 def test_schritt_7_hat_keine_redundante_vorschau_bestaetigung() -> None:

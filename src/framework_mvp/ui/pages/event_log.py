@@ -32,12 +32,17 @@ from framework_mvp.domain.models import (
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.ui.fortschritt import unterschritte_fuer
 from framework_mvp.ui.helpers import fachliche_auswahl
-from framework_mvp.ui.navigation import framework_bereich_oeffnen, schritt_abschliessen_und_weiter
+from framework_mvp.ui.navigation import (
+    framework_bereich_oeffnen,
+    schritt_abschliessen_und_weiter,
+    zeige_unterschritt_navigation,
+)
 from framework_mvp.ui.pages.semantisches_mapping import (
     _aktiven_datensatz_laden,
     _datensatzkontext,
     _projektkontext,
 )
+from framework_mvp.ui.session_cleanup import ABHAENGIGE_ID_SCHLUESSEL
 
 SCHRITTE = unterschritte_fuer(4)
 
@@ -108,9 +113,7 @@ def _persistierte_konfiguration_rehydrieren(
             "lifecycle_spalte": konfiguration.lifecycle_spalte,
             "ressourcen_spalte": konfiguration.ressourcen_spalte,
             "zeitstempelzuordnungen": konfiguration.zeitstempelzuordnungen,
-            "zusaetzliche_attribute": tuple(
-                wert.spaltenname for wert in konfiguration.zusaetzliche_attribute
-            ),
+            "zusaetzliche_attribute": tuple(konfiguration.zusaetzliche_attribute),
         }
     )
 
@@ -367,7 +370,7 @@ def _attribute(
             ),
             ("lifecycle_spalte", "Lifecycle-/Statusspalte", "lifecycle"),
         )
-        for zustandsschluessel, rollenlabel, zielname in rollendefinitionen:
+        for zustandsschluessel, rollenlabel, _zielname in rollendefinitionen:
             andere = {
                 str(zustand.get(anderer_schluessel, ""))
                 for anderer_schluessel, _, _ in rollendefinitionen
@@ -388,7 +391,7 @@ def _attribute(
                 )
             optionen = [wert for wert in optionenbasis if wert and wert not in andere]
             wert = fachliche_auswahl(
-                f"{rollenlabel} → {zielname}",
+                rollenlabel,
                 optionen,
                 wert=zustand.get(zustandsschluessel) or None,
                 format_func=label,
@@ -397,6 +400,17 @@ def _attribute(
             zustand[zustandsschluessel] = wert or ""
             if wert:
                 semantische_spalten.add(wert)
+        with st.expander("Technische Details", expanded=False):
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"Fachliche Rolle": rollenlabel, "Kanonischer Name": zielname}
+                        for _, rollenlabel, zielname in rollendefinitionen
+                    ]
+                ),
+                hide_index=True,
+                width="stretch",
+            )
     else:
         neue_zuordnungen: list[ZeitstempelZuordnung] = []
         verwendete_ressourcen = {
@@ -417,7 +431,7 @@ def _attribute(
                 if wert not in verwendete_status or wert == zuordnung.ressourcenspalte
             ]
             ressource = fachliche_auswahl(
-                "Ressourcenspalte → resource",
+                "Ressourcenspalte",
                 ressourcenoptionen,
                 wert=zuordnung.ressourcenspalte or None,
                 format_func=label,
@@ -432,7 +446,7 @@ def _attribute(
                 if wert not in verwendete_ressourcen or wert == zuordnung.statusspalte
             ]
             status = fachliche_auswahl(
-                "Lifecycle-/Statusspalte → lifecycle",
+                "Lifecycle-/Statusspalte",
                 statusoptionen,
                 wert=zuordnung.statusspalte or None,
                 format_func=label,
@@ -704,6 +718,16 @@ def _speichern(
         width="stretch",
     ):
         zustand["artefakt"] = service.speichern(event_log_id, konfiguration.mapping_id)
+        for schluessel in ABHAENGIGE_ID_SCHLUESSEL:
+            if schluessel not in {
+                "aktuelles_event_log_id",
+                "event_log_id",
+                "aktuelle_mapping_id",
+                "mapping_id",
+                "aktuelle_mappingtabelle_id",
+                "aktuelle_event_log_konfiguration_id",
+            }:
+                st.session_state.pop(schluessel, None)
         st.session_state.aktuelles_event_log_id = str(event_log_id)
         st.session_state.event_log_id = event_log_id
         schritt_abschliessen_und_weiter(aktueller_schritt=4, projekt_id=projekt_id)
@@ -720,18 +744,14 @@ def _speichern(
 def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
     if zustand["schritt"] == len(SCHRITTE):
         return
-    links, rechts = st.columns(2)
-    if links.button("Zurück", disabled=zustand["schritt"] == 1, width="stretch"):
-        zustand["schritt"] -= 1
-        st.rerun()
-    if rechts.button(
-        "Weiter",
-        disabled=not weiter,
-        type="primary",
-        width="stretch",
-    ):
-        zustand["schritt"] += 1
-        st.rerun()
+    zeige_unterschritt_navigation(
+        aktueller_unterschritt=zustand["schritt"],
+        anzahl_unterschritte=len(SCHRITTE),
+        weiter_erlaubt=weiter,
+        zurueck_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] - 1),
+        weiter_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] + 1),
+        schluessel="event_log_unterschritt_navigation",
+    )
 
 
 def zeige_event_log_seite(

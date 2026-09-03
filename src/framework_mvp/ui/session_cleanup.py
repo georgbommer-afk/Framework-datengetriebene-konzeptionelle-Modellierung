@@ -87,6 +87,7 @@ def projekt_zustand_bereinigen(zustand: MutableMapping[str, Any], projekt_id: UU
         "aktuelle_datenquellen_id",
         "aktueller_zwischendatensatz_id",
         "wizard_entwurf",
+        "wizard_entwurf_projekt_id",
         "wizard_schritt",
     ):
         zustand.pop(schluessel, None)

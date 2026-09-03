@@ -19,9 +19,14 @@ from framework_mvp.domain.models import (
     QualityGateStatus,
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
+from framework_mvp.ui.components.voraussetzungshinweis import zeige_voraussetzungshinweis
 from framework_mvp.ui.fortschritt import unterschritte_fuer
 from framework_mvp.ui.helpers import fachliche_auswahl
-from framework_mvp.ui.navigation import framework_bereich_oeffnen, schritt_abschliessen_und_weiter
+from framework_mvp.ui.navigation import (
+    framework_bereich_oeffnen,
+    schritt_abschliessen_und_weiter,
+    zeige_unterschritt_navigation,
+)
 from framework_mvp.ui.pages.semantisches_mapping import _projektkontext
 
 SCHRITTE = unterschritte_fuer(5)
@@ -48,20 +53,46 @@ def _persistierte_freigabe_rehydrieren(
     projekt_id: UUID,
     event_log_id: UUID,
     service: DatenqualitaetService,
-) -> None:
+) -> bool:
     """Lädt E* und seine menschlichen Entscheidungen einmalig in den Seitenzustand."""
     if zustand.get("persistenz_rehydriert"):
-        return
+        return True
     zustand["persistenz_rehydriert"] = True
     try:
         freigabe_id = UUID(str(st.session_state.get("aktuelle_freigabe_id")))
     except (TypeError, ValueError):
-        return
+        return True
     freigabe, _ = service.freigabe_laden(freigabe_id)
     if freigabe.projekt_id != projekt_id or freigabe.event_log_id != event_log_id:
-        raise Importintegritaetsfehler(
-            "Die aktive E*-Freigabe gehört nicht zum aktuellen Projekt und Event Log."
+        alte_freigabe_id = freigabe.freigabe_id
+        for schluessel in (
+            "aktuelle_freigabe_id",
+            "freigegebenes_event_log_id",
+            "aktuelle_analyse_id",
+            "aktuelles_prozessmodell_id",
+            "aktuelle_discovery_ergebnisse_id",
+            "aktuelle_aggregations_id",
+            "aktuelle_modellableitungs_id",
+            "aktuelle_validierungslauf_id",
+            "aktuelle_k_stern_id",
+        ):
+            st.session_state.pop(schluessel, None)
+        zeige_voraussetzungshinweis(
+            grund="Der Event Log wurde seit der letzten Qualitätsfreigabe geändert.",
+            konsequenz=(
+                "Die bisherige Freigabe bleibt historisch erhalten, gilt aber nicht für "
+                "den aktuellen Event Log."
+            ),
+            ziel_schritt=5,
+            aktionslabel="Qualitätsprüfung für aktuellen Event Log starten",
+            projekt_id=projekt_id,
+            technische_details={
+                "bisherige_freigabe_id": str(alte_freigabe_id),
+                "bisheriges_event_log_id": str(freigabe.event_log_id),
+                "aktuelles_event_log_id": str(event_log_id),
+            },
         )
+        return False
     zustand.update(
         {
             "freigabe_id": freigabe_id,
@@ -70,6 +101,7 @@ def _persistierte_freigabe_rehydrieren(
             "schritt": 4,
         }
     )
+    return True
 
 
 def _aktives_event_log(projekt_id: UUID, service: EventLogService) -> UUID | None:
@@ -90,20 +122,16 @@ def _aktives_event_log(projekt_id: UUID, service: EventLogService) -> UUID | Non
 
 
 def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
-    links, rechts = st.columns(2)
-    if links.button("Zurück", disabled=zustand["schritt"] == 1, width="stretch"):
-        zustand["schritt"] -= 1
-        st.rerun()
     if zustand["schritt"] == len(SCHRITTE):
         return
-    if rechts.button(
-        "Weiter",
-        disabled=not weiter,
-        type="primary",
-        width="stretch",
-    ):
-        zustand["schritt"] += 1
-        st.rerun()
+    zeige_unterschritt_navigation(
+        aktueller_unterschritt=zustand["schritt"],
+        anzahl_unterschritte=len(SCHRITTE),
+        weiter_erlaubt=weiter,
+        zurueck_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] - 1),
+        weiter_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] + 1),
+        schluessel="datenqualitaet_unterschritt_navigation",
+    )
 
 
 def _befundtabelle(befunde: tuple[QualityGateBefund, ...]) -> pd.DataFrame:
@@ -391,7 +419,15 @@ def _abschluss(
         or wert in kontext.lineage.get("herkunft_zusaetzliche_attribute", {})
     ]
     st.dataframe(e_stern.loc[:, fachspalten].head(200), width="stretch")
-    if st.button("Weiter zu Schritt 6", type="primary"):
+    links, rechts = st.columns(2)
+    if links.button("Zurück", width="stretch"):
+        zustand["schritt"] = len(SCHRITTE) - 1
+        st.rerun()
+    if rechts.button(
+        "Weiter zu Schritt 6: Process Mining durchführen",
+        type="primary",
+        width="stretch",
+    ):
         schritt_abschliessen_und_weiter(aktueller_schritt=5, projekt_id=projekt_id)
 
 
@@ -411,12 +447,13 @@ def zeige_datenqualitaet_seite(
         if event_log_id is None:
             return
         zustand = _zustand(projekt_id, event_log_id)
-        _persistierte_freigabe_rehydrieren(
+        if not _persistierte_freigabe_rehydrieren(
             zustand,
             projekt_id,
             event_log_id,
             qualitaet_service,
-        )
+        ):
+            return
         kontext = event_log_service.kontext_laden(event_log_id)
         ergebnis = qualitaet_service.quality_gate_pruefen(
             projekt_id,

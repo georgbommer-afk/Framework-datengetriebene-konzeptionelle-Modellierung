@@ -372,7 +372,20 @@ class ModellvalidierungService:
             aktuell,
         )
         if identisch is not None:
-            return self.laden(identisch.validierungslauf_id)[0]
+            gespeichert = self.laden(identisch.validierungslauf_id)[0]
+            if self._aktive_lineage is not None:
+                self._aktive_lineage.aktivieren(
+                    gespeichert.projekt_id,
+                    LineageEndpunkt.K_STERN,
+                    {
+                        "aktuelle_modellableitungs_id": gespeichert.modellableitungs_id,
+                        "aktuelle_k_id": gespeichert.k_id,
+                        "aktuelle_o_id": gespeichert.o_id,
+                        "aktuelle_validierungslauf_id": gespeichert.validierungslauf_id,
+                        "aktuelle_k_stern_id": gespeichert.k_stern_id,
+                    },
+                )
+            return gespeichert
         if self._repository.laden(validierungslauf_id) is not None:
             raise Domaenenfehler("Die Validierungslauf-ID wird bereits verwendet.")
         k_vorher, o_vorher = copy.deepcopy(basis.k), copy.deepcopy(basis.o)

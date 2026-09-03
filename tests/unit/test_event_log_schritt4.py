@@ -26,8 +26,8 @@ from framework_mvp.domain.models import (
 )
 
 
-def test_aktuelle_event_log_konfigurationsversion_ist_vier() -> None:
-    assert AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION == 4
+def test_aktuelle_event_log_konfigurationsversion_ist_fuenf() -> None:
+    assert AKTUELLE_EVENT_LOG_KONFIGURATIONSVERSION == 5
 
 
 def _konfiguration(
@@ -238,7 +238,7 @@ def test_version_drei_erzeugt_optionale_kanonische_rollen_mit_utc_zeiten() -> No
     assert ergebnis.herkunft_standardspalten["start_timestamp"] == "start"
 
 
-def test_version_vier_erlaubt_ereigniszeitstempel_auch_als_ist_startzeitpunkt() -> None:
+def test_version_fuenf_erlaubt_ereigniszeitstempel_auch_als_ist_startzeitpunkt() -> None:
     projekt_id, datensatz_id = uuid4(), uuid4()
     daten = pd.DataFrame(
         {
@@ -250,7 +250,7 @@ def test_version_vier_erlaubt_ereigniszeitstempel_auch_als_ist_startzeitpunkt() 
     )
     konfiguration = replace(
         _konfiguration(projekt_id, datensatz_id),
-        konfigurationsversion=4,
+        konfigurationsversion=5,
         zeitstempelspalte="IstStart",
         startzeitstempelspalte="IstStart",
         endzeitstempelspalte="IstEnde",
@@ -272,7 +272,7 @@ def test_version_vier_erlaubt_ereigniszeitstempel_auch_als_ist_startzeitpunkt() 
     assert ergebnis.herkunft_standardspalten["end_timestamp"] == "IstEnde"
 
 
-def test_version_vier_erlaubt_ereigniszeitstempel_auch_als_ist_endzeitpunkt() -> None:
+def test_version_fuenf_erlaubt_ereigniszeitstempel_auch_als_ist_endzeitpunkt() -> None:
     projekt_id, datensatz_id = uuid4(), uuid4()
     daten = pd.DataFrame(
         {
@@ -283,7 +283,7 @@ def test_version_vier_erlaubt_ereigniszeitstempel_auch_als_ist_endzeitpunkt() ->
     )
     konfiguration = replace(
         _konfiguration(projekt_id, datensatz_id),
-        konfigurationsversion=4,
+        konfigurationsversion=5,
         zeitstempelspalte="IstEnde",
         endzeitstempelspalte="IstEnde",
     )
@@ -300,16 +300,58 @@ def test_version_vier_erlaubt_ereigniszeitstempel_auch_als_ist_endzeitpunkt() ->
     assert ergebnis.herkunft_standardspalten["end_timestamp"] == "IstEnde"
 
 
-def test_version_vier_verbietet_dieselbe_quelle_fuer_ist_start_und_ist_ende() -> None:
+def test_version_fuenf_verbietet_dieselbe_quelle_fuer_ist_start_und_ist_ende() -> None:
     projekt_id, datensatz_id = uuid4(), uuid4()
     basis = _konfiguration(projekt_id, datensatz_id)
 
     with pytest.raises(Domaenenfehler, match="Ist-Startzeitpunkt und Ist-Endzeitpunkt"):
         replace(
             basis,
-            konfigurationsversion=4,
+            konfigurationsversion=5,
             startzeitstempelspalte="zeit",
             endzeitstempelspalte="zeit",
+        )
+
+
+def test_version_fuenf_erzeugt_getrennte_plan_start_und_endzeitpunkte() -> None:
+    projekt_id, datensatz_id = uuid4(), uuid4()
+    daten = pd.DataFrame(
+        {
+            "auftrag": ["A"],
+            "aktion": ["Bearbeiten"],
+            "IstStart": ["2025-01-01T08:00:00Z"],
+            "IstEnde": ["2025-01-01T09:00:00Z"],
+            "SollStart": ["2025-01-01T07:45:00Z"],
+            "SollEnde": ["2025-01-01T08:45:00Z"],
+        }
+    )
+    konfiguration = replace(
+        _konfiguration(projekt_id, datensatz_id),
+        konfigurationsversion=5,
+        zeitstempelspalte="IstStart",
+        startzeitstempelspalte="IstStart",
+        endzeitstempelspalte="IstEnde",
+        plan_startzeitstempelspalte="SollStart",
+        plan_endzeitstempelspalte="SollEnde",
+    )
+
+    ergebnis = erzeuge_event_log(daten, konfiguration, datensatz_id)
+
+    assert ergebnis.herkunft_standardspalten["plan_start_timestamp"] == "SollStart"
+    assert ergebnis.herkunft_standardspalten["plan_end_timestamp"] == "SollEnde"
+    assert str(ergebnis.ereignisse["plan_start_timestamp"].dt.tz) == "UTC"
+    assert str(ergebnis.ereignisse["plan_end_timestamp"].dt.tz) == "UTC"
+
+
+def test_version_fuenf_verbietet_dieselbe_planquelle_fuer_start_und_ende() -> None:
+    basis = _konfiguration(uuid4(), uuid4())
+
+    with pytest.raises(Domaenenfehler, match="Plan-Startzeitpunkt und Plan-Endzeitpunkt"):
+        replace(
+            basis,
+            konfigurationsversion=5,
+            plan_startzeitstempelspalte="soll",
+            plan_endzeitstempelspalte="soll",
         )
 
 

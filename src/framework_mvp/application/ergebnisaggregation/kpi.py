@@ -1,5 +1,6 @@
 # pyright: reportAttributeAccessIssue=false
 """Feste KPI-Gleichungen und explizite Operandenzuordnung gemäß A.7 bis A.10."""
+# ruff: noqa: E501 -- Die zentralen LaTeX-Formeln bleiben jeweils atomar lesbar.
 
 from dataclasses import asdict, dataclass
 from math import sqrt
@@ -43,6 +44,26 @@ def _operand(
     return KpiOperandDefinition(operand_id, bezeichnung, typ, quellen, datentyp)
 
 
+KPI_FORMELN_LATEX = {
+    "servicegrad": r"\frac{n_{\mathrm{befriedigte\ Kundenauftragspositionen}}}{n_{\mathrm{Kundenauftragspositionen}}}\cdot 100",
+    "verfuegbarkeit_planstarttermin": r"\frac{n_{\mathrm{startbare\ Produktionsauftraege}}}{n_{\mathrm{Produktionsauftraege}}}\cdot 100",
+    "liefertreue": r"\frac{n_{\mathrm{liefertreue\ Produktionsauftraege}}}{n_{\mathrm{Produktionsauftraege}}}\cdot 100",
+    "mittlere_dlz_warenausgang": r"\frac{\sum_i DLZ_{\mathrm{Warenausgang},i}}{n_{\mathrm{Lieferscheinpositionen}}}",
+    "mittlere_dlz_wareneingang": r"\frac{\sum_i DLZ_{\mathrm{Wareneingang},i}}{n_{\mathrm{Wareneingangspositionen}}}",
+    "tatsaechliche_wartezeit_aqt": r"t_{\mathrm{Auftragsausfuehrung}}-t_{\mathrm{Belegung}}-t_{\mathrm{Transport}}-t_{\mathrm{Verzoegerung}}",
+    "mittlere_transportzeit_je_warensendung": r"\frac{\sum_i t_{\mathrm{Transport},i}}{n_{\mathrm{Warensendungen}}}",
+    "mittlere_reaktionszeit": r"\frac{\sum_i(t_{\mathrm{erste\ Reaktion},i}-t_{\mathrm{Ausloesung},i})}{n}",
+    "standardabweichung_dlz_warenausgang": r"\sqrt{\frac{\sum_i(DLZ_i-\overline{DLZ})^2}{n_{\mathrm{Lieferscheinpositionen}}}}",
+    "anteil_regulaer_abgeschlossener_faelle": r"\frac{n_{\mathrm{regulaer\ abgeschlossen}}}{n_{\mathrm{betrachtete\ Faelle}}}\cdot 100",
+    "lieferqualitaetstreue": r"\frac{n_{\mathrm{qualitaetsgerechte\ Wareneingangspositionen}}}{n_{\mathrm{Wareneingangspositionen}}}\cdot 100",
+    "nacharbeitsquote_rr": r"\frac{n_{\mathrm{Nacharbeiten}}}{n_{\mathrm{verarbeitete\ Menge}}}\cdot 100",
+    "nutzungseffizienz_ue": r"\frac{t_{\mathrm{Produktionszeit}}}{t_{\mathrm{Auslastung\ der\ Einheit}}}\cdot 100",
+    "ruestzeitanteil": r"\frac{\sum_i t_{\mathrm{Ruest},i}}{\sum_i t_{\mathrm{Durchfuehrung},i}}\cdot 100",
+    "bewertete_umschlagshaeufigkeit": r"\frac{A_{\mathrm{Untersuchungsobjekt}}}{\overline{B}_{\mathrm{Zugang}}+\overline{B}_{\mathrm{Umlauf}}}",
+    "mittlere_kosten_produktionslogistik_pro_produktionsauftrag": r"\frac{K_{\mathrm{Produktionslogistik}}}{n_{\mathrm{Produktionsauftraege}}}",
+}
+
+
 def _definition(
     kpi_id: str,
     bezeichnung: str,
@@ -62,6 +83,7 @@ def _definition(
         einheit,
         einheit_eingeben,
         bezugsmenge,
+        formel_latex=KPI_FORMELN_LATEX[kpi_id],
     )
 
 

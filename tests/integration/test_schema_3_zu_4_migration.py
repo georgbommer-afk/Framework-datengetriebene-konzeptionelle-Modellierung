@@ -25,7 +25,7 @@ def test_schema_drei_wird_additiv_auf_vier_migriert(tmp_path: Path) -> None:
     _version_drei_anlegen(pfad)
     SQLiteProjektRepository(pfad).auflisten()
     with sqlite3.connect(pfad) as verbindung:
-        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 12
         tabellen = {zeile[0] for zeile in verbindung.execute("SELECT name FROM sqlite_master")}
     assert {
         "projekte",
@@ -83,6 +83,6 @@ def test_version_sechs_wird_abgelehnt(tmp_path: Path) -> None:
     """Eine unbekannte neuere Version bleibt unverändert."""
     pfad = tmp_path / "version-sechs.sqlite"
     with sqlite3.connect(pfad) as verbindung:
-        verbindung.execute("PRAGMA user_version = 12")
+        verbindung.execute("PRAGMA user_version = 13")
     with pytest.raises(NichtUnterstuetzteSchemaversion):
         SQLiteProjektRepository(pfad).auflisten()

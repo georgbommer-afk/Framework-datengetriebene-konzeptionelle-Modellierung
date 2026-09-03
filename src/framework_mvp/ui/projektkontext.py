@@ -39,6 +39,8 @@ PROJEKTARBEITSZUSTAENDE = (
 )
 
 PROJEKT_WIDGET_PRAEFIXE = (
+    "projektauswahl_",
+    "projektrahmen_",
     "etl_",
     "mappingtabelle_",
     "event_",
@@ -57,6 +59,7 @@ def projektkontext_bereinigen(zustand: MutableMapping[str, Any]) -> None:
         "aktuelles_projekt_id",
         "ausgewaehlte_projekt_id",
         "wizard_entwurf",
+        "wizard_entwurf_projekt_id",
         "wizard_schritt",
         "folgeartefakte_veraltet",
         "projektkontext_rehydriert",

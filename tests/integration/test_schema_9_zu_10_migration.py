@@ -15,7 +15,7 @@ def test_migration_9_zu_10_ergaenzt_k_stern_ohne_bestandsverlust(tmp_path: Path)
         verbindung.commit()
         initialisiere_schema(verbindung)
 
-        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 12
         assert verbindung.execute("SELECT wert FROM bestand").fetchone()[0] == "unveraendert"
         spalten = {
             wert[1]

@@ -152,7 +152,7 @@ def test_persistierte_produktionswerte_bleiben_projektbezogen_und_neuer_entwurf_
         materialflusskontinuitaet=Materialflusskontinuitaet.DISKONTINUIERLICH,
         produktion=Produktionsklassifikation(**VOLLSTAENDIGE_PRODUKTION),
     )
-    erstelle_projekt_service().projekt_anlegen(
+    gespeichertes_projekt = erstelle_projekt_service().projekt_anlegen(
         bezeichnung="Vollständiges Produktionsprojekt",
         untersuchungsauftrag=Untersuchungsauftrag(
             "Problem",
@@ -181,11 +181,10 @@ def test_persistierte_produktionswerte_bleiben_projektbezogen_und_neuer_entwurf_
     assert app.session_state["wizard_entwurf"]["produktion"] == {}
     assert app.session_state["wizard_entwurf"]["systemtyp"] is None
 
-    # AppTest behält den Widgetknoten des vorigen Reruns im Testbaum; im Browser
-    # wird er von Streamlit automatisch entsorgt.
-    app.session_state["projektauswahl_1"] = ""
-    auswahl = next(w for w in app.selectbox if w.label == "Vorhandenes Projekt auswählen")
-    auswahl.select_index(auswahl.options.index("Vollständiges Produktionsprojekt")).run()
+    app = AppTest.from_file(ANWENDUNGSPFAD)
+    app.session_state["aktuelles_projekt_id"] = str(gespeichertes_projekt.projekt_id)
+    app.session_state["ausgewaehlte_projekt_id"] = str(gespeichertes_projekt.projekt_id)
+    app.run()
     app.session_state["wizard_schritt"] = 3
     app.run()
     assert next(w for w in app.selectbox if w.label == "Auftragsabwicklungsstrategie").value == (
@@ -440,7 +439,8 @@ def test_vorhandene_datenquelle_ist_von_schritt_1_entkoppelt(
     assert not any("ERP-Export" in element.value for element in anwendung.markdown)
     assert not anwendung.date_input
     assert any(
-        element.label == "Projektrahmen speichern und zu Schritt 2" for element in anwendung.button
+            element.label == "Projektrahmen speichern und zu Schritt 2: ETL durchführen"
+            for element in anwendung.button
     )
 
 
@@ -496,7 +496,9 @@ def test_altprojekt_wird_ohne_verlust_verdeckt_geladen(
     _vollstaendiges_produktionsprofil(anwendung.session_state["wizard_entwurf"])
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    _schaltflaeche(anwendung, "Projektrahmen speichern und zu Schritt 2").click().run()
+    _schaltflaeche(
+        anwendung, "Projektrahmen speichern und zu Schritt 2: ETL durchführen"
+    ).click().run()
     erneut = service.projekt_laden(projekt.projekt_id)
     assert erneut is not None
     assert erneut.status is Projektstatus.AKTIV
@@ -522,7 +524,9 @@ def test_vollstaendiges_neues_projekt_navigiert_zu_etl(
     _vollstaendiges_produktionsprofil(entwurf)
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    _schaltflaeche(anwendung, "Projektrahmen speichern und zu Schritt 2").click().run()
+    _schaltflaeche(
+        anwendung, "Projektrahmen speichern und zu Schritt 2: ETL durchführen"
+    ).click().run()
     assert not anwendung.exception
     gespeicherte = erstelle_projekt_service().projekte_auflisten()
     assert len(gespeicherte) == 1
@@ -541,7 +545,9 @@ def test_validierungsfehler_verhindert_navigation(
     )
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
-    _schaltflaeche(anwendung, "Projektrahmen speichern und zu Schritt 2").click().run()
+    _schaltflaeche(
+        anwendung, "Projektrahmen speichern und zu Schritt 2: ETL durchführen"
+    ).click().run()
     assert anwendung.radio[0].value == "1 Projektrahmen definieren"
     assert any("müssen ausgefüllt sein" in element.value for element in anwendung.error)
     assert not erstelle_projekt_service().projekte_auflisten()
@@ -563,7 +569,9 @@ def test_nicht_ausgewaehlte_pflicht_dropdowns_blockieren_das_speichern(
     anwendung.session_state["wizard_schritt"] = 5
     anwendung.run()
 
-    _schaltflaeche(anwendung, "Projektrahmen speichern und zu Schritt 2").click().run()
+    _schaltflaeche(
+        anwendung, "Projektrahmen speichern und zu Schritt 2: ETL durchführen"
+    ).click().run()
 
     assert any("Wählen Sie für die Systemklassifikation" in wert.value for wert in anwendung.error)
     assert not erstelle_projekt_service().projekte_auflisten()

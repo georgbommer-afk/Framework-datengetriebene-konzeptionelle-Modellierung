@@ -147,18 +147,42 @@ _ENTSCHEIDUNGSOPTIONEN = {
 
 
 def _fachliche_details(
-    vorschau: Modellableitungsvorschau, fingerabdruck: str
+    vorschau: Modellableitungsvorschau,
+    fingerabdruck: str,
+    *,
+    vorbelegung: dict[ModellbestandteilId, FachlicheBestandteilentscheidung] | None = None,
+    erneut_pruefen: frozenset[ModellbestandteilId] = frozenset(),
 ) -> tuple[FachlicheBestandteilentscheidung, ...]:
     st.subheader("Fachliche Vorschläge und Übernahmeentscheidungen")
     offene_nach_bestandteil: dict[str, list[Any]] = {}
     for eintrag in vorschau.systematische_offene_eintraege:
         offene_nach_bestandteil.setdefault(eintrag.bestandteil_id.value, []).append(eintrag)
     entscheidungen: list[FachlicheBestandteilentscheidung] = []
+    vorbelegung = vorbelegung or {}
+    label_nach_art = {
+        wert: label for label, wert in _ENTSCHEIDUNGSOPTIONEN.items() if wert is not None
+    }
     for index, bestandteil in enumerate(vorschau.vorgeschlagene_bestandteile, 1):
         basis_key = f"schritt8_{fingerabdruck}_{bestandteil.bestandteil_id.value}"
+        vorherige_entscheidung = vorbelegung.get(bestandteil.bestandteil_id)
+        if vorherige_entscheidung is not None and f"{basis_key}_auswahl" not in st.session_state:
+            st.session_state[f"{basis_key}_auswahl"] = label_nach_art[
+                vorherige_entscheidung.entscheidung
+            ]
+            st.session_state[f"{basis_key}_begruendung"] = vorherige_entscheidung.begruendung
         with st.expander(
             f"{index}. {bestandteil.bezeichnung} · {_status_text(bestandteil.status)}"
         ):
+            if bestandteil.bestandteil_id in erneut_pruefen:
+                st.warning(
+                    "Der fachliche Vorschlag hat sich gegenüber der Vorgängergeneration "
+                    "geändert. Erneute fachliche Prüfung erforderlich."
+                )
+            elif vorherige_entscheidung is not None:
+                st.info(
+                    "Die Entscheidung der nachvollziehbaren Vorgängergeneration wurde "
+                    "als Bearbeitungsvorschlag übernommen."
+                )
             if not bestandteil.informationen:
                 st.info("Keine fachlich belastbare Information direkt übernehmbar.")
             for information in bestandteil.informationen:
@@ -185,7 +209,22 @@ def _fachliche_details(
                     key=f"{basis_key}_begruendung",
                     placeholder="Warum bleibt der Vorschlag offen oder wird nicht übernommen?",
                 ).strip()
-            if art is not None and (art is FachlicheEntscheidungsart.UEBERNEHMEN or begruendung):
+            bestaetigt = True
+            if (
+                vorherige_entscheidung is not None
+                and vorherige_entscheidung.entscheidung is not FachlicheEntscheidungsart.UEBERNEHMEN
+                and art is not FachlicheEntscheidungsart.UEBERNEHMEN
+            ):
+                bestaetigt = st.checkbox(
+                    "Vorherige offene oder ablehnende Entscheidung für diese neue "
+                    "K/O-Version bestätigen",
+                    key=f"{basis_key}_vorbelegung_bestaetigt",
+                )
+            if (
+                art is not None
+                and bestaetigt
+                and (art is FachlicheEntscheidungsart.UEBERNEHMEN or begruendung)
+            ):
                 signatur = f"{art.value}:{begruendung}"
                 if st.session_state.get(f"{basis_key}_signatur") != signatur:
                     st.session_state[f"{basis_key}_signatur"] = signatur
@@ -274,7 +313,7 @@ def _gespeicherte_ableitung(
         "application/json",
     )
     zurueck, weiter = st.columns(2)
-    if zurueck.button("Entscheidungen überarbeiten", width="stretch"):
+    if zurueck.button("Zurück", width="stretch"):
         basis = service.grundlage_laden(projekt_id, ableitung.aggregations_id)
         label_nach_art = {
             FachlicheEntscheidungsart.UEBERNEHMEN.value: "Vorschlag übernehmen",
@@ -347,7 +386,20 @@ def zeige_modellableitung_seite(
         return
 
     _eingangsuebersicht(basis)
-    entscheidungen = _fachliche_details(vorschlag, basis.eingabefingerabdruck)
+    vorbelegung: dict[ModellbestandteilId, FachlicheBestandteilentscheidung] = {}
+    erneut_pruefen: frozenset[ModellbestandteilId] = frozenset()
+    vorbefuellen = getattr(service, "vorherige_entscheidungsvorbelegung", None)
+    if callable(vorbefuellen):
+        try:
+            vorbelegung, erneut_pruefen = vorbefuellen(projekt_id, aggregations_id, vorschlag)
+        except (Domaenenfehler, Importintegritaetsfehler, KeyError, TypeError, ValueError):
+            vorbelegung, erneut_pruefen = {}, frozenset()
+    entscheidungen = _fachliche_details(
+        vorschlag,
+        basis.eingabefingerabdruck,
+        vorbelegung=vorbelegung,
+        erneut_pruefen=erneut_pruefen,
+    )
     entscheidungsfingerabdruck = service.entscheidungsfingerabdruck(entscheidungen)
     modellableitungs_id = uuid5(
         aggregations_id, f"{basis.eingabefingerabdruck}:{entscheidungsfingerabdruck}"

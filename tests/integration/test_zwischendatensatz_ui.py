@@ -105,7 +105,8 @@ def test_schritt_neun_zeigt_alle_artefaktpfade_ohne_attributfehler(
     next(
         wert
         for wert in anwendung.button
-        if wert.label == "Zwischendatensatz erstellen und zu Schritt 3"
+        if wert.label
+        == "Zwischendatensatz erstellen und weiter zu Schritt 3: Semantisches Mapping"
     ).click().run()
     assert not anwendung.exception
     ausgabe = "\n".join(wert.value for wert in anwendung.markdown)

@@ -155,7 +155,22 @@ def _schritt_10(*, aktiv: bool = True) -> AppTest:
 def test_schritt_9_verlangt_aktives_k_o_paar() -> None:
     app = _schritt_9(aktiv=False)
     assert not app.exception
-    assert any("aktiven IDs des gespeicherten K/O-Paars" in wert.value for wert in app.error)
+    assert any("aktive Ergebnisaggregation A_G" in wert.value for wert in app.error)
+    assert any(
+        wert.label == "Zurück zu Schritt 8: Modellbestandteile ableiten" for wert in app.button
+    )
+
+
+def test_schritt_9_erklaert_fehlendes_k_o_nach_neuer_aggregation_fachlich() -> None:
+    app = AppTest.from_string(SCHRITT_9_APP, default_timeout=10)
+    app.session_state["aktuelles_projekt_id"] = "11111111-1111-1111-1111-111111111111"
+    app.session_state["aktuelle_aggregations_id"] = "77777777-7777-7777-7777-777777777777"
+    app = app.run()
+
+    assert not app.exception
+    assert any(
+        "Schritt 8 ist für die aktuelle Ergebnisaggregation" in wert.value for wert in app.warning
+    )
     assert any(
         wert.label == "Zurück zu Schritt 8: Modellbestandteile ableiten" for wert in app.button
     )

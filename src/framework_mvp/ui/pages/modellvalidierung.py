@@ -404,7 +404,7 @@ def _gespeichertes_k_stern(
         "application/json",
     )
     links, rechts = st.columns(2)
-    if links.button("Validierung überarbeiten", width="stretch"):
+    if links.button("Zurück", width="stretch"):
         praefix = f"schritt9_{projekt_id}_{validierung.modellableitungs_id}"
         for behandlung in behandlungen:
             eintrag_id = str(behandlung["offener_eintrag_id"])
@@ -459,7 +459,17 @@ def zeige_modellvalidierung_seite(
     st.header("9 Modell ergänzen und validieren")
     ids = _aktive_ids()
     if ids is None:
-        st.error("Schritt 9 benötigt die aktiven IDs des gespeicherten K/O-Paars aus Schritt 8.")
+        if st.session_state.get("aktuelle_aggregations_id"):
+            st.warning(
+                "Schritt 8 ist für die aktuelle Ergebnisaggregation A_G noch nicht "
+                "abgeschlossen. Bestätigen Sie zunächst die Modellbestandteile und "
+                "speichern Sie K und O."
+            )
+        else:
+            st.error(
+                "Schritt 9 benötigt eine aktive Ergebnisaggregation A_G und das dazu "
+                "gespeicherte K/O-Paar aus Schritt 8."
+            )
         if st.button("Zurück zu Schritt 8: Modellbestandteile ableiten"):
             framework_bereich_oeffnen(schritt=8)
         return

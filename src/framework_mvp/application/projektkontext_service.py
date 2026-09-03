@@ -66,9 +66,20 @@ class ProjektkontextService:
         projekt_id = UUID(kanonische_projekt_id(projekt_id))
         checkpoint = self._aktive_lineage.laden(projekt_id)
         if checkpoint is not None:
-            referenzen = self._checkpoint_aufloesen(
-                projekt_id, checkpoint.endpunkt, checkpoint.referenzen
-            )
+            try:
+                referenzen = self._checkpoint_aufloesen(
+                    projekt_id, checkpoint.endpunkt, checkpoint.referenzen
+                )
+            except Exception:
+                wiederhergestellt = self._checkpoint_zuruecksetzen(
+                    projekt_id, checkpoint.endpunkt, checkpoint.referenzen
+                )
+                if wiederhergestellt is not None:
+                    return wiederhergestellt
+                checkpoint = self._aktive_lineage.aktivieren(
+                    projekt_id, LineageEndpunkt.PROJEKT, {}
+                )
+                return Projektkontext(projekt_id, checkpoint.framework_schritt, {})
             return Projektkontext(projekt_id, checkpoint.framework_schritt, referenzen)
         stufen: tuple[tuple[str, str, int, Callable[[UUID, UUID], dict[str, str]]], ...] = (
             ("modellvalidierungen", "validierungslauf_id", 10, self._aus_validierung),
@@ -93,9 +104,28 @@ class ProjektkontextService:
                 return Projektkontext(projekt_id, schritt, referenzen)
         return Projektkontext(projekt_id, 1, {})
 
+    def _checkpoint_zuruecksetzen(
+        self,
+        projekt_id: UUID,
+        fehlerhafter_endpunkt: LineageEndpunkt,
+        gespeichert: dict[str, str],
+    ) -> Projektkontext | None:
+        """Kürzt einen beschädigten Checkpoint bis zum letzten validen Vorgänger."""
+        reihenfolge = tuple(LineageEndpunkt)
+        grenze = reihenfolge.index(fehlerhafter_endpunkt)
+        for endpunkt in reversed(reihenfolge[:grenze]):
+            try:
+                referenzen = self._checkpoint_aufloesen(projekt_id, endpunkt, gespeichert)
+            except Exception:
+                continue
+            checkpoint = self._aktive_lineage.aktivieren(projekt_id, endpunkt, referenzen)
+            return Projektkontext(projekt_id, checkpoint.framework_schritt, referenzen)
+        return None
+
     @staticmethod
     def _endpunkt_fuer_schritt(schritt: int) -> LineageEndpunkt:
         return {
+            1: LineageEndpunkt.PROJEKT,
             2: LineageEndpunkt.T,
             3: LineageEndpunkt.M,
             4: LineageEndpunkt.EVENT_LOG_KONFIGURATION,
@@ -114,6 +144,8 @@ class ProjektkontextService:
         gespeichert: dict[str, str],
     ) -> dict[str, str]:
         """Prüft den aktiven Endpunkt und sämtliche darin gespeicherten Referenzen."""
+        if endpunkt is LineageEndpunkt.PROJEKT:
+            return {}
         schluessel, aufloesen = {
             LineageEndpunkt.T: ("aktueller_zwischendatensatz_id", self._aus_datensatz),
             LineageEndpunkt.M: ("aktuelle_mappingtabelle_id", self._aus_mappingtabelle),

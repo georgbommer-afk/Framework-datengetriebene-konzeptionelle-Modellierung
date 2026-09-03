@@ -16,6 +16,7 @@ from framework_mvp.infrastructure.persistence.sqlite_schema import initialisiere
 class LineageEndpunkt(StrEnum):
     """Speicherbare Endpunkte in fachlicher Abhängigkeitsreihenfolge."""
 
+    PROJEKT = "PROJEKT"
     T = "T"
     M = "M"
     EVENT_LOG_KONFIGURATION = "EVENT_LOG_KONFIGURATION"
@@ -28,6 +29,7 @@ class LineageEndpunkt(StrEnum):
 
 
 ENDPUNKT_SCHRITT = {
+    LineageEndpunkt.PROJEKT: 1,
     LineageEndpunkt.T: 2,
     LineageEndpunkt.M: 3,
     LineageEndpunkt.EVENT_LOG_KONFIGURATION: 4,
@@ -40,6 +42,7 @@ ENDPUNKT_SCHRITT = {
 }
 
 REFERENZEN_JE_ENDPUNKT: dict[LineageEndpunkt, frozenset[str]] = {
+    LineageEndpunkt.PROJEKT: frozenset(),
     LineageEndpunkt.T: frozenset({"aktuelle_datenquellen_id", "aktueller_zwischendatensatz_id"}),
     LineageEndpunkt.M: frozenset({"aktuelle_mappingtabelle_id"}),
     LineageEndpunkt.EVENT_LOG_KONFIGURATION: frozenset(
@@ -167,3 +170,16 @@ class AktiveLineageService:
         """Persistiert genau einmal den rekonstruierten Ausgangspunkt eines Altprojekts."""
         vorhanden = self.laden(projekt_id)
         return vorhanden or self.aktivieren(projekt_id, endpunkt, referenzen)
+
+    def entfernen(self, projekt_id: UUID | str) -> None:
+        """Löst ausschließlich den aktiven Checkpoint; Fachhistorie bleibt erhalten."""
+        projekt = kanonische_projekt_id(projekt_id)
+        verbindung = sqlite3.connect(self._datenbankpfad)
+        try:
+            initialisiere_schema(verbindung)
+            with verbindung:
+                verbindung.execute(
+                    "DELETE FROM aktive_projektlineage WHERE projekt_id=?", (projekt,)
+                )
+        finally:
+            verbindung.close()

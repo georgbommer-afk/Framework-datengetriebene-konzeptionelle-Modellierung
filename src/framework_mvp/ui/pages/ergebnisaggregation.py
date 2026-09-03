@@ -55,6 +55,12 @@ from framework_mvp.domain.models import (
     Vorkommensregel,
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
+from framework_mvp.ui.components.mathematische_formeln import (
+    zeige_performance_formeln,
+    zeige_token_fitness_formel,
+)
+from framework_mvp.ui.components.voraussetzungshinweis import zeige_voraussetzungshinweis
+from framework_mvp.ui.navigation import framework_bereich_oeffnen
 
 WOPED_NEXT_URL = "https://taminofischer.github.io/woped-next/"
 PETRI_GRUNDLAGEN_URL = "https://doi.org/10.1007/978-94-009-0649-5_6"
@@ -144,7 +150,8 @@ def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
     for kpi_id in kpi_ids:
         definition = kpi_definition(kpi_id)
         with st.expander(f"{definition.bezeichnung} · {definition.formel}"):
-            st.markdown(f"**Feste Formel:** {definition.formel}")
+            st.markdown("**Feste Formel:**")
+            st.latex(definition.formel_latex)
             st.caption(
                 f"Bezugsmenge: {definition.bezugsmenge} · Ergebnis: {definition.einheit} · "
                 f"Definitionsversion {definition.definitionsversion}"
@@ -877,6 +884,7 @@ def _performance_und_engpassanalyse(
         "Terminabweichung dT, Bearbeitungszeitabweichung dB und ressourcenbezogene Busy Ratio "
         "sind getrennte optionale Analysen. Es werden keine Ursachen oder Maßnahmen abgeleitet."
     )
+    zeige_performance_formeln()
     dt_aktiv = st.checkbox(
         "A. Termin-/Fertigstellungsabweichung dT – Gleichung 3.1",
         key="ag_performance_dt",
@@ -901,7 +909,7 @@ def _performance_und_engpassanalyse(
         "Plan-Ende": "plan_end_timestamp",
         "Ressource": "resource",
     }
-    st.write("**Zeitinformationen aus dem freigegebenen Event Log E\***")
+    st.write(r"**Zeitinformationen aus dem freigegebenen Event Log E\***")
     for bezeichnung, spalte in kanonische_rollen.items():
         if spalte in basis.event_log.columns:
             st.write(f"✓ {bezeichnung}: {spalte}")
@@ -1223,6 +1231,7 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
     if vorschau.conformance_ergebnis is not None:
         conformance = vorschau.conformance_ergebnis
         st.markdown("#### Sollprozess und Conformance Checking")
+        zeige_token_fitness_formel()
         st.metric("Fitness nach Gleichung 3.13", conformance.fitness)
         token_spalten = st.columns(4)
         token_spalten[0].metric("pT · produzierte Tokens", conformance.produzierte_tokens)
@@ -1496,15 +1505,12 @@ def zeige_ergebnisaggregation_seite(
         projekt = projekt_service.projekt_laden(projekt_id)
         if projekt is None:
             raise Domaenenfehler("Das aktive Projekt wurde nicht gefunden.")
-        basis = service.grundlage_laden(projekt_id, freigabe_id, analyse_id)
     except (Domaenenfehler, Importintegritaetsfehler, KeyError, TypeError) as fehler:
-        st.error(
-            "Schritt 7 benötigt die aktive, erneut validierte Kombination aus U, R, T, "
-            f"E*, P und A_D. Ursache: {fehler}"
-        )
+        st.error("Schritt 7 kann für den aktuellen Projektstand noch nicht geöffnet werden.")
+        with st.expander("Technische Details", expanded=False):
+            st.write(str(fehler))
         _navigation_zurueck()
         return
-    _eingangsartefakte(basis)
     aktive_aggregation = st.session_state.get("aktuelle_aggregations_id")
     bearbeitung_key = f"ag_konfiguration_bearbeiten_{projekt_id}"
     if aktive_aggregation and not st.session_state.get(bearbeitung_key, False):
@@ -1515,7 +1521,11 @@ def zeige_ergebnisaggregation_seite(
                 or aggregation.freigabe_id != freigabe_id
                 or aggregation.analyse_id != analyse_id
             ):
-                raise Domaenenfehler("A_G gehört nicht zur aktiven Artefaktkette.")
+                raise Domaenenfehler(
+                    "Die Ergebnisaggregation basiert auf einer älteren fachlichen Grundlage."
+                )
+            basis = service.grundlage_fuer_aggregation(aggregation.aggregations_id)
+            _eingangsartefakte(basis)
             _gespeichertes_a_g_anzeigen(a_g)
             st.success("A_G ist gespeichert und erneut validiert.")
             st.download_button(
@@ -1527,9 +1537,45 @@ def zeige_ergebnisaggregation_seite(
             if st.button("Konfiguration ansehen oder anpassen"):
                 st.session_state[bearbeitung_key] = True
                 st.rerun()
+            links, rechts = st.columns(2)
+            if links.button("Zurück", width="stretch"):
+                framework_bereich_oeffnen(schritt=6, projekt_id=projekt_id)
+            if rechts.button(
+                "Weiter zu Schritt 8: Modellbestandteile ableiten",
+                type="primary",
+                width="stretch",
+            ):
+                framework_bereich_oeffnen(schritt=8, projekt_id=projekt_id)
             return
         except (Domaenenfehler, Importintegritaetsfehler, ValueError) as fehler:
-            st.error(f"Das aktive A_G ist nicht mehr gültig: {fehler}")
+            zeige_voraussetzungshinweis(
+                grund=(
+                    "Die Ergebnisaggregation kann für die aktuelle fachliche Grundlage "
+                    "nicht weiterverwendet werden."
+                ),
+                konsequenz=(
+                    "Das frühere Ergebnis bleibt gespeichert. Konfigurieren Sie die "
+                    "Ergebnisaggregation für den aktuellen Projektstand neu."
+                ),
+                ziel_schritt=7,
+                aktionslabel="Ergebnisaggregation neu konfigurieren",
+                projekt_id=projekt_id,
+                technische_details={"ursache": str(fehler)},
+            )
+            return
+    try:
+        basis = service.grundlage_laden(projekt_id, freigabe_id, analyse_id)
+    except (Domaenenfehler, Importintegritaetsfehler, KeyError, TypeError) as fehler:
+        zeige_voraussetzungshinweis(
+            grund="Die aktuelle Grundlage für die Ergebnisaggregation ist unvollständig.",
+            konsequenz="Prüfen Sie das Prozessmodell und führen Sie Schritt 7 danach erneut aus.",
+            ziel_schritt=6,
+            aktionslabel="Zu Schritt 6: Process Mining durchführen",
+            projekt_id=projekt_id,
+            technische_details={"ursache": str(fehler)},
+        )
+        return
+    _eingangsartefakte(basis)
     kpi_konfigurationen = _kpi_konfigurationen(basis)
     sollmodell, mapping, conformance = _sollmodell_und_mapping(basis)
     st.subheader("4. Ressourcen, Entitäten, Warteschlangen und Zeitgrößen")
@@ -1590,9 +1636,13 @@ def zeige_ergebnisaggregation_seite(
             "Eingaben oder Entscheidungen wurden geändert. Die Vorschau muss neu berechnet werden."
         )
     st.subheader("6. A_G berechnen")
-    if st.button(
-        "A_G berechnen und zu Schritt 8",
+    navigation_links, navigation_rechts = st.columns(2)
+    if navigation_links.button("Zurück", width="stretch"):
+        framework_bereich_oeffnen(schritt=6, projekt_id=projekt_id)
+    if navigation_rechts.button(
+        "Ergebnisaggregation berechnen und weiter zu Schritt 8: Modellbestandteile ableiten",
         type="primary",
+        width="stretch",
         disabled=ressourcenanalyse is None,
     ):
         try:
@@ -1628,26 +1678,38 @@ def zeige_ergebnisaggregation_seite(
                     f"{basis.eingabefingerabdruck}:{vorschau.konfigurationsfingerabdruck}",
                 )
             )
-            aggregation = service.speichern(aggregations_id, vorschau, menschlich_bestaetigt=True)
+            unveraendert = False
+            bisherige_aggregation = None
+            if aktive_aggregation:
+                bisherige_aggregation, _ = service.laden(UUID(str(aktive_aggregation)))
+                unveraendert = (
+                    bisherige_aggregation.eingabefingerabdruck
+                    == vorschau.grundlage.eingabefingerabdruck
+                    and bisherige_aggregation.konfigurationsfingerabdruck
+                    == vorschau.konfigurationsfingerabdruck
+                )
+            aggregation = (
+                bisherige_aggregation
+                if unveraendert and bisherige_aggregation is not None
+                else service.speichern(aggregations_id, vorschau, menschlich_bestaetigt=True)
+            )
             st.session_state.aktuelle_aggregations_id = str(aggregation.aggregations_id)
-            for schluessel in (
-                "aktuelle_modellableitungs_id",
-                "aktuelle_k_id",
-                "aktuelle_o_id",
-                "aktuelle_validierungslauf_id",
-                "aktuelle_k_stern_id",
-                "schritt10_ausgabe",
-                "schritt10_ausgabe_signatur",
-            ):
-                st.session_state.pop(schluessel, None)
+            if not unveraendert:
+                for schluessel in (
+                    "aktuelle_modellableitungs_id",
+                    "aktuelle_k_id",
+                    "aktuelle_o_id",
+                    "aktuelle_validierungslauf_id",
+                    "aktuelle_k_stern_id",
+                    "schritt10_ausgabe",
+                    "schritt10_ausgabe_signatur",
+                ):
+                    st.session_state.pop(schluessel, None)
             service.uebergabe_schritt8(
                 aggregation.aggregations_id, projekt_id, freigabe_id, analyse_id
             )
-            st.session_state.naechster_framework_bereich = "8 Modellbestandteile ableiten"
-            st.success(
-                "A_G wurde gespeichert. Die Conformance-, Performance- und "
-                "Engpassergebnisse werden unten direkt angezeigt."
-            )
+            st.session_state.pop(bearbeitung_key, None)
+            framework_bereich_oeffnen(schritt=8, projekt_id=projekt_id)
         except (
             Domaenenfehler,
             Importintegritaetsfehler,

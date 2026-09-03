@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
 from framework_mvp.bootstrap import (
     erstelle_autorisierungs_service,
+    erstelle_datenprofil_service,
     erstelle_datenqualitaet_service,
     erstelle_demoprojekt_service,
     erstelle_ergebnisaggregation_service,
@@ -22,7 +23,9 @@ from framework_mvp.bootstrap import (
     erstelle_projekt_service,
     erstelle_projektarchiv_service,
     erstelle_projektkontext_service,
+    erstelle_transformations_service,
 )
+from framework_mvp.domain.models import ModellbestandteilId
 from framework_mvp.domain.models.zugriff import Projektaktion, Zugriffskontext
 from framework_mvp.ui.projektkontext import projektkontext_setzen
 from framework_mvp.workspace import WorkspaceKonfiguration
@@ -193,6 +196,108 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
                 f"SELECT COUNT(*) FROM {tabelle} WHERE projekt_id=?",  # noqa: S608
                 (str(projekt_id),),
             ).fetchone()[0]
+
+
+def test_neue_a_g_generation_bleibt_nach_neustart_aktiv_und_nutzt_kontrollierte_vorbelegung(
+    tmp_path: Path,
+) -> None:
+    datenbank = tmp_path / "lineage.sqlite"
+    workspace = WorkspaceKonfiguration.ermitteln(tmp_path / "lineage-workspace")
+    zugriff = Zugriffskontext.gast("lineage-" + "d" * 40)
+    demo = erstelle_demoprojekt_service(datenbank, workspace).erstellen(zugriff)
+    projekt_id = demo.projekt.projekt_id
+    alter_kontext = erstelle_projektkontext_service(datenbank, workspace).wiederherstellen(
+        projekt_id
+    )
+    with sqlite3.connect(datenbank) as verbindung:
+        k_stern_pfad = verbindung.execute(
+            "SELECT relativer_k_stern_pfad FROM modellvalidierungen WHERE validierungslauf_id=?",
+            (alter_kontext.referenzen["aktuelle_validierungslauf_id"],),
+        ).fetchone()[0]
+    (workspace.basisverzeichnis / str(k_stern_pfad)).write_bytes(b"beschaedigt")
+
+    gekuerzter_kontext = erstelle_projektkontext_service(datenbank, workspace).wiederherstellen(
+        projekt_id
+    )
+    assert gekuerzter_kontext.framework_schritt == 9
+    assert (
+        gekuerzter_kontext.referenzen["aktuelle_modellableitungs_id"]
+        == (alter_kontext.referenzen["aktuelle_modellableitungs_id"])
+    )
+    assert "aktuelle_validierungslauf_id" not in gekuerzter_kontext.referenzen
+
+    aggregationen = erstelle_ergebnisaggregation_service(datenbank, workspace)
+    alte_aggregations_id = UUID(alter_kontext.referenzen["aktuelle_aggregations_id"])
+    _, altes_a_g = aggregationen.laden(alte_aggregations_id)
+    alte_profilreferenz = altes_a_g["lineage"]["datenprofil_r"]["profile"][0]
+    transformationen = erstelle_transformations_service(datenbank, workspace)
+    datensatz, _ = transformationen.zwischendatensatz_laden(
+        UUID(alter_kontext.referenzen["aktueller_zwischendatensatz_id"])
+    )
+    profile = erstelle_datenprofil_service(datenbank, workspace)
+    r1 = profile.aktuellste(datensatz.import_ids[0])
+    r2 = profile.erweitern(datensatz.import_ids[0], r1.profil.indikatorbedingungen)
+    assert r2.fachversion == r1.fachversion + 1
+    _, weiterhin_gueltiges_a_g = aggregationen.laden(alte_aggregations_id)
+    assert weiterhin_gueltiges_a_g["lineage"]["datenprofil_r"]["profile"][0] == (
+        alte_profilreferenz
+    )
+    vorschau = aggregationen.vorschau(
+        projekt_id=projekt_id,
+        freigabe_id=UUID(gekuerzter_kontext.referenzen["aktuelle_freigabe_id"]),
+        analyse_id=UUID(gekuerzter_kontext.referenzen["aktuelle_analyse_id"]),
+        entitaetstyp="Fachlich geänderte Regressionstest-Entität",
+    )
+    neue_aggregation = aggregationen.speichern(uuid4(), vorschau, menschlich_bestaetigt=True)
+    _, neues_a_g = aggregationen.laden(neue_aggregation.aggregations_id)
+    neue_profilreferenz = neues_a_g["lineage"]["datenprofil_r"]["profile"][0]
+    assert neue_profilreferenz["profil_id"] == str(r2.profil_id)
+    assert neue_profilreferenz["fachversion"] == r2.fachversion
+
+    neuer_kontext = erstelle_projektkontext_service(datenbank, workspace).wiederherstellen(
+        projekt_id
+    )
+    assert neuer_kontext.framework_schritt == 8
+    assert neuer_kontext.referenzen["aktuelle_aggregations_id"] == str(
+        neue_aggregation.aggregations_id
+    )
+    assert "aktuelle_modellableitungs_id" not in neuer_kontext.referenzen
+    assert "aktuelle_validierungslauf_id" not in neuer_kontext.referenzen
+
+    modellableitung = erstelle_modellableitung_service(datenbank, workspace)
+    basis = modellableitung.grundlage_laden(projekt_id, neue_aggregation.aggregations_id)
+    neuer_vorschlag = modellableitung.vorschau(
+        projekt_id=projekt_id,
+        aggregations_id=neue_aggregation.aggregations_id,
+        modellableitungs_id=uuid4(),
+        k_id=uuid4(),
+        o_id=uuid4(),
+    )
+    vorbelegung, erneut_pruefen = modellableitung.vorherige_entscheidungsvorbelegung(
+        projekt_id, neue_aggregation.aggregations_id, neuer_vorschlag
+    )
+    assert basis.aggregation.aggregations_id == neue_aggregation.aggregations_id
+    assert ModellbestandteilId.PROBLEMSTELLUNG in vorbelegung
+    assert set(vorbelegung).isdisjoint(erneut_pruefen)
+    assert len(vorbelegung) + len(erneut_pruefen) == 16
+
+    nach_neustart = erstelle_projektkontext_service(datenbank, workspace).wiederherstellen(
+        projekt_id
+    )
+    assert nach_neustart.referenzen == neuer_kontext.referenzen
+    with sqlite3.connect(datenbank) as verbindung:
+        assert verbindung.execute(
+            "SELECT COUNT(*) FROM ergebnisaggregationen WHERE projekt_id=?",
+            (str(projekt_id),),
+        ).fetchone() == (2,)
+        assert verbindung.execute(
+            "SELECT COUNT(*) FROM modellableitungen WHERE projekt_id=?",
+            (str(projekt_id),),
+        ).fetchone() == (1,)
+        assert verbindung.execute(
+            "SELECT COUNT(*) FROM modellvalidierungen WHERE projekt_id=?",
+            (str(projekt_id),),
+        ).fetchone() == (1,)
 
 
 def test_import_nachpruefung_rollt_unvollstaendiges_neuprojekt_zurueck(

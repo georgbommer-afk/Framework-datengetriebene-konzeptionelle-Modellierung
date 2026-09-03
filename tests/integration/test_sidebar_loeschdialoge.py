@@ -75,21 +75,22 @@ def test_loeschaktionen_liegen_im_sidebar_projektrahmen_ohne_bestaetigungstext()
     app = _app()
     assert not app.exception
     sidebar_labels = {wert.label for wert in app.sidebar.button}
-    assert {"Projekt löschen", "Datensatz löschen"} <= sidebar_labels
+    assert sidebar_labels >= {"Daten löschen"}
+    assert "Projekt löschen" not in sidebar_labels
+    assert "Datensatz löschen" not in sidebar_labels
     assert not any(
         "Bestätigung" in wert.label or "Kurz-ID" in wert.label for wert in app.text_input
     )
 
     ohne_datensatz = _app(mit_datensaetzen=False)
-    assert "Projekt löschen" in {wert.label for wert in ohne_datensatz.sidebar.button}
-    assert "Datensatz löschen" not in {wert.label for wert in ohne_datensatz.sidebar.button}
+    assert "Daten löschen" in {wert.label for wert in ohne_datensatz.sidebar.button}
 
 
 def test_projektloeschung_setzt_nur_pending_navigation_ohne_widgetabsturz() -> None:
     app = _app()
-    next(wert for wert in app.sidebar.button if wert.label == "Projekt löschen").click().run()
+    next(wert for wert in app.sidebar.button if wert.label == "Daten löschen").click().run()
     assert len(app.get("dialog")) == 1
-    assert any("Projekt Löschtest" in wert.value for wert in app.warning)
+    assert any("alle zugehörigen Artefakte" in wert.value for wert in app.warning)
     assert not app.exception
 
     projekt_id = UUID("11111111-1111-1111-1111-111111111111")
@@ -108,9 +109,10 @@ def test_projektloeschung_setzt_nur_pending_navigation_ohne_widgetabsturz() -> N
 
 def test_datensatzloeschung_trifft_aktive_auswahl_und_oeffnet_schritt_zwei() -> None:
     app = _app()
-    next(wert for wert in app.sidebar.button if wert.label == "Datensatz löschen").click().run()
+    next(wert for wert in app.sidebar.button if wert.label == "Daten löschen").click().run()
     assert len(app.get("dialog")) == 1
-    assert any("20 Zeilen" in wert.value for wert in app.warning)
+    auswahl = next(wert for wert in app.radio if wert.label == "Was möchten Sie löschen?")
+    assert "Einzelnen Zwischendatensatz löschen" in auswahl.options
     assert not app.exception
 
     projekt_id = UUID("11111111-1111-1111-1111-111111111111")

@@ -110,11 +110,38 @@ class DatenprofilService:
     def aktuellste(self, import_id: UUID) -> Profilgeneration:
         return self.fuer_import(import_id)[-1]
 
+    def laden(self, profil_id: UUID, *, import_id: UUID | None = None) -> Profilgeneration:
+        """Lädt genau eine immutable Profilgeneration und prüft optional ihre Importbasis."""
+        if import_id is not None and profil_id == import_id:
+            generation = self._legacy(import_id)
+        else:
+            verbindung = sqlite3.connect(self._datenbankpfad)
+            verbindung.row_factory = sqlite3.Row
+            try:
+                initialisiere_schema(verbindung)
+                zeile = verbindung.execute(
+                    "SELECT * FROM datenprofil_generationen WHERE profil_id=?",
+                    (str(profil_id),),
+                ).fetchone()
+            finally:
+                verbindung.close()
+            if zeile is None:
+                # In R1 ist die Profil-ID aus Kompatibilitätsgründen identisch mit der Import-ID.
+                generation = self._legacy(profil_id)
+            else:
+                generation = self._aus_zeile(zeile)
+        if import_id is not None and generation.import_id != import_id:
+            raise Importintegritaetsfehler(
+                "Die referenzierte Profilgeneration gehört nicht zur erwarteten Importbasis."
+            )
+        return generation
+
     def erweitern(
         self,
         import_id: UUID,
         indikatorbedingungen: tuple[Indikatorbedingung, ...],
         *,
+        zusaetzliche_platzhalter: tuple[str, ...] | None = None,
         vorgaenger_profil_id: UUID | None = None,
         profil_id: UUID | None = None,
     ) -> Profilgeneration:
@@ -130,8 +157,10 @@ class DatenprofilService:
                 raise Importintegritaetsfehler("Die gewählte Vorgänger-Profilgeneration fehlt.")
         vorgang, raw = self._importe.originaldatei_laden(import_id)
         vorschau = self._datenimport.vorschau_erstellen(raw, vorgang.importparameter)
-        platzhalter = tuple(
-            vorgaenger.profil.gesamtprofil.get("bestaetigte_zusaetzliche_platzhalter", ())
+        platzhalter = (
+            tuple(vorgaenger.profil.gesamtprofil.get("bestaetigte_zusaetzliche_platzhalter", ()))
+            if zusaetzliche_platzhalter is None
+            else tuple(zusaetzliche_platzhalter)
         )
         profil = self._datenimport.profil_erstellen(
             vorschau.vollstaendige_tabelle,

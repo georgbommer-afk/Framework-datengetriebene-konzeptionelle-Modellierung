@@ -38,7 +38,7 @@ zeige_transformationseditor(
 ETL_NAVIGATION_APP = r"""
 import streamlit as st
 
-from framework_mvp.ui.pages.etl import _navigation
+from framework_mvp.ui.navigation import zeige_unterschritt_navigation
 
 zustand = st.session_state.setdefault(
     "zustand",
@@ -48,7 +48,14 @@ zustand = st.session_state.setdefault(
         "zwischendatensatz_id": "datensatz-bleibt-erhalten",
     },
 )
-_navigation(zustand)
+zeige_unterschritt_navigation(
+    aktueller_unterschritt=5,
+    anzahl_unterschritte=5,
+    weiter_erlaubt=True,
+    zurueck_callback=lambda: zustand.__setitem__("schritt", 4),
+    weiter_callback=lambda: None,
+    weiter_label="Weiter zu Schritt 3: Semantisches Mapping",
+)
 """
 
 

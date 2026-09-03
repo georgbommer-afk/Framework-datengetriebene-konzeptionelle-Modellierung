@@ -116,7 +116,9 @@ def test_spaltenzuordnung_kann_erfasst_bearbeitet_und_gespeichert_werden() -> No
         {"Art", "Technische Bezeichnung", "Fachliche Bezeichnung"} <= set(wert.value.columns)
         for wert in app.dataframe
     )
-    _button(app, "Mappingtabelle M speichern und zu Schritt 4").click().run()
+    _button(
+        app, "Mappingtabelle speichern und weiter zu Schritt 4: Event Log aufbauen"
+    ).click().run()
     assert not app.exception
     assert app.session_state["naechster_framework_bereich"] == "4 Event Log aufbauen"
     gespeichert = app.session_state["test_gespeichertes_m"]
@@ -152,7 +154,9 @@ def test_leeres_m_muss_ausdruecklich_gewaehlt_werden_und_wird_gespeichert() -> N
         for wert in app.radio
         if wert.label == "Ist eine Interpretation technischer Bezeichnungen erforderlich?"
     ).set_value("Kein semantisches Mapping erforderlich").run()
-    _button(app, "Mappingtabelle M speichern und zu Schritt 4").click().run()
+    _button(
+        app, "Mappingtabelle speichern und weiter zu Schritt 4: Event Log aufbauen"
+    ).click().run()
     assert not app.exception
     gespeichert = app.session_state["test_gespeichertes_m"]
     assert gespeichert.kein_mapping_erforderlich

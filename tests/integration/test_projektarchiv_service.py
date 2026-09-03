@@ -449,6 +449,7 @@ _FACHLICHE_TABELLEN = (
     "projekte",
     "datenquellen",
     "importvorgaenge",
+    "datenprofil_generationen",
     "transformationsplaene",
     "zwischendatensaetze",
     "semantische_mappings",
@@ -462,6 +463,7 @@ _FACHLICHE_TABELLEN = (
     "modellableitungen",
     "modellvalidierungen",
     "projektfortschritt",
+    "aktive_projektlineage",
 )
 
 
@@ -545,6 +547,8 @@ def _vollstaendigen_fachstand_anlegen(
             return 3
         if spalte == "framework_schritt":
             return 9
+        if spalte == "fachversion":
+            return 2
         if spalte == "fachlicher_unterschritt":
             return "Modell ergänzen und validieren"
         if spalte == "status":

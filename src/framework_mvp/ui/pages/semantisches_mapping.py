@@ -39,6 +39,7 @@ from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import (
     framework_bereich_oeffnen,
     schritt_abschliessen_und_weiter,
+    zeige_unterschritt_navigation,
 )
 
 MAPPING_SCHRITTE = unterschritte_fuer(3)
@@ -648,18 +649,14 @@ def _navigation(zustand: dict[str, Any]) -> None:
     weiter_moeglich = (
         "modus" in zustand if schritt == 1 else "mapping" in zustand if schritt == 2 else False
     )
-    links, rechts = st.columns(2)
-    if links.button("Zurück", disabled=schritt == 1, width="content"):
-        zustand["schritt"] -= 1
-        st.rerun()
-    if rechts.button(
-        "Weiter",
-        disabled=schritt == len(MAPPING_SCHRITTE) or not weiter_moeglich,
-        type="primary",
-        width="content",
-    ):
-        zustand["schritt"] += 1
-        st.rerun()
+    zeige_unterschritt_navigation(
+        aktueller_unterschritt=schritt,
+        anzahl_unterschritte=len(MAPPING_SCHRITTE),
+        weiter_erlaubt=schritt < len(MAPPING_SCHRITTE) and weiter_moeglich,
+        zurueck_callback=lambda: zustand.__setitem__("schritt", schritt - 1),
+        weiter_callback=lambda: zustand.__setitem__("schritt", schritt + 1),
+        schluessel="mapping_unterschritt_navigation",
+    )
 
 
 def zeige_event_log_konfiguration(
@@ -923,8 +920,13 @@ def zeige_semantisches_mapping(
             modus == "Kein semantisches Mapping erforderlich"
         )
         gespeichert = mapping.status is Mappingtabellenstatus.BESTAETIGT and not modus_geaendert
-        if not gespeichert and st.button(
-            "Mappingtabelle M speichern und zu Schritt 4", type="primary"
+        links, rechts = st.columns(2)
+        if links.button("Zurück", width="stretch"):
+            framework_bereich_oeffnen(schritt=2, projekt_id=projekt_id)
+        if not gespeichert and rechts.button(
+            "Mappingtabelle speichern und weiter zu Schritt 4: Event Log aufbauen",
+            type="primary",
+            width="stretch",
         ):
             mapping = mapping.bestaetigen(
                 kein_mapping_erforderlich=(modus == "Kein semantisches Mapping erforderlich")
@@ -935,7 +937,9 @@ def zeige_semantisches_mapping(
             schritt_abschliessen_und_weiter(aktueller_schritt=3, projekt_id=projekt_id)
         if pfad := zustand.get("mapping_pfad"):
             st.caption(f"Gespeichertes Artefakt: `{pfad}`")
-        if gespeichert and st.button("Weiter zu Schritt 4", type="primary"):
+        if gespeichert and rechts.button(
+            "Weiter zu Schritt 4: Event Log aufbauen", type="primary", width="stretch"
+        ):
             st.session_state.aktuelle_mappingtabelle_id = str(mapping.mapping_id)
             schritt_abschliessen_und_weiter(aktueller_schritt=3, projekt_id=projekt_id)
         if not gespeichert:

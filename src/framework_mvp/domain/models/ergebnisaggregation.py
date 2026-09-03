@@ -136,6 +136,7 @@ class KpiDefinition:
     einheiteneingabe_erforderlich: bool
     bezugsmenge: str
     definitionsversion: int = 1
+    formel_latex: str = ""
 
 
 @dataclass(frozen=True, slots=True)

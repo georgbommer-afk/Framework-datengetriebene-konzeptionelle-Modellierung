@@ -6,6 +6,7 @@ from pandas.testing import assert_frame_equal
 
 from framework_mvp.application.profiling import erstelle_datenprofil, erstelle_diagrammdaten
 from framework_mvp.application.profiling.diagrammdaten import erstelle_histogrammdaten
+from framework_mvp.ui.components.datenprofil_visualisierung import histogramm_spezifikation
 
 
 def test_histogramm_ist_deterministisch_und_zaehlt_endliche_werte() -> None:
@@ -23,6 +24,20 @@ def test_histogramm_fallback_bei_iqr_null() -> None:
     histogramm = erstelle_histogrammdaten(pd.Series([7, 7, 7]))
     assert len(histogramm.klassen) == 1
     assert histogramm.klassen[0].anzahl == 3
+
+
+def test_histogramm_und_medianlayer_nutzen_den_vollstaendigen_wertebereich() -> None:
+    daten = pd.DataFrame({"Kosten_EUR": [1.2, 12.0, 69.33, 691.2]})
+    profil = erstelle_datenprofil(daten)
+    diagramm = erstelle_diagrammdaten(daten, profil).spalten[0]
+    histogramm = diagramm.numerisch.histogramm
+    assert histogramm.klassen[0].untergrenze == 1.2
+    assert histogramm.klassen[-1].obergrenze == 691.2
+    spezifikation = histogramm_spezifikation(profil.spaltenprofile[0], diagramm)
+    assert [layer["encoding"]["x"]["scale"]["domain"] for layer in spezifikation["layer"]] == [
+        [1.2, 691.2],
+        [1.2, 691.2],
+    ]
 
 
 def test_histogramm_mutiert_daten_nicht() -> None:

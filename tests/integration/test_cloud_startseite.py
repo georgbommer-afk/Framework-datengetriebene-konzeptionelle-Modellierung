@@ -3,15 +3,20 @@
 import hashlib
 import sqlite3
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
+from framework_mvp.application.aktive_lineage_service import AktiveLineageService
 from framework_mvp.application.autorisierung import AutorisierungsService
 from framework_mvp.application.mandanten_projekt_service import MandantenProjektService
 from framework_mvp.bootstrap import (
     DATENBANKPFAD_UMGEBUNGSVARIABLE,
+    erstelle_datenprofil_service,
+    erstelle_ergebnisaggregation_service,
     erstelle_projekt_service,
+    erstelle_transformations_service,
     erstelle_zugriffs_repository,
 )
 from framework_mvp.domain.models import Systemtyp, Untersuchungsauftrag
@@ -20,7 +25,7 @@ from framework_mvp.ui.oidc import (
     LOKALER_TESTADMIN_UMGEBUNGSVARIABLE,
     LOKALER_TESTMODUS_UMGEBUNGSVARIABLE,
 )
-from framework_mvp.workspace import WORKSPACE_UMGEBUNGSVARIABLE
+from framework_mvp.workspace import WORKSPACE_UMGEBUNGSVARIABLE, WorkspaceKonfiguration
 
 APP = Path(__file__).parents[2] / "streamlit_app.py"
 
@@ -77,6 +82,109 @@ def test_startseite_zeigt_beide_wege_und_keine_stille_adminfreigabe(
     assert not any("Systemadministration" in element.value for element in app.markdown)
 
 
+def test_demo_rehydriert_schritt_eins_und_oeffnet_gespeicherten_etl_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _demo_starten(_oeffentlich_starten(tmp_path, monkeypatch))
+    projekt_id = str(app.session_state["aktuelles_projekt_id"])
+
+    for schluessel in (
+        "wizard_entwurf",
+        "wizard_entwurf_projekt_id",
+        "wizard_schritt",
+    ):
+        if schluessel in app.session_state:
+            del app.session_state[schluessel]
+    app.radio[0].set_value("1 Projektrahmen definieren").run(timeout=30)
+
+    assert not app.exception
+    assert app.session_state["aktuelles_projekt_id"] == projekt_id
+    assert app.session_state["wizard_entwurf_projekt_id"] == projekt_id
+    entwurf = app.session_state["wizard_entwurf"]
+    assert "Demo" in entwurf["bezeichnung"]
+    assert entwurf["problemstellung"]
+    assert entwurf["systemgrenze"]
+    assert entwurf["produktion"]["auftragsabwicklungsstrategie"]
+    assert entwurf["produktion"]["auflagegroesse"]
+    assert entwurf["produktion"]["produktionsstueckzahl"]
+    assert entwurf["produktion"]["produktvielfalt"]
+    assert entwurf["produktion"]["organisationstyp"]
+    assert entwurf["produktion"]["anzahl_arbeitsgaenge"]
+    assert entwurf["produktion"]["ressourcen"]
+
+    datenbank = tmp_path / "cloud.sqlite"
+    workspace = WorkspaceKonfiguration.ermitteln(tmp_path / "workspace")
+    transformationen = erstelle_transformations_service(datenbank, workspace)
+    aktiver_t = str(app.session_state["aktueller_zwischendatensatz_id"])
+    datensatz, _ = transformationen.zwischendatensatz_laden(UUID(aktiver_t))
+    import_id = datensatz.import_ids[0]
+    profile = erstelle_datenprofil_service(datenbank, workspace)
+    r1 = profile.aktuellste(import_id)
+    lineage_vorher = AktiveLineageService(datenbank).laden(UUID(projekt_id))
+    r2 = profile.erweitern(import_id, r1.profil.indikatorbedingungen)
+    assert r2.fachversion == 2
+    assert AktiveLineageService(datenbank).laden(UUID(projekt_id)) == lineage_vorher
+
+    app.radio[0].set_value("2 ETL durchführen").run(timeout=30)
+    oeffnen = next(
+        wert
+        for wert in app.button
+        if wert.label == "Gespeicherten Import ohne erneuten Upload öffnen"
+    )
+    oeffnen.click().run(timeout=30)
+
+    assert not app.exception
+    assert not any("technischen Fehlers" in wert.value for wert in app.error)
+    etl_zustand = app.session_state["etl_wizard_zustaende"][projekt_id]
+    assert etl_zustand["bestaetigter_import"]
+    assert etl_zustand["gespeichertes_profil"]
+    assert etl_zustand["transformationsplan"]
+    assert etl_zustand["zwischendatensatz"]
+    assert etl_zustand["zwischendatensatz_id"] == UUID(aktiver_t)
+    assert etl_zustand["profil_vorgaenger_id"] == r2.profil_id
+
+    aktive_ids = {
+        schluessel: str(app.session_state[schluessel])
+        for schluessel in (
+            "aktueller_zwischendatensatz_id",
+            "aktuelle_mappingtabelle_id",
+            "aktuelle_event_log_konfiguration_id",
+            "aktuelles_event_log_id",
+            "aktuelle_freigabe_id",
+            "aktuelle_analyse_id",
+            "aktuelle_aggregations_id",
+            "aktuelle_modellableitungs_id",
+            "aktuelle_validierungslauf_id",
+            "aktuelle_k_stern_id",
+        )
+    }
+    aggregationen = erstelle_ergebnisaggregation_service(datenbank, workspace)
+    _, gespeichertes_a_g = aggregationen.laden(UUID(aktive_ids["aktuelle_aggregations_id"]))
+    gespeicherte_profile = gespeichertes_a_g["lineage"]["datenprofil_r"]["profile"]
+    assert gespeicherte_profile[0]["profil_id"] == str(r1.profil_id)
+    assert gespeicherte_profile[0]["fachversion"] == r1.fachversion
+    assert gespeicherte_profile[0]["profil_id"] != str(r2.profil_id)
+    fixierte_basis = aggregationen.grundlage_fuer_aggregation(
+        UUID(aktive_ids["aktuelle_aggregations_id"])
+    )
+    assert fixierte_basis.profilreferenzen[0]["profil_id"] == str(r1.profil_id)
+    framework_navigation = next(wert for wert in app.radio if wert.label == "Framework-Bereich")
+    bereiche = [str(wert) for wert in framework_navigation.options]
+    for ziel in (*bereiche[2:9], *reversed(bereiche[:9]), *bereiche[1:9]):
+        next(wert for wert in app.radio if wert.label == "Framework-Bereich").set_value(ziel).run(
+            timeout=30
+        )
+        assert not app.exception, ziel
+        if ziel.startswith("5 "):
+            assert not any("gehört nicht zum aktuellen Projekt" in wert.value for wert in app.error)
+        if ziel.startswith("7 "):
+            assert not any("nicht mehr gültig" in wert.value for wert in app.error)
+        assert app.session_state["aktuelles_projekt_id"] == projekt_id
+        assert {
+            schluessel: str(app.session_state[schluessel]) for schluessel in aktive_ids
+        } == aktive_ids
+
+
 def test_neues_gastprojekt_startet_leer_ohne_vorbelegte_projektzeile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -87,7 +195,7 @@ def test_neues_gastprojekt_startet_leer_ohne_vorbelegte_projektzeile(
     labels = {button.label for button in app.button}
     assert "Projekt exportieren" in labels
     assert "Projekt importieren" in labels
-    assert "Temporäres Projekt löschen" not in labels
+    assert "Daten löschen" not in labels
     assert "aktuelles_projekt_id" not in app.session_state
     assert "gast_projekt_id" not in app.session_state
     with sqlite3.connect(tmp_path / "cloud.sqlite") as verbindung:
@@ -112,13 +220,11 @@ def test_gastprojekt_loeschung_oeffnet_den_kompakten_dialog(
     app = _oeffentlich_starten(tmp_path, monkeypatch)
     _gastprojekt_starten(app, tmp_path)
 
-    next(
-        button for button in app.sidebar.button if button.label == "Temporäres Projekt löschen"
-    ).click().run()
+    next(button for button in app.sidebar.button if button.label == "Daten löschen").click().run()
     assert len(app.get("dialog")) == 1
     assert not app.exception
     assert {button.label for button in app.button} >= {"Endgültig löschen", "Abbrechen"}
-    assert any("Andere Projekte bleiben unverändert" in warning.value for warning in app.warning)
+    assert any("alle zugehörigen Artefakte" in warning.value for warning in app.warning)
 
 
 def test_anwendung_beenden_loest_session_ohne_projektloeschung(
@@ -147,10 +253,12 @@ def test_loeschaktionen_bleiben_auch_in_spaeterem_frameworkschritt_sichtbar(
     app = _oeffentlich_starten(tmp_path, monkeypatch)
     _gastprojekt_starten(app, tmp_path)
 
-    app.radio[0].set_value("7 Ergebnisse aggregieren").run()
+    next(wert for wert in app.radio if wert.label == "Framework-Bereich").set_value(
+        "7 Ergebnisse aggregieren"
+    ).run()
 
     assert not app.exception
-    assert any(button.label == "Temporäres Projekt löschen" for button in app.sidebar.button)
+    assert any(button.label == "Daten löschen" for button in app.sidebar.button)
 
 
 def test_projektimport_oeffnet_lokal_begrenzten_zip_upload(
@@ -220,7 +328,7 @@ def test_konfliktaktionen_rendern_mit_eindeutigen_stabilen_keys_und_abbruch(
             "Projekt exportieren",
             "Abbrechen",
             "Vorhandenes Projekt ersetzen",
-            "Temporäres Projekt löschen",
+            "Daten löschen",
         }
     }
     assert aktionen["Vorhandenes Projekt ersetzen"] == (
@@ -228,7 +336,7 @@ def test_konfliktaktionen_rendern_mit_eindeutigen_stabilen_keys_und_abbruch(
     )
     assert aktionen["Abbrechen"] == f"projektimport_abbrechen_{projekt_id}_{archiv_hash[:16]}"
     assert aktionen["Projekt exportieren"] == f"projektexport_erstellen_{projekt_id}"
-    assert aktionen["Temporäres Projekt löschen"] == (f"projekt_loeschen_oeffnen_{projekt_id}")
+    assert aktionen["Daten löschen"] == f"daten_loeschen_oeffnen_{projekt_id}"
     assert len(set(aktionen.values())) == len(aktionen)
     erste_keys = sorted(
         key for key in aktionen.values() if key and key.startswith("projektimport_")

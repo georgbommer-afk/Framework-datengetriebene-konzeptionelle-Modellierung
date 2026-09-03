@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import MutableMapping
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
@@ -90,6 +91,8 @@ from framework_mvp.workspace import WorkspaceKonfiguration
 st.set_page_config(page_title="Framework-MVP", page_icon="🏭", layout="wide")
 st.title("Datengetriebene konzeptionelle Modellierung")
 st.caption(f"Framework-MVP · Version {__version__}")
+
+LOGGER = logging.getLogger(__name__)
 
 workspace = WorkspaceKonfiguration.ermitteln()
 datenbankpfad = ermittle_datenbankpfad()
@@ -822,9 +825,9 @@ def _projektaktionen(projekt_id: UUID | None) -> None:
         erstelle_transformations_service(datenbankpfad, workspace),
         GebundenerLoeschService(kontext, roh_loeschen, autorisierung),
         projekt_loesch_label=(
-            "Temporäres Projekt löschen"
+            "Gesamtes temporäres Projekt"
             if kontext.gast_geheimnis is not None
-            else "Projekt löschen"
+            else "Gesamtes Projekt löschen"
         ),
         projektloeschung_nachbereiten=(
             _gastmodus_nach_projektloeschung_beenden if kontext.gast_geheimnis is not None else None
@@ -835,6 +838,14 @@ def _projektaktionen(projekt_id: UUID | None) -> None:
 
 
 aktive_projekt_id = _projekt_id_aus_session()
+if (
+    aktive_projekt_id is not None
+    and not st.session_state.get("projektkontext_rehydriert")
+    and autorisierung.projekt_zugriff_erlaubt(kontext, aktive_projekt_id, Projektaktion.ANSEHEN)
+    and roh_projekte.projekt_laden(aktive_projekt_id) is None
+):
+    projektkontext_bereinigen(cast(MutableMapping[str, Any], st.session_state))
+    aktive_projekt_id = None
 if (
     aktive_projekt_id is not None
     and not st.session_state.get("projektkontext_rehydriert")
@@ -853,7 +864,12 @@ if (
         if angeforderter_naechster_bereich is not None:
             st.session_state.naechster_framework_bereich = angeforderter_naechster_bereich
     except Exception:
-        projektkontext_bereinigen(cast(MutableMapping[str, Any], st.session_state))
+        LOGGER.exception("Der aktive Projektkontext konnte nicht vollständig rehydriert werden.")
+        zustand = cast(MutableMapping[str, Any], st.session_state)
+        projektkontext_bereinigen(zustand)
+        zustand["aktuelles_projekt_id"] = str(aktive_projekt_id)
+        zustand["ausgewaehlte_projekt_id"] = str(aktive_projekt_id)
+        zustand["projektkontext_rehydriert"] = str(aktive_projekt_id)
     else:
         st.session_state.projektkontext_rehydriert = str(aktive_projekt_id)
         aktive_projekt_id = _projekt_id_aus_session()
@@ -1067,9 +1083,9 @@ if seite == "1 Projektrahmen definieren":
         None,
         sidebar_titel_anzeigen=False,
         projekt_loesch_label=(
-            "Temporäres Projekt löschen"
+            "Gesamtes temporäres Projekt"
             if kontext.gast_geheimnis is not None
-            else "Projekt löschen"
+            else "Gesamtes Projekt löschen"
         ),
         projektloeschung_nachbereiten=(
             _gastmodus_nach_projektloeschung_beenden if kontext.gast_geheimnis is not None else None

@@ -43,7 +43,10 @@ from framework_mvp.domain.models import (
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
 from framework_mvp.ui.fortschritt import unterschritte_fuer
 from framework_mvp.ui.helpers import fachliche_auswahl
-from framework_mvp.ui.navigation import schritt_abschliessen_und_weiter
+from framework_mvp.ui.navigation import (
+    schritt_abschliessen_und_weiter,
+    zeige_unterschritt_navigation,
+)
 from framework_mvp.ui.session_cleanup import (
     projekt_zustand_bereinigen,
     zwischendatensatz_zustand_bereinigen,
@@ -157,10 +160,37 @@ def _initialisieren() -> None:
         ("ausgewaehlte_projekt_id", None),
         ("auswahl_generation", 0),
         ("wizard_schritt", 1),
-        ("wizard_entwurf", _neuer_entwurf()),
     ):
         if schluessel not in st.session_state:
             st.session_state[schluessel] = wert
+
+
+def _arbeitsentwurf_rehydrieren(projekte: list[Projekt]) -> None:
+    """Bindet den flüchtigen Schritt-1-Entwurf eindeutig an die Projektauswahl."""
+    arbeitszustand_vorhanden = (
+        "wizard_entwurf" in st.session_state or "wizard_entwurf_projekt_id" in st.session_state
+    )
+    rohwert = st.session_state.get("ausgewaehlte_projekt_id")
+    try:
+        projekt_id = UUID(str(rohwert)) if rohwert else None
+    except (TypeError, ValueError):
+        projekt_id = None
+    projekt = _projekt_nach_id(projekte, projekt_id)
+    erwarteter_bezug = str(projekt.projekt_id) if projekt is not None else None
+    bezug_vorhanden = "wizard_entwurf_projekt_id" in st.session_state
+    if (
+        "wizard_entwurf" in st.session_state
+        and bezug_vorhanden
+        and st.session_state.get("wizard_entwurf_projekt_id") == erwarteter_bezug
+    ):
+        return
+    st.session_state.wizard_entwurf = (
+        _entwurf_aus_projekt(projekt) if projekt is not None else _neuer_entwurf()
+    )
+    st.session_state.wizard_entwurf_projekt_id = erwarteter_bezug
+    st.session_state.wizard_schritt = 1
+    if arbeitszustand_vorhanden or projekt is not None:
+        st.session_state.auswahl_generation += 1
 
 
 def _widget_key(feld: str) -> str:
@@ -316,6 +346,74 @@ def _datensatz_loeschen_dialog(
         st.rerun(scope="app")
 
 
+@st.dialog("Daten löschen")
+def _daten_loeschen_dialog(
+    projekt: Projekt,
+    datensaetze: list[Any],
+    service: LoeschService,
+    *,
+    projekt_loesch_label: str,
+    projektloeschung_nachbereiten: Callable[[], None] | None,
+    projekt_loeschen_erlaubt: bool,
+) -> None:
+    """Bündelt Projekt- und Datensatzlöschung, ohne ihre Semantik zu vermischen."""
+    optionen = []
+    if projekt_loeschen_erlaubt:
+        optionen.append(projekt_loesch_label)
+    if datensaetze:
+        optionen.append("Einzelnen Zwischendatensatz löschen")
+    auswahl = st.radio("Was möchten Sie löschen?", optionen)
+    if auswahl == projekt_loesch_label:
+        st.warning("Das Projekt und alle zugehörigen Artefakte werden dauerhaft gelöscht.")
+        ziel = None
+    else:
+        aktueller_wert = st.session_state.get("aktueller_zwischendatensatz_id")
+        ids = [wert.zwischendatensatz_id for wert in datensaetze]
+        vorauswahl = next(
+            (index for index, wert in enumerate(ids) if str(wert) == str(aktueller_wert)), 0
+        )
+        datensatz_id = st.selectbox(
+            "Zwischendatensatz",
+            ids,
+            index=vorauswahl,
+            format_func=lambda wert: next(
+                _datensatzbezeichnung(eintrag)
+                for eintrag in datensaetze
+                if eintrag.zwischendatensatz_id == wert
+            ),
+        )
+        ziel = next(
+            wert for wert in datensaetze if wert.zwischendatensatz_id == datensatz_id
+        )
+        st.warning(
+            "Dieser Zwischendatensatz und ausschließlich davon abhängige Artefakte werden "
+            "gelöscht. Rohimporte und andere Datensätze bleiben erhalten."
+        )
+    loeschen, abbrechen = st.columns(2)
+    if loeschen.button("Endgültig löschen", type="primary", width="stretch"):
+        try:
+            if ziel is None:
+                _projektloeschung_ausfuehren(
+                    projekt, service, cast("MutableMapping[str, Any]", st.session_state)
+                )
+                if projektloeschung_nachbereiten is not None:
+                    projektloeschung_nachbereiten()
+            else:
+                _datensatzloeschung_ausfuehren(
+                    projekt, ziel, service, cast("MutableMapping[str, Any]", st.session_state)
+                )
+        except Domaenenfehler as fehler:
+            st.error(str(fehler))
+            return
+        except Exception:
+            LOGGER.exception("Unerwarteter Fehler beim Löschen von Daten.")
+            st.error("Die ausgewählten Daten konnten nicht vollständig gelöscht werden.")
+            return
+        st.rerun(scope="app")
+    if abbrechen.button("Abbrechen", width="stretch"):
+        st.rerun(scope="app")
+
+
 def zeige_loeschaktionen(
     projekt: Projekt,
     transformations_service: TransformationsService | None,
@@ -335,23 +433,19 @@ def zeige_loeschaktionen(
     if not projekt_loeschen_erlaubt and not datensaetze:
         return
     st.sidebar.divider()
-    links, rechts = st.sidebar.columns(2)
-    if projekt_loeschen_erlaubt and links.button(
-        projekt_loesch_label,
+    if st.sidebar.button(
+        "Daten löschen",
         width="stretch",
-        key=f"projekt_loeschen_oeffnen_{projekt.projekt_id}",
+        key=f"daten_loeschen_oeffnen_{projekt.projekt_id}",
     ):
-        _projekt_loeschen_dialog(
+        _daten_loeschen_dialog(
             projekt,
+            datensaetze,
             loesch_service,
-            projektloeschung_nachbereiten,
+            projekt_loesch_label=projekt_loesch_label,
+            projektloeschung_nachbereiten=projektloeschung_nachbereiten,
+            projekt_loeschen_erlaubt=projekt_loeschen_erlaubt,
         )
-    if datensaetze and rechts.button(
-        "Datensatz löschen",
-        width="stretch",
-        key=f"datensatz_loeschen_oeffnen_{projekt.projekt_id}",
-    ):
-        _datensatz_loeschen_dialog(projekt, datensaetze, loesch_service)
 
 
 def _seitenleiste(
@@ -391,6 +485,9 @@ def _seitenleiste(
         st.session_state.wizard_entwurf = (
             _neuer_entwurf() if projekt is None else _entwurf_aus_projekt(projekt)
         )
+        st.session_state.wizard_entwurf_projekt_id = (
+            str(projekt.projekt_id) if projekt is not None else None
+        )
         st.session_state.wizard_schritt = 1
         st.session_state.auswahl_generation += 1
         st.rerun()
@@ -399,6 +496,7 @@ def _seitenleiste(
             projekt_aktivieren(None)
         st.session_state.ausgewaehlte_projekt_id = None
         st.session_state.wizard_entwurf = _neuer_entwurf()
+        st.session_state.wizard_entwurf_projekt_id = None
         st.session_state.wizard_schritt = 1
         st.session_state.auswahl_generation += 1
         st.rerun()
@@ -640,7 +738,7 @@ def _schritt_auswertungen(daten: dict[str, Any]) -> None:
         ziel, kpi, formel, auswahl = st.columns((3, 3, 3, 1))
         ziel.write(ZIELGROESSEN_BEZEICHNUNGEN[kandidat.zielgroesse])
         kpi.write(kandidat.bezeichnung)
-        formel.write(definition.formel)
+        formel.latex(definition.formel_latex)
         if auswahl.checkbox(
             "Auswählen",
             key=_widget_initialisieren(f"kpi_{kandidat.kpi_id}", kandidat.kpi_id in gewaehlt),
@@ -876,6 +974,7 @@ def _speichern(
     st.session_state.ausgewaehlte_projekt_id = str(gespeichert.projekt_id)
     st.session_state.auswahl_generation += 1
     st.session_state.wizard_entwurf = _entwurf_aus_projekt(gespeichert)
+    st.session_state.wizard_entwurf_projekt_id = str(gespeichert.projekt_id)
     st.session_state.aktuelles_projekt_id = str(gespeichert.projekt_id)
     return gespeichert
 
@@ -886,25 +985,30 @@ def _navigation(
     daten: dict[str, Any],
 ) -> None:
     schritt = st.session_state.wizard_schritt
-    links, rechts = st.columns(2)
-    if links.button("Zurück", disabled=schritt == 1, width="content"):
-        st.session_state.wizard_schritt = schritt - 1
-        st.rerun()
-    if schritt < len(SCHRITTE):
-        if rechts.button("Weiter", width="content"):
+
+    def weiter() -> None:
+        if schritt < len(SCHRITTE):
             st.session_state.wizard_schritt = schritt + 1
-            st.rerun()
-    else:
-        if rechts.button(
-            "Projektrahmen speichern und zu Schritt 2",
-            type="primary",
-            width="content",
-        ):
-            gespeichert = _speichern(service, projekt, daten)
-            if gespeichert is not None:
-                schritt_abschliessen_und_weiter(
-                    aktueller_schritt=1, projekt_id=gespeichert.projekt_id
-                )
+            return
+        gespeichert = _speichern(service, projekt, daten)
+        if gespeichert is not None:
+            schritt_abschliessen_und_weiter(
+                aktueller_schritt=1, projekt_id=gespeichert.projekt_id
+            )
+
+    zeige_unterschritt_navigation(
+        aktueller_unterschritt=schritt,
+        anzahl_unterschritte=len(SCHRITTE),
+        weiter_erlaubt=True,
+        zurueck_callback=lambda: st.session_state.__setitem__("wizard_schritt", schritt - 1),
+        weiter_callback=weiter,
+        weiter_label=(
+            "Projektrahmen speichern und zu Schritt 2: ETL durchführen"
+            if schritt == len(SCHRITTE)
+            else "Weiter"
+        ),
+        schluessel="projektrahmen_unterschritt_navigation",
+    )
 
 
 def zeige_projektverwaltung(
@@ -921,6 +1025,7 @@ def zeige_projektverwaltung(
     _initialisieren()
     try:
         projekte = service.projekte_auflisten()
+        _arbeitsentwurf_rehydrieren(projekte)
         projekt = _seitenleiste(
             projekte,
             transformations_service,

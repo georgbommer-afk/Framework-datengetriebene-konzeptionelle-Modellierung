@@ -8,9 +8,11 @@ from streamlit.testing.v1 import AppTest
 from framework_mvp.domain.models import (
     Aktivitaetsbildungsart,
     Aktivitaetsdefinition,
+    Attributrolle,
     MappingModus,
     Mappingstatus,
     SemantischesMapping,
+    Spaltenzuordnung,
     ZeitstempelZuordnung,
     ZusammengesetzteFallId,
 )
@@ -44,8 +46,12 @@ DATEN = pd.DataFrame({
     "zeit": ["2025-01-02", "2025-01-01"],
     "startzeit": ["2025-01-01", None],
     "endzeit": ["2025-01-02", "2025-01-03"],
+    "soll_start": ["2025-01-01", "2025-01-02"],
+    "soll_ende": ["2025-01-02", "2025-01-03"],
     "ressource": ["R1", "R2"],
     "status": ["started", "complete"],
+    "merkmal_a": ["x", "y"],
+    "merkmal_b": [1, 2],
 })
 MAPPING = replace(
     Mappingtabelle.neu(P, T),
@@ -189,36 +195,21 @@ def test_rollenschritt_zeigt_optionale_rollen_und_kanonische_vorschau() -> None:
 
     labels = {wert.label for wert in app.selectbox}
     assert {
-        "Ressourcenspalte → resource",
-        "Ist-Startzeitpunkt → start_timestamp",
-        "Ist-Endzeitpunkt → end_timestamp",
-        "Lifecycle-/Statusspalte → lifecycle",
+        "Ressourcenspalte",
+        "Ist-Startzeitpunkt",
+        "Ist-Endzeitpunkt",
+        "Lifecycle-/Statusspalte",
     } <= labels
-    startauswahl = next(
-        w for w in app.selectbox if w.label == "Ist-Startzeitpunkt → start_timestamp"
-    )
-    endauswahl = next(w for w in app.selectbox if w.label == "Ist-Endzeitpunkt → end_timestamp")
+    startauswahl = next(w for w in app.selectbox if w.label == "Ist-Startzeitpunkt")
+    endauswahl = next(w for w in app.selectbox if w.label == "Ist-Endzeitpunkt")
     assert "zeit" in startauswahl.options
     assert "zeit" in endauswahl.options
     assert any("Ereigniszeitstempel ordnet" in wert.value for wert in app.caption)
-    next(w for w in app.selectbox if w.label == "Ressourcenspalte → resource").set_value(
-        "ressource"
-    ).run()
-    next(w for w in app.selectbox if w.label == "Ist-Startzeitpunkt → start_timestamp").set_value(
-        "zeit"
-    ).run()
-    assert (
-        "zeit"
-        not in next(
-            w for w in app.selectbox if w.label == "Ist-Endzeitpunkt → end_timestamp"
-        ).options
-    )
-    next(w for w in app.selectbox if w.label == "Ist-Endzeitpunkt → end_timestamp").set_value(
-        "endzeit"
-    ).run()
-    next(w for w in app.selectbox if w.label == "Lifecycle-/Statusspalte → lifecycle").set_value(
-        "status"
-    ).run()
+    next(w for w in app.selectbox if w.label == "Ressourcenspalte").set_value("ressource").run()
+    next(w for w in app.selectbox if w.label == "Ist-Startzeitpunkt").set_value("zeit").run()
+    assert "zeit" not in next(w for w in app.selectbox if w.label == "Ist-Endzeitpunkt").options
+    next(w for w in app.selectbox if w.label == "Ist-Endzeitpunkt").set_value("endzeit").run()
+    next(w for w in app.selectbox if w.label == "Lifecycle-/Statusspalte").set_value("status").run()
     zusatzattribute = next(
         w for w in app.multiselect if w.label == "Weitere Attribute in E übernehmen"
     )
@@ -228,7 +219,7 @@ def test_rollenschritt_zeigt_optionale_rollen_und_kanonische_vorschau() -> None:
 
     assert not app.exception
     gespeicherte_konfiguration = app.session_state["test_konfiguration"]
-    assert gespeicherte_konfiguration.konfigurationsversion == 4
+    assert gespeicherte_konfiguration.konfigurationsversion == 5
     assert gespeicherte_konfiguration.zeitstempelspalte == "zeit"
     assert gespeicherte_konfiguration.startzeitstempelspalte == "zeit"
     assert gespeicherte_konfiguration.endzeitstempelspalte == "endzeit"
@@ -275,8 +266,8 @@ def test_breiter_rollenschritt_bietet_ressource_und_status_je_zeitzuordnung() ->
     }
     app = app.run()
 
-    assert sum(w.label == "Ressourcenspalte → resource" for w in app.selectbox) == 2
-    assert sum(w.label == "Lifecycle-/Statusspalte → lifecycle" for w in app.selectbox) == 2
+    assert sum(w.label == "Ressourcenspalte" for w in app.selectbox) == 2
+    assert sum(w.label == "Lifecycle-/Statusspalte" for w in app.selectbox) == 2
     assert not any("Ist-Startzeitpunkt →" in w.label for w in app.selectbox)
     assert not any("Ist-Endzeitpunkt →" in w.label for w in app.selectbox)
 
@@ -304,8 +295,7 @@ def test_ereignisorientierter_ablauf_speichert_e_und_setzt_aktiven_kontext() -> 
     app = app.run()
     assert not app.exception
     assert any("Fallbezogener Event Log (E)" in wert.value for wert in app.markdown)
-    _button(app, "Weiter").click().run()
-    _button(app, "Event Log E speichern und zu Schritt 5").click().run()
+    _button(app, "Event Log E speichern und zu Schritt 5: Datenqualität prüfen").click().run()
     assert not app.exception
     assert app.session_state["aktuelles_event_log_id"] == str(
         app.session_state["test_event_log_id"]
@@ -314,14 +304,14 @@ def test_ereignisorientierter_ablauf_speichert_e_und_setzt_aktiven_kontext() -> 
     assert any("wurde gespeichert" in wert.value for wert in app.success)
 
     zustand = app.session_state["event_log_zustaende"][str(projekt_id)]
-    event_log_id = zustand["event_log_id"]
     konfigurations_id = zustand["konfigurations_id"]
     _button(app, "Zurück").click().run()
     zustand = app.session_state["event_log_zustaende"][str(projekt_id)]
-    assert zustand["schritt"] == 4
-    assert zustand["event_log_id"] == event_log_id
+    assert zustand["schritt"] == 3
     assert zustand["konfigurations_id"] == konfigurations_id
-    assert "artefakt" in zustand
+    assert app.session_state["aktuelles_event_log_id"] == str(
+        app.session_state["test_event_log_id"]
+    )
 
 
 def test_gespeicherte_konfiguration_rehydriert_mindestbestandteile_und_zeitrollen() -> None:
@@ -330,26 +320,33 @@ def test_gespeicherte_konfiguration_rehydriert_mindestbestandteile_und_zeitrolle
     konfigurations_id = uuid4()
     jetzt = datetime.now(UTC)
     konfiguration = SemantischesMapping(
-        konfigurations_id,
-        projekt_id,
-        datensatz_id,
-        MappingModus.EREIGNISORIENTIERT,
-        ZusammengesetzteFallId(("auftrag",)),
-        "aktion",
-        "zeit",
-        "startzeit",
-        "endzeit",
-        "status",
-        "ressource",
-        (),
-        (),
-        None,
-        jetzt,
-        jetzt,
-        Mappingstatus.VALIDIERT,
-        Aktivitaetsdefinition(Aktivitaetsbildungsart.VORHANDENE_SPALTE, ("aktion",)),
-        UUID("55555555-5555-5555-5555-555555555555"),
-        4,
+        mapping_id=konfigurations_id,
+        projekt_id=projekt_id,
+        zwischendatensatz_id=datensatz_id,
+        mapping_modus=MappingModus.EREIGNISORIENTIERT,
+        fall_id=ZusammengesetzteFallId(("auftrag",)),
+        aktivitaetsspalte="aktion",
+        zeitstempelspalte="startzeit",
+        startzeitstempelspalte="startzeit",
+        endzeitstempelspalte="endzeit",
+        lifecycle_spalte="status",
+        ressourcen_spalte="ressource",
+        spaltenzuordnungen=(
+            Spaltenzuordnung("merkmal_a", Attributrolle.EREIGNISATTRIBUT),
+            Spaltenzuordnung("merkmal_b", Attributrolle.EREIGNISATTRIBUT),
+        ),
+        zeitstempelzuordnungen=(),
+        validierung=None,
+        erstellt_am=jetzt,
+        geaendert_am=jetzt,
+        status=Mappingstatus.VALIDIERT,
+        aktivitaetsdefinition=Aktivitaetsdefinition(
+            Aktivitaetsbildungsart.VORHANDENE_SPALTE, ("aktion",)
+        ),
+        mappingtabelle_id=UUID("55555555-5555-5555-5555-555555555555"),
+        konfigurationsversion=5,
+        plan_startzeitstempelspalte="soll_start",
+        plan_endzeitstempelspalte="soll_ende",
     )
     app = AppTest.from_string(APP)
     app.session_state["aktuelles_projekt_id"] = str(projekt_id)
@@ -361,16 +358,18 @@ def test_gespeicherte_konfiguration_rehydriert_mindestbestandteile_und_zeitrolle
     _button(app, "Weiter").click().run()
     assert next(w for w in app.selectbox if w.label == "Fallidentifikation").value == "auftrag"
     assert next(w for w in app.selectbox if w.label == "Aktivitätsspalte").value == "aktion"
-    assert next(w for w in app.selectbox if w.label == "Ereigniszeitstempel").value == "zeit"
+    assert next(w for w in app.selectbox if w.label == "Ereigniszeitstempel").value == "startzeit"
     _button(app, "Weiter").click().run()
+    assert next(w for w in app.selectbox if w.label == "Ist-Startzeitpunkt").value == "startzeit"
+    assert next(w for w in app.selectbox if w.label == "Ist-Endzeitpunkt").value == "endzeit"
+    assert next(w for w in app.selectbox if w.label == "Ressourcenspalte").value == ("ressource")
     assert (
-        next(w for w in app.selectbox if w.label == "Ist-Startzeitpunkt → start_timestamp").value
-        == "startzeit"
+        next(w for w in app.selectbox if w.label == "Plan-/Soll-Startzeitpunkt").value
+        == "soll_start"
     )
     assert (
-        next(w for w in app.selectbox if w.label == "Ist-Endzeitpunkt → end_timestamp").value
-        == "endzeit"
+        next(w for w in app.selectbox if w.label == "Plan-/Soll-Endzeitpunkt").value == "soll_ende"
     )
-    assert next(w for w in app.selectbox if w.label == "Ressourcenspalte → resource").value == (
-        "ressource"
-    )
+    assert next(
+        w for w in app.multiselect if w.label == "Weitere Attribute in E übernehmen"
+    ).value == ["merkmal_a", "merkmal_b"]

@@ -38,7 +38,7 @@ def test_ungueltige_svg_ausgaben_werden_abgelehnt(wert: bytes) -> None:
         validiere_svg_bytes(wert)
 
 
-def test_svg_text_wird_ohne_bytesio_an_streamlit_uebergeben(
+def test_svg_text_wird_ohne_bytesio_an_interaktiven_viewer_uebergeben(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Die UI reicht validierten XML-Text und keinen Binärpuffer an st.image."""
@@ -47,10 +47,10 @@ def test_svg_text_wird_ohne_bytesio_an_streamlit_uebergeben(
     erwartet = validiere_svg_bytes(graph.pipe(format="svg"))
     aufrufe: list[object] = []
 
-    def image(wert: object, **_argumente: object) -> None:
+    def viewer(wert: object, _beschriftung: str) -> None:
         aufrufe.append(wert)
 
-    monkeypatch.setattr(process_mining.st, "image", image)
+    monkeypatch.setattr(process_mining, "svg_zoom_viewer", viewer)
     assert process_mining._zeige_svg(erwartet.encode(), "Testgrafik")
     assert aufrufe == [erwartet]
     assert isinstance(aufrufe[0], str)

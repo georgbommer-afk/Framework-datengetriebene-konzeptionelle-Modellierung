@@ -182,7 +182,7 @@ def test_regulaerer_ablauf_bietet_nur_k_und_notation_und_uebergibt_p_und_a_d() -
     assert any(
         "Gespeicherter vollständiger Directly-Follows-Graph" in w.value for w in app.subheader
     )
-    _button(app, "k und Prozessnotation anpassen").click().run()
+    _button(app, "Zurück").click().run()
     assert app.slider[0].value == 0.2
     assert app.radio[0].value.value == "bpmn"
     app.slider[0].set_value(0.3)
@@ -230,6 +230,6 @@ def test_persistierte_analyse_oeffnet_direkt_ergebnis_und_rehydriert_k_und_bpmn(
     assert zustand["schritt"] == 3
     assert zustand["schwellwert_k"] == 0.2
     assert zustand["prozessnotation"].value == "bpmn"
-    _button(app, "k und Prozessnotation anpassen").click().run()
+    _button(app, "Zurück").click().run()
     assert app.slider[0].value == 0.2
     assert app.radio[0].value.value == "bpmn"

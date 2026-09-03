@@ -87,6 +87,16 @@ def test_numerische_detailspalte_zeigt_histogramm_median_und_boxplot() -> None:
     """Die numerische Standardauswahl zeigt aggregierte Diagramme und Median."""
     anwendung = _starten()
     assert any(wert.label == "Median" for wert in anwendung.metric)
+    assert {
+        "Minimum",
+        "Maximum",
+        "Mittelwert",
+        "Median",
+        "Q1",
+        "Q3",
+        "IQR",
+    } <= {wert.label for wert in anwendung.metric}
+    assert any("IQR-Regel" in wert.value for wert in anwendung.caption)
     assert any("aggregierte Histogrammklassen" in wert.value for wert in anwendung.caption)
     assert len(anwendung.get("vega_lite_chart")) >= 3
 
@@ -99,6 +109,11 @@ def test_kategoriale_detailspalte_zeigt_haeufigkeiten() -> None:
     ).set_value("Kategorie").run()
     assert not anwendung.exception
     assert any(wert.label == "Eindeutige reguläre Ausprägungen" for wert in anwendung.metric)
+    assert any(wert.label == "Häufigster Wert (Modus)" for wert in anwendung.metric)
+    assert not any(
+        wert.value in {"Histogramm", "Kompakter Boxplot"} for wert in anwendung.subheader
+    )
+    assert any(wert.value == "Häufigkeitsverteilung" for wert in anwendung.subheader)
 
 
 def test_zeitspalte_zeigt_zeitraum_und_aggregation() -> None:
@@ -124,6 +139,7 @@ def test_vollstaendig_leere_spalte_zeigt_hinweis() -> None:
 
 def test_fehlwertplatzhalter_bleiben_ueber_reruns_erhalten() -> None:
     anwendung = AppTest.from_string(PLATZHALTER_APP).run()
+    assert any(wert.label == "Spalte" for wert in anwendung.selectbox)
     eingabe = next(
         wert
         for wert in anwendung.text_input
@@ -160,6 +176,19 @@ def test_indikatorbedingung_wird_hinzugefuegt_angezeigt_und_entfernt() -> None:
 
     next(wert for wert in anwendung.button if wert.label == "Entfernen").click().run()
     assert anwendung.session_state["zustand"]["indikatorbedingungen"] == ()
+
+
+def test_mehrere_indikatorbedingungen_sind_in_der_zentralen_kachel_sichtbar() -> None:
+    anwendung = AppTest.from_string(PLATZHALTER_APP).run()
+    for vergleichswert in ("A", "B"):
+        next(wert for wert in anwendung.text_input if wert.label == "Vergleichswert").set_value(
+            vergleichswert
+        )
+        next(
+            wert for wert in anwendung.button if wert.label == "Bedingung hinzufügen"
+        ).click().run()
+    assert len(anwendung.session_state["zustand"]["indikatorbedingungen"]) == 2
+    assert sum(wert.label == "Entfernen" for wert in anwendung.button) == 2
 
 
 def test_ungueltiger_indikatorvergleichswert_wird_verstaendlich_abgelehnt() -> None:

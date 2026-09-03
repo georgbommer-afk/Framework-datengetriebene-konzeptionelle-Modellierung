@@ -32,8 +32,10 @@ from framework_mvp.domain.models import (
     Eingangsartefakt,
     Ergebnisaggregation,
     FachlicheBestandteilentscheidung,
+    FachlicheEntscheidungsart,
     Modellableitung,
     Modellableitungsstatus,
+    ModellbestandteilId,
     OffenerEintrag,
     Projekt,
     Prozessnotation,
@@ -177,8 +179,15 @@ class ModellableitungService:
             raise Importintegritaetsfehler(
                 "Die erneut validierten A_G-Repräsentationen weichen ab."
             )
-        basis = self._aggregationen.grundlage_laden(
-            projekt_id, aggregation.freigabe_id, aggregation.analyse_id
+        gespeicherte_grundlage = getattr(
+            self._aggregationen, "grundlage_fuer_aggregation", None
+        )
+        basis = (
+            gespeicherte_grundlage(aggregations_id)
+            if gespeicherte_grundlage is not None
+            else self._aggregationen.grundlage_laden(
+                projekt_id, aggregation.freigabe_id, aggregation.analyse_id
+            )
         )
         if (
             str(basis.analyse.analyse_id) != str(a_g.get("process_mining_analyse_id"))
@@ -386,6 +395,92 @@ class ModellableitungService:
             o_sha,
         )
 
+    @staticmethod
+    def _fachliche_vorschlagssignaturen(
+        vorschau: Modellableitungsvorschau,
+    ) -> dict[ModellbestandteilId, str]:
+        """Vergleicht Vorschläge ohne generationenspezifische IDs und Prüfsummen."""
+        offene = {
+            bestandteil_id: [
+                {
+                    "kategorie": wert.kategorie,
+                    "begruendung": wert.begruendung,
+                }
+                for wert in vorschau.systematische_offene_eintraege
+                if wert.bestandteil_id is bestandteil_id
+            ]
+            for bestandteil_id in ModellbestandteilId
+        }
+        return {
+            bestandteil.bestandteil_id: _sha(
+                {
+                    "bestandteil_id": bestandteil.bestandteil_id,
+                    "status": bestandteil.status,
+                    "informationen": [
+                        {
+                            "herkunftsartefakt": information.herkunftsartefakt,
+                            "strukturreferenz": information.strukturreferenz,
+                            "wert": information.wert,
+                            "uebernahmeart": information.uebernahmeart,
+                        }
+                        for information in bestandteil.informationen
+                    ],
+                    "offene_punkte": offene[bestandteil.bestandteil_id],
+                }
+            )
+            for bestandteil in vorschau.vorgeschlagene_bestandteile
+        }
+
+    def vorherige_entscheidungsvorbelegung(
+        self,
+        projekt_id: UUID,
+        aggregations_id: UUID,
+        neuer_vorschlag: Modellableitungsvorschau,
+    ) -> tuple[
+        dict[ModellbestandteilId, FachlicheBestandteilentscheidung],
+        frozenset[ModellbestandteilId],
+    ]:
+        """Liefert kontrollierte Entwürfe nur aus der direkten, gleichen Eingangslineage."""
+        basis = neuer_vorschlag.grundlage
+        vorgaenger = self._repository.neueste_vorgaengerin(
+            projekt_id,
+            basis.aggregation.analyse_id,
+            basis.aggregation.event_log_id,
+            aggregations_id,
+        )
+        if vorgaenger is None:
+            return {}, frozenset()
+        _, k, _ = self.laden(vorgaenger.modellableitungs_id)
+        alter_vorschlag = self.vorschau(
+            projekt_id=projekt_id,
+            aggregations_id=vorgaenger.aggregations_id,
+            modellableitungs_id=vorgaenger.modellableitungs_id,
+            k_id=vorgaenger.k_id,
+            o_id=vorgaenger.o_id,
+        )
+        alt = self._fachliche_vorschlagssignaturen(alter_vorschlag)
+        neu = self._fachliche_vorschlagssignaturen(neuer_vorschlag)
+        rohentscheidungen = {
+            ModellbestandteilId(str(wert["bestandteil_id"])): wert
+            for wert in k.get("fachliche_entscheidungen", [])
+        }
+        vorbelegung: dict[ModellbestandteilId, FachlicheBestandteilentscheidung] = {}
+        erneut_pruefen: set[ModellbestandteilId] = set()
+        for bestandteil_id in ModellbestandteilId:
+            roh = rohentscheidungen.get(bestandteil_id)
+            if roh is None:
+                continue
+            if alt.get(bestandteil_id) != neu.get(bestandteil_id):
+                erneut_pruefen.add(bestandteil_id)
+                continue
+            vorbelegung[bestandteil_id] = FachlicheBestandteilentscheidung(
+                bestandteil_id,
+                FachlicheEntscheidungsart(str(roh["entscheidung"])),
+                str(roh.get("begruendung", "")),
+                datetime.fromisoformat(str(roh["entschieden_am"])),
+            )
+        return vorbelegung, frozenset(erneut_pruefen)
+
     def speichern(
         self,
         vorschau: Modellableitungsvorschau,
@@ -431,7 +526,22 @@ class ModellableitungService:
             vorschau.entscheidungsfingerabdruck,
         )
         if identisch is not None:
-            return self.laden(identisch.modellableitungs_id)[0]
+            gespeichert = self.laden(identisch.modellableitungs_id)[0]
+            if self._aktive_lineage is not None:
+                self._aktive_lineage.aktivieren(
+                    gespeichert.projekt_id,
+                    LineageEndpunkt.K_O,
+                    {
+                        "aktuelle_aggregations_id": gespeichert.aggregations_id,
+                        "aktuelle_analyse_id": gespeichert.analyse_id,
+                        "aktuelles_event_log_id": gespeichert.event_log_id,
+                        "event_log_id": gespeichert.event_log_id,
+                        "aktuelle_modellableitungs_id": gespeichert.modellableitungs_id,
+                        "aktuelle_k_id": gespeichert.k_id,
+                        "aktuelle_o_id": gespeichert.o_id,
+                    },
+                )
+            return gespeichert
         vorhanden = self._repository.laden(vorschau.modellableitungs_id)
         if vorhanden is not None:
             raise Domaenenfehler("Die Modellableitungs-ID gehört bereits zu einem anderen Lauf.")

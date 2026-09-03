@@ -1,5 +1,6 @@
-"""Zentrale Navigation zwischen abgeschlossenen Framework-Schritten."""
+"""Zentrale Navigation zwischen Unterabschnitten und Framework-Schritten."""
 
+from collections.abc import Callable
 from uuid import UUID
 
 import streamlit as st
@@ -16,6 +17,39 @@ FRAMEWORK_BEREICHE = (
     "9 Modell ergänzen und validieren",
     "10 Konzeptionelles Modell ausgeben",
 )
+
+
+def zeige_unterschritt_navigation(
+    *,
+    aktueller_unterschritt: int,
+    anzahl_unterschritte: int,
+    weiter_erlaubt: bool,
+    zurueck_callback: Callable[[], None],
+    weiter_callback: Callable[[], None],
+    weiter_label: str = "Weiter",
+    schluessel: str | None = None,
+) -> None:
+    """Rendert das einheitliche zweispaltige Navigationsmuster der Schritte 1–9."""
+    if not 1 <= aktueller_unterschritt <= anzahl_unterschritte:
+        raise ValueError("Der aktuelle Unterschritt liegt außerhalb des Ablaufs.")
+    links, rechts = st.columns(2)
+    if links.button(
+        "Zurück",
+        disabled=aktueller_unterschritt == 1,
+        width="stretch",
+        key=f"{schluessel}_zurueck" if schluessel else None,
+    ):
+        zurueck_callback()
+        st.rerun()
+    if rechts.button(
+        weiter_label,
+        disabled=not weiter_erlaubt,
+        type="primary",
+        width="stretch",
+        key=f"{schluessel}_weiter" if schluessel else None,
+    ):
+        weiter_callback()
+        st.rerun()
 
 
 def naechster_framework_bereich(aktueller_schritt: int) -> str:

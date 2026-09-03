@@ -57,7 +57,7 @@ def test_migration_10_zu_11_markiert_bestand_nicht_oeffentlich(tmp_path: Path) -
             "FROM projektzugehoerigkeiten WHERE projekt_id = ?",
             (str(projekt.projekt_id),),
         ).fetchone()
-        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert verbindung.execute("PRAGMA user_version").fetchone()[0] == 12
     assert zeile == ("legacy_unassigned", None, None)
 
 

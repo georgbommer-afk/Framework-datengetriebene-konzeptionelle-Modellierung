@@ -51,13 +51,17 @@ from framework_mvp.infrastructure.exceptions import (
     Importintegritaetsfehler,
     NichtUnterstuetzteSchemaversion,
 )
-from framework_mvp.ui.components.datenprofil_visualisierung import zeige_datenprofil
+from framework_mvp.ui.components.datenprofil_visualisierung import (
+    zeige_datenprofil,
+    zeige_indikatorbedingungen,
+)
 from framework_mvp.ui.components.transformation import zeige_transformationseditor
 from framework_mvp.ui.fortschritt import unterschritte_fuer
 from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import (
     framework_bereich_oeffnen,
     schritt_abschliessen_und_weiter,
+    zeige_unterschritt_navigation,
 )
 from framework_mvp.ui.session_cleanup import folgeartefakte_zustand_invalidieren
 from framework_mvp.workspace import WorkspaceKonfiguration
@@ -105,7 +109,12 @@ def _projektkontext(projekt_service: ProjektService) -> tuple[UUID, str] | None:
 def _wizard_zustand(projekt_id: UUID) -> dict[str, Any]:
     """Liefert den projektbezogenen, rerun-stabilen ETL-Zustand."""
     zustaende = st.session_state.setdefault("etl_wizard_zustaende", {})
-    return zustaende.setdefault(str(projekt_id), {"schritt": 1})
+    zustand = zustaende.setdefault(str(projekt_id), {"schritt": 1})
+    aktive_quelle = st.session_state.get("aktuelle_datenquellen_id")
+    if aktive_quelle and "datenquellen_id" not in zustand:
+        zustand["datenquellen_id"] = str(aktive_quelle)
+        zustand["quellenauswahl_token"] = str(aktive_quelle)
+    return zustand
 
 
 def _importbezeichnung(importvorgang: Importvorgang, datenquellenbezeichnung: str) -> str:
@@ -164,8 +173,10 @@ def _abhaengige_zustaende_verwerfen(zustand: dict[str, Any]) -> None:
 def _gespeicherten_import_wiederherstellen(
     *,
     importvorgang_service: ImportvorgangService,
-    datenprofil_service: DatenprofilService | None,
+    datenprofil_service: DatenprofilService | None = None,
     datenimport_service: DatenimportService,
+    transformations_service: TransformationsService | None = None,
+    aktiver_zwischendatensatz_id: UUID | None = None,
     import_id: UUID,
     zustand: dict[str, Any],
 ) -> Importvorgang:
@@ -182,10 +193,16 @@ def _gespeicherten_import_wiederherstellen(
         importvorgang.sha256,
     )
     vorschau = datenimport_service.vorschau_erstellen(dateiinhalt, importvorgang.importparameter)
-    zusaetzliche_platzhalter = tuple(
-        geladen.profil.gesamtprofil.get("bestaetigte_zusaetzliche_platzhalter", ())
+    profilgeneration = (
+        datenprofil_service.aktuellste(import_id) if datenprofil_service is not None else None
     )
-    indikatorbedingungen = geladen.profil.indikatorbedingungen
+    gespeichertes_profil = (
+        profilgeneration.profil if profilgeneration is not None else geladen.profil
+    )
+    zusaetzliche_platzhalter = tuple(
+        gespeichertes_profil.gesamtprofil.get("bestaetigte_zusaetzliche_platzhalter", ())
+    )
+    indikatorbedingungen = gespeichertes_profil.indikatorbedingungen
     profil = datenimport_service.profil_erstellen(
         vorschau.vollstaendige_tabelle,
         zusaetzliche_platzhalter,
@@ -211,7 +228,10 @@ def _gespeicherten_import_wiederherstellen(
             ),
             "import_id": importvorgang.import_id,
             "bestaetigter_import": importvorgang,
-            "gespeichertes_profil": geladen.profil,
+            "gespeichertes_profil": gespeichertes_profil,
+            "profil_vorgaenger_id": (
+                profilgeneration.profil_id if profilgeneration is not None else import_id
+            ),
             "zusaetzliche_platzhalter": zusaetzliche_platzhalter,
             "indikatorbedingungen": indikatorbedingungen,
         }
@@ -221,6 +241,18 @@ def _gespeicherten_import_wiederherstellen(
     else:
         zustand["excel_kopfzeile"] = importvorgang.importparameter.kopfzeile
         zustand["tabellenblatt"] = importvorgang.importparameter.tabellenblatt
+    if transformations_service is not None and aktiver_zwischendatensatz_id is not None:
+        datensatz, _ = transformations_service.zwischendatensatz_laden(aktiver_zwischendatensatz_id)
+        if import_id in datensatz.import_ids:
+            plan = transformations_service.plan_laden(datensatz.transformationsplan_id)
+            if plan is None:
+                raise Domaenenfehler(
+                    "Der Transformationsplan des aktiven Zwischendatensatzes fehlt."
+                )
+            zustand["transformationsplan"] = plan
+            zustand["zwischendatensatz"] = datensatz
+            zustand["zwischendatensatz_id"] = datensatz.zwischendatensatz_id
+            zustand["transformationsergebnis"] = transformations_service.vorschau(plan)
     return importvorgang
 
 
@@ -423,7 +455,9 @@ def _excel_einstellungen(projekt_id: UUID, zustand: dict[str, Any]) -> None:
 def _gespeicherte_importe_fuer_quelle(
     *,
     importvorgang_service: ImportvorgangService,
+    datenprofil_service: DatenprofilService | None = None,
     datenimport_service: DatenimportService,
+    transformations_service: TransformationsService | None = None,
     quelle: Datenquelle,
     zustand: dict[str, Any],
 ) -> None:
@@ -457,7 +491,14 @@ def _gespeicherte_importe_fuer_quelle(
     if st.button("Gespeicherten Import ohne erneuten Upload öffnen", type="primary"):
         _gespeicherten_import_wiederherstellen(
             importvorgang_service=importvorgang_service,
+            datenprofil_service=datenprofil_service,
             datenimport_service=datenimport_service,
+            transformations_service=transformations_service,
+            aktiver_zwischendatensatz_id=(
+                UUID(str(st.session_state["aktueller_zwischendatensatz_id"]))
+                if st.session_state.get("aktueller_zwischendatensatz_id")
+                else None
+            ),
             import_id=auswahl,
             zustand=zustand,
         )
@@ -470,6 +511,8 @@ def _quelle_und_datei(
     datenquelle_service: DatenquelleService,
     datenimport_service: DatenimportService,
     importvorgang_service: ImportvorgangService,
+    datenprofil_service: DatenprofilService | None,
+    transformations_service: TransformationsService,
     workspace: WorkspaceKonfiguration,
     projekt_id: UUID,
     zustand: dict[str, Any],
@@ -483,7 +526,9 @@ def _quelle_und_datei(
     if quelle is not None:
         _gespeicherte_importe_fuer_quelle(
             importvorgang_service=importvorgang_service,
+            datenprofil_service=datenprofil_service,
             datenimport_service=datenimport_service,
+            transformations_service=transformations_service,
             quelle=quelle,
             zustand=zustand,
         )
@@ -658,7 +703,7 @@ def _datenprofil_und_bestaetigung(
     *,
     datenimport_service: DatenimportService,
     importvorgang_service: ImportvorgangService,
-    datenprofil_service: DatenprofilService | None,
+    datenprofil_service: DatenprofilService | None = None,
     projekt_id: UUID,
     zustand: dict[str, Any],
 ) -> None:
@@ -667,43 +712,97 @@ def _datenprofil_und_bestaetigung(
     vorschau: Datenvorschau = zustand["vorschau"]
     vorhandene_platzhalter = tuple(zustand.get("zusaetzliche_platzhalter", ()))
     import_bearbeitbar = zustand.get("bestaetigter_import") is None
-    indikator_bearbeitbar = import_bearbeitbar or bool(zustand.get("profil_bearbeiten"))
+    ergaenzungen_bearbeitbar = import_bearbeitbar or bool(zustand.get("profil_bearbeiten"))
+    profilsession = f"etl_profildetail_{projekt_id}_{zustand['datei_metadaten'].sha256}"
     with st.container(border=True):
-        st.markdown("**Fehlwertplatzhalter bestätigen**")
-        platzhaltertext = st.text_input(
-            "Bestätigte domänenspezifische Fehlwertplatzhalter (durch Komma getrennt, optional)",
-            ", ".join(vorhandene_platzhalter),
-            help=(
-                "Beispiele: -, n/a oder unbekannt. Die Kennzeichnung verändert den "
-                "Quelldatensatz nicht. Bestätigen Sie die Eingabe mit Enter."
-            ),
-            disabled=not import_bearbeitbar,
-            key=(f"etl_platzhalter_{projekt_id}_{zustand['datei_metadaten'].sha256}"),
+        st.markdown("### Datenprofil fachlich ergänzen")
+        st.caption(
+            "Bestätigte Platzhalter werden bei statistischen Auswertungen und "
+            "Indikatorbedingungen nicht als reguläre Beobachtungen behandelt."
         )
-    zusaetzliche_platzhalter = tuple(
-        dict.fromkeys(wert.strip() for wert in platzhaltertext.split(",") if wert.strip())
-    )
-    zustand["zusaetzliche_platzhalter"] = zusaetzliche_platzhalter
-    indikatorbedingungen = tuple(zustand.get("indikatorbedingungen", ()))
-    profilschluessel = (
-        zustand["vorschau_schluessel"],
-        zusaetzliche_platzhalter,
-        indikatorbedingungen,
-    )
-    if zustand.get("profil_schluessel") != profilschluessel:
-        zustand["profil"] = datenimport_service.profil_erstellen(
-            vorschau.vollstaendige_tabelle,
+        platzhalter_tab, indikatoren_tab = st.tabs(("Fehlwertplatzhalter", "Indikatoren"))
+        with platzhalter_tab:
+            platzhaltertext = st.text_input(
+                "Bestätigte domänenspezifische Fehlwertplatzhalter "
+                "(durch Komma getrennt, optional)",
+                ", ".join(vorhandene_platzhalter),
+                help="Beispiele: -, n/a oder unbekannt.",
+                disabled=not ergaenzungen_bearbeitbar,
+                key=f"etl_platzhalter_{projekt_id}_{zustand['datei_metadaten'].sha256}",
+            )
+        zusaetzliche_platzhalter = tuple(
+            dict.fromkeys(wert.strip() for wert in platzhaltertext.split(",") if wert.strip())
+        )
+        zustand["zusaetzliche_platzhalter"] = zusaetzliche_platzhalter
+        indikatorbedingungen = tuple(zustand.get("indikatorbedingungen", ()))
+        profilschluessel = (
+            zustand["vorschau_schluessel"],
             zusaetzliche_platzhalter,
             indikatorbedingungen,
         )
-        zustand["profil_schluessel"] = profilschluessel
-    ergebnis: Profilierungsergebnis = zustand["profil"]
-    indikatoraktion = zeige_datenprofil(
-        ergebnis,
-        session_key=f"etl_profildetail_{projekt_id}_{zustand['datei_metadaten'].sha256}",
-        daten=vorschau.vollstaendige_tabelle,
-        indikator_bearbeitbar=indikator_bearbeitbar,
-    )
+        if zustand.get("profil_schluessel") != profilschluessel:
+            zustand["profil"] = datenimport_service.profil_erstellen(
+                vorschau.vollstaendige_tabelle,
+                zusaetzliche_platzhalter,
+                indikatorbedingungen,
+            )
+            zustand["profil_schluessel"] = profilschluessel
+        ergebnis: Profilierungsergebnis = zustand["profil"]
+        with platzhalter_tab:
+            erkannte = sorted(
+                {
+                    klasse.bezeichnung
+                    for profil in ergebnis.profil.spaltenprofile
+                    for klasse in profil.fehlwerte.platzhalterklassen
+                }
+            )
+            st.write("**Erkannte mögliche Platzhalter:** " + (", ".join(erkannte) or "Keine"))
+            st.write(
+                "**Bestätigte zusätzliche Platzhalter:** "
+                + (", ".join(zusaetzliche_platzhalter) or "Keine")
+            )
+        with indikatoren_tab:
+            indikatoraktion = zeige_indikatorbedingungen(
+                ergebnis,
+                session_key=profilsession,
+                bearbeitbar=ergaenzungen_bearbeitbar,
+            )
+        if zustand.get("bestaetigter_import") is not None and datenprofil_service is not None:
+            importvorgang = cast(Importvorgang, zustand["bestaetigter_import"])
+            if not zustand.get("profil_bearbeiten"):
+                if st.button("Fachliche Ergänzungen bearbeiten", width="stretch"):
+                    aktuell = datenprofil_service.aktuellste(importvorgang.import_id)
+                    zustand["indikatorbedingungen"] = aktuell.profil.indikatorbedingungen
+                    zustand["zusaetzliche_platzhalter"] = tuple(
+                        aktuell.profil.gesamtprofil.get(
+                            "bestaetigte_zusaetzliche_platzhalter", ()
+                        )
+                    )
+                    zustand["profil_vorgaenger_id"] = aktuell.profil_id
+                    zustand["profil_bearbeiten"] = True
+                    zustand.pop("profil_schluessel", None)
+                    st.rerun()
+            else:
+                st.info(
+                    "Sie bearbeiten einen Entwurf. Das bestätigte Profil bleibt unverändert; "
+                    "die Schritte 3–6 und die aktive Prozesslineage bleiben gültig."
+                )
+                links, rechts = st.columns(2)
+                if links.button("Bearbeitung abbrechen", width="stretch"):
+                    zustand["profil_bearbeiten"] = False
+                    st.rerun()
+                if rechts.button(
+                    "Neue Profilgeneration speichern", type="primary", width="stretch"
+                ):
+                    generation = datenprofil_service.erweitern(
+                        importvorgang.import_id,
+                        indikatorbedingungen,
+                        zusaetzliche_platzhalter=zusaetzliche_platzhalter,
+                        vorgaenger_profil_id=UUID(str(zustand["profil_vorgaenger_id"])),
+                    )
+                    zustand["profil_bearbeiten"] = False
+                    zustand["profil_vorgaenger_id"] = generation.profil_id
+                    st.success(f"Datenprofil R{generation.fachversion} wurde gespeichert.")
     if indikatoraktion is not None and indikatoraktion.entfernen is not None:
         zu_entfernen = indikatoraktion.entfernen
         entfernt = False
@@ -730,37 +829,13 @@ def _datenprofil_und_bestaetigung(
             zustand["indikatorbedingungen"] = neue_bedingungen
             zustand.pop("profil_schluessel", None)
             st.rerun()
+    zeige_datenprofil(
+        ergebnis,
+        session_key=profilsession,
+        daten=vorschau.vollstaendige_tabelle,
+    )
     if zustand.get("bestaetigter_import") is not None:
         st.success("Diese Tabelle ist als Ausgangsdaten bestätigt.")
-        importvorgang = cast(Importvorgang, zustand["bestaetigter_import"])
-        if datenprofil_service is None:
-            return
-        if not zustand.get("profil_bearbeiten"):
-            if st.button("Indikatorbedingungen bearbeiten"):
-                aktuell = datenprofil_service.aktuellste(importvorgang.import_id)
-                zustand["indikatorbedingungen"] = aktuell.profil.indikatorbedingungen
-                zustand["profil_vorgaenger_id"] = aktuell.profil_id
-                zustand["profil_bearbeiten"] = True
-                zustand.pop("profil_schluessel", None)
-                st.rerun()
-            return
-        st.info(
-            "Sie bearbeiten einen Entwurf. Das bestätigte Profil bleibt unverändert; "
-            "T und die Schritte 3–6 bleiben aktiv."
-        )
-        links, rechts = st.columns(2)
-        if links.button("Bearbeitung abbrechen"):
-            zustand["profil_bearbeiten"] = False
-            st.rerun()
-        if rechts.button("Neue Profilversion R speichern", type="primary"):
-            generation = datenprofil_service.erweitern(
-                importvorgang.import_id,
-                tuple(zustand.get("indikatorbedingungen", ())),
-                vorgaenger_profil_id=UUID(str(zustand["profil_vorgaenger_id"])),
-            )
-            zustand["profil_bearbeiten"] = False
-            zustand["profil_vorgaenger_id"] = generation.profil_id
-            st.success(f"Datenprofil R{generation.fachversion} wurde gespeichert.")
         return
     if st.button("Diese Tabelle als Ausgangsdaten verwenden", type="primary"):
         import_id = zustand.setdefault("import_id", uuid4())
@@ -1284,20 +1359,33 @@ def _zwischendatensatz(
         zustand.update({"schritt": 1, "durchlauf_version": version})
         st.rerun()
     datensatz_id = zustand.setdefault("zwischendatensatz_id", uuid4())
-    if datensatz is None and st.button(
-        "Zwischendatensatz erstellen und zu Schritt 3",
-        type="primary",
-        width="stretch",
-    ):
-        datensatz = service.zwischendatensatz_erzeugen(plan, ergebnis, datensatz_id)
-        zustand["zwischendatensatz"] = datensatz
-        st.session_state.aktueller_zwischendatensatz_id = str(datensatz.zwischendatensatz_id)
+
+    def weiter_zu_mapping() -> None:
+        aktueller_datensatz = datensatz
+        if aktueller_datensatz is None:
+            aktueller_datensatz = service.zwischendatensatz_erzeugen(
+                plan, ergebnis, datensatz_id
+            )
+            zustand["zwischendatensatz"] = aktueller_datensatz
+        st.session_state.aktueller_zwischendatensatz_id = str(
+            aktueller_datensatz.zwischendatensatz_id
+        )
         st.session_state.pop("folgeartefakte_veraltet", None)
         schritt_abschliessen_und_weiter(aktueller_schritt=2, projekt_id=projekt_id)
-    if datensatz is not None and st.button("Weiter zu Schritt 3", type="primary", width="stretch"):
-        st.session_state.aktueller_zwischendatensatz_id = str(datensatz.zwischendatensatz_id)
-        st.session_state.pop("folgeartefakte_veraltet", None)
-        schritt_abschliessen_und_weiter(aktueller_schritt=2, projekt_id=projekt_id)
+
+    zeige_unterschritt_navigation(
+        aktueller_unterschritt=len(ETL_SCHRITTE),
+        anzahl_unterschritte=len(ETL_SCHRITTE),
+        weiter_erlaubt=True,
+        zurueck_callback=lambda: zustand.__setitem__("schritt", len(ETL_SCHRITTE) - 1),
+        weiter_callback=weiter_zu_mapping,
+        weiter_label=(
+            "Zwischendatensatz erstellen und weiter zu Schritt 3: Semantisches Mapping"
+            if datensatz is None
+            else "Weiter zu Schritt 3: Semantisches Mapping"
+        ),
+        schluessel="etl_abschluss_navigation",
+    )
 
 
 def _kann_weiter(zustand: dict[str, Any]) -> bool:
@@ -1324,20 +1412,16 @@ def _kann_weiter(zustand: dict[str, Any]) -> bool:
 
 def _navigation(zustand: dict[str, Any]) -> None:
     """Navigiert kompakt zwischen den fünf ETL-Abschnitten."""
-    zurueck, weiter = st.columns(2)
-    if zurueck.button("Zurück", disabled=zustand["schritt"] == 1, width="content"):
-        zustand["schritt"] -= 1
-        st.rerun()
     if zustand["schritt"] >= len(ETL_SCHRITTE):
         return
-    if weiter.button(
-        "Weiter",
-        disabled=not _kann_weiter(zustand),
-        type="primary",
-        width="content",
-    ):
-        zustand["schritt"] += 1
-        st.rerun()
+    zeige_unterschritt_navigation(
+        aktueller_unterschritt=zustand["schritt"],
+        anzahl_unterschritte=len(ETL_SCHRITTE),
+        weiter_erlaubt=_kann_weiter(zustand),
+        zurueck_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] - 1),
+        weiter_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] + 1),
+        schluessel="etl_unterschritt_navigation",
+    )
 
 
 def zeige_etl_seite(
@@ -1369,6 +1453,8 @@ def zeige_etl_seite(
                 datenquelle_service=datenquelle_service,
                 datenimport_service=datenimport_service,
                 importvorgang_service=importvorgang_service,
+                datenprofil_service=datenprofil_service,
+                transformations_service=transformations_service,
                 workspace=workspace,
                 projekt_id=projekt_id,
                 zustand=zustand,

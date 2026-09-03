@@ -23,8 +23,13 @@ from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import DiscoveryKonfiguration, Prozessnotation
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
+from framework_mvp.ui.components.svg_zoom_viewer import svg_zoom_viewer
 from framework_mvp.ui.fortschritt import unterschritte_fuer
-from framework_mvp.ui.navigation import framework_bereich_oeffnen, schritt_abschliessen_und_weiter
+from framework_mvp.ui.navigation import (
+    framework_bereich_oeffnen,
+    schritt_abschliessen_und_weiter,
+    zeige_unterschritt_navigation,
+)
 from framework_mvp.ui.pages.semantisches_mapping import _projektkontext
 
 LOGGER = logging.getLogger(__name__)
@@ -74,20 +79,16 @@ def _persistierte_analyse_rehydrieren(
 
 
 def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
-    links, rechts = st.columns(2)
-    if links.button("Zurück", disabled=zustand["schritt"] == 1, width="stretch"):
-        zustand["schritt"] -= 1
-        st.rerun()
     if zustand["schritt"] == len(SCHRITTE):
         return
-    if rechts.button(
-        "Weiter",
-        disabled=not weiter,
-        type="primary",
-        width="stretch",
-    ):
-        zustand["schritt"] += 1
-        st.rerun()
+    zeige_unterschritt_navigation(
+        aktueller_unterschritt=zustand["schritt"],
+        anzahl_unterschritte=len(SCHRITTE),
+        weiter_erlaubt=weiter,
+        zurueck_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] - 1),
+        weiter_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] + 1),
+        schluessel="process_mining_unterschritt_navigation",
+    )
 
 
 def _aktive_freigabe(projekt_id: UUID, service: DatenqualitaetService) -> UUID | None:
@@ -117,15 +118,19 @@ def _zeige_svg(svg: bytes | str, beschriftung: str) -> bool:
     """Übergibt ausschließlich validierten SVG-Text an Streamlit."""
     try:
         svg_text = validiere_svg_bytes(svg) if isinstance(svg, bytes) else validiere_svg_text(svg)
-        st.image(svg_text, caption=beschriftung, width="stretch")
-        return True
-    except (UngueltigesSvg, OSError, RuntimeError) as fehler:
+    except UngueltigesSvg as fehler:
         LOGGER.exception("SVG-Darstellung für %s fehlgeschlagen.", beschriftung)
         st.warning(
             f"{beschriftung} kann nicht grafisch angezeigt werden. "
             f"Die strukturierten Ergebnisse bleiben verfügbar: {fehler}"
         )
         return False
+    try:
+        svg_zoom_viewer(svg_text, beschriftung)
+    except (OSError, RuntimeError):
+        LOGGER.exception("Interaktiver SVG-Viewer für %s fehlgeschlagen.", beschriftung)
+        st.image(svg_text, caption=beschriftung, width="stretch")
+    return True
 
 
 def _dfg(vorschau: ProcessMiningVorschau) -> None:
@@ -443,7 +448,7 @@ def zeige_process_mining_seite(
                 }
             )
         anpassen, weiter = st.columns(2)
-        if anpassen.button("k und Prozessnotation anpassen", width="stretch"):
+        if anpassen.button("Zurück", width="stretch"):
             zustand["schritt"] = 2
             st.rerun()
         if weiter.button(
