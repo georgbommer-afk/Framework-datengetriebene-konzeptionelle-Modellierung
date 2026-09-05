@@ -107,3 +107,51 @@ def test_neue_etl_datenbasis_setzt_persistierten_fortschritt_kontrolliert_zuruec
     stand = service.laden(kontext, projekt.projekt_id)
     assert stand.schritt == 2
     assert stand.unterschritt == "Transformieren und verknüpfen"
+
+
+def test_identischer_ui_rerun_veraendert_abgeschlossenen_fortschritt_nicht(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "idempotent.sqlite"
+    projekt = ProjektService(SQLiteProjektRepository(db)).projekt_anlegen(
+        bezeichnung="Abgeschlossen",
+        untersuchungsauftrag=Untersuchungsauftrag(
+            "Problem", "Zweck", Systemtyp.PRODUKTION, "Grenze"
+        ),
+    )
+    geheimnis = "i" * 40
+    jetzt = datetime.now(UTC)
+    repository = SQLiteZugriffsRepository(db)
+    repository.projektzugehoerigkeit_speichern(
+        Projektzugehoerigkeit(
+            projekt.projekt_id,
+            Projektzugriffsart.GAST,
+            None,
+            geheimnis_hash(geheimnis),
+            jetzt + timedelta(hours=2),
+            jetzt,
+            1,
+            jetzt,
+        )
+    )
+    service = FortschrittService(
+        repository, SQLiteFortschrittRepository(db), AutorisierungsService(repository)
+    )
+    kontext = Zugriffskontext.gast(geheimnis)
+    service.aktualisieren(
+        kontext,
+        projekt.projekt_id,
+        schritt=10,
+        unterschritt="Konzeptionelles Modell ausgeben",
+        status="abgeschlossen",
+    )
+    vorher = repository.fortschritt_laden(projekt.projekt_id)
+
+    service.aktualisieren(
+        kontext,
+        projekt.projekt_id,
+        schritt=10,
+        unterschritt="Konzeptionelles Modell ausgeben",
+    )
+
+    assert repository.fortschritt_laden(projekt.projekt_id) == vorher

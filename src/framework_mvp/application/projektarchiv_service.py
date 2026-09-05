@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import os
 import shutil
 import sqlite3
@@ -16,6 +17,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -32,6 +34,7 @@ from framework_mvp.domain.models.zugriff import (
     Gruppenaktion,
     Gruppenrolle,
     Projektaktion,
+    Projektzugriffsart,
     Zugriffskontext,
 )
 from framework_mvp.infrastructure.persistence.sqlite_schema import (
@@ -41,6 +44,8 @@ from framework_mvp.infrastructure.persistence.sqlite_schema import (
 from framework_mvp.workspace import WorkspaceKonfiguration
 
 ARCHIVVERSION = 1
+FACHLICHER_FINGERPRINT_SCOPE = "fachlich_v1"
+LOGGER = logging.getLogger(__name__)
 
 _TABELLEN_REIHENFOLGE = (
     "projekte",
@@ -81,6 +86,14 @@ _ARTEFAKT_ENDUNGEN = {
 }
 
 
+class Importmodus(StrEnum):
+    """Eindeutige, zwischen Prüfung und Ausführung gebundene Importentscheidung."""
+
+    NEU = "neu"
+    ERSETZEN = "ersetzen"
+    GAST_WIEDERBINDEN = "gast_wiederbinden"
+
+
 @dataclass(frozen=True, slots=True)
 class ArchivGrenzen:
     """Harte Ressourcenlimits gegen ZIP-Bomben und Speicherüberlastung."""
@@ -98,9 +111,20 @@ class ImportErgebnis:
     """Ergebnis eines erfolgreichen Imports oder identischen Wiederöffnens."""
 
     projekt_id: UUID
-    bereits_vorhanden: bool
     projektname: str
-    ersetzt: bool = False
+    importmodus: Importmodus
+
+    @property
+    def bereits_vorhanden(self) -> bool:
+        return self.importmodus is not Importmodus.NEU
+
+    @property
+    def ersetzt(self) -> bool:
+        return self.importmodus is Importmodus.ERSETZEN
+
+    @property
+    def gast_wiederhergestellt(self) -> bool:
+        return self.importmodus is Importmodus.GAST_WIEDERBINDEN
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +134,15 @@ class ArchivImportPruefung:
     projekt_id: UUID
     projektname: str
     exportiert_am: str
-    bereits_vorhanden: bool
+    importmodus: Importmodus
+
+    @property
+    def bereits_vorhanden(self) -> bool:
+        return self.importmodus is not Importmodus.NEU
+
+    @property
+    def gast_wiederherstellung(self) -> bool:
+        return self.importmodus is Importmodus.GAST_WIEDERBINDEN
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,9 +165,17 @@ class GestagterProjektimport:
     projekt_id: UUID
     projektname: str
     exportiert_am: str
-    bereits_vorhanden: bool
+    importmodus: Importmodus
     zielkontext: str
     ziel_gruppen_id: UUID | None
+
+    @property
+    def bereits_vorhanden(self) -> bool:
+        return self.importmodus is not Importmodus.NEU
+
+    @property
+    def gast_wiederherstellung(self) -> bool:
+        return self.importmodus is Importmodus.GAST_WIEDERBINDEN
 
 
 class ProjektSperren:
@@ -166,7 +206,7 @@ class ProjektArchivService:
         grenzen: ArchivGrenzen | None = None,
         sperren: ProjektSperren | None = None,
         gast_ttl: timedelta = timedelta(hours=24),
-        konsistenzpruefung: Callable[[UUID], None] | None = None,
+        konsistenzpruefung: Callable[[UUID], Any] | None = None,
     ) -> None:
         self._datenbankpfad = Path(datenbankpfad)
         self._workspace = workspace
@@ -208,7 +248,10 @@ class ProjektArchivService:
                 groesse_bytes=len(archiv),
                 benutzer_id=kontext.benutzer_id,
                 status="erfolgreich",
-                details={"project_fingerprint": manifest["project_fingerprint"]},
+                details={
+                    "project_fingerprint": manifest["project_fingerprint"],
+                    "project_fingerprint_scope": FACHLICHER_FINGERPRINT_SCOPE,
+                },
                 zeitpunkt=datetime.now(UTC),
             )
             return archiv
@@ -226,11 +269,18 @@ class ProjektArchivService:
         ziel_gruppen_id: UUID | None = None,
     ) -> ArchivImportPruefung:
         """Validiert ohne Mutation und prüft Ziel beziehungsweise Ersetzungsberechtigung."""
-        _, manifest = self._archiv_pruefen(archiv)
+        inhalt, manifest = self._archiv_pruefen(archiv)
+        try:
+            projekt_id = UUID(str(manifest["original_project_id"]))
+        except (KeyError, TypeError, ValueError) as fehler:
+            raise ArchivUngueltig("Die ursprüngliche Projekt-ID ist ungültig.") from fehler
+        self._tabellendaten_laden(inhalt, projekt_id)
         return self._import_pruefung_aus_manifest(
             kontext,
             manifest,
+            archivinhalt=inhalt,
             ziel_gruppen_id=ziel_gruppen_id,
+            archiv_sha256=hashlib.sha256(archiv).hexdigest(),
         )
 
     def archiv_stagen(
@@ -281,12 +331,20 @@ class ProjektArchivService:
                 staging_id,
                 archiv_sha256,
                 ziel_gruppen_id=ziel_gruppen_id,
+                phase="validate_staging",
             )
-            _, manifest = self._archiv_pruefen(archiv)
+            inhalt, manifest = self._archiv_pruefen(archiv)
+            try:
+                projekt_id = UUID(str(manifest["original_project_id"]))
+            except (KeyError, TypeError, ValueError) as fehler:
+                raise ArchivUngueltig("Die ursprüngliche Projekt-ID ist ungültig.") from fehler
+            self._tabellendaten_laden(inhalt, projekt_id)
             pruefung = self._import_pruefung_aus_manifest(
                 kontext,
                 manifest,
+                archivinhalt=inhalt,
                 ziel_gruppen_id=ziel_gruppen_id,
+                archiv_sha256=archiv_sha256,
             )
             return GestagterProjektimport(
                 staging_id=staging_id,
@@ -295,7 +353,7 @@ class ProjektArchivService:
                 projekt_id=pruefung.projekt_id,
                 projektname=pruefung.projektname,
                 exportiert_am=pruefung.exportiert_am,
-                bereits_vorhanden=pruefung.bereits_vorhanden,
+                importmodus=pruefung.importmodus,
                 zielkontext=zielkontext,
                 ziel_gruppen_id=ziel_gruppen_id,
             )
@@ -312,8 +370,8 @@ class ProjektArchivService:
         archiv_sha256: str,
         *,
         erwartete_projekt_id: UUID,
+        erwarteter_importmodus: Importmodus,
         ziel_gruppen_id: UUID | None = None,
-        vorhandenes_projekt_ersetzen: bool = False,
     ) -> ImportErgebnis:
         """Importiert nur den zuvor geprüften Stagingstand und räumt ihn stets auf."""
         try:
@@ -322,6 +380,7 @@ class ProjektArchivService:
                 staging_id,
                 archiv_sha256,
                 ziel_gruppen_id=ziel_gruppen_id,
+                phase="execute_staging",
             )
         except ZugriffVerweigert:
             raise
@@ -336,8 +395,17 @@ class ProjektArchivService:
             )
             if (
                 pruefung.projekt_id != erwartete_projekt_id
-                or pruefung.bereits_vorhanden != vorhandenes_projekt_ersetzen
+                or pruefung.importmodus is not erwarteter_importmodus
             ):
+                LOGGER.warning(
+                    "Projektimport abgelehnt phase=execute reason=IMPORT_MODE_CHANGED "
+                    "staging_id=%s archiv_sha256=%s projekt_id=%s expected_mode=%s actual_mode=%s",
+                    staging_id,
+                    archiv_sha256[:16],
+                    erwartete_projekt_id,
+                    erwarteter_importmodus,
+                    pruefung.importmodus,
+                )
                 raise ArchivKonflikt(
                     "Das Importziel wurde parallel verändert. Bitte erneut prüfen."
                 )
@@ -345,7 +413,7 @@ class ProjektArchivService:
                 kontext,
                 archiv,
                 ziel_gruppen_id=ziel_gruppen_id,
-                vorhandenes_projekt_ersetzen=vorhandenes_projekt_ersetzen,
+                vorhandenes_projekt_ersetzen=(erwarteter_importmodus is Importmodus.ERSETZEN),
             )
         finally:
             self._upload_staging_verwerfen(staging_id)
@@ -365,6 +433,7 @@ class ProjektArchivService:
                 staging_id,
                 archiv_sha256,
                 ziel_gruppen_id=ziel_gruppen_id,
+                phase="discard_staging",
             )
         except ZugriffVerweigert:
             raise
@@ -378,7 +447,9 @@ class ProjektArchivService:
         kontext: Zugriffskontext,
         manifest: dict[str, Any],
         *,
+        archivinhalt: dict[str, bytes],
         ziel_gruppen_id: UUID | None,
+        archiv_sha256: str,
     ) -> ArchivImportPruefung:
         try:
             projekt_id = UUID(str(manifest["original_project_id"]))
@@ -387,19 +458,44 @@ class ProjektArchivService:
         projektname = str(manifest.get("project_name", "")).strip()
         if not projektname:
             raise ArchivUngueltig("Der Projektname fehlt im Manifest.")
-        vorhanden = self._vorhandener_fingerabdruck(projekt_id) is not None
+        vorhanden = self._projekt_vorhanden(projekt_id)
+        importmodus = Importmodus.NEU
         if vorhanden:
-            self._autorisierung.projekt_zugriff_pruefen(
+            darf_ersetzen = self._autorisierung.projekt_zugriff_erlaubt(
                 kontext, projekt_id, Projektaktion.IMPORTIEREN
+            ) and self._autorisierung.projekt_zugriff_erlaubt(
+                kontext, projekt_id, Projektaktion.LOESCHEN
             )
-            self._autorisierung.projekt_zugriff_pruefen(kontext, projekt_id, Projektaktion.LOESCHEN)
+            if darf_ersetzen:
+                importmodus = Importmodus.ERSETZEN
+            else:
+                zuordnung = self._zugriff.projektzugehoerigkeit_laden(projekt_id)
+                vorhandener_fingerabdruck = self._vorhandener_fingerabdruck(projekt_id)
+                ablehnungsgrund = self._gast_wiederherstellung_ablehnungsgrund(
+                    kontext,
+                    projekt_id,
+                    zuordnung=zuordnung,
+                    ziel_gruppen_id=ziel_gruppen_id,
+                    archiv_sha256=archiv_sha256,
+                    archiv_fingerabdruck=str(manifest.get("project_fingerprint", "")),
+                    vorhandener_fingerabdruck=vorhandener_fingerabdruck,
+                    archivinhalt=archivinhalt,
+                )
+                if ablehnungsgrund is not None:
+                    self._importzugriff_verweigern(
+                        ablehnungsgrund,
+                        phase="validate",
+                        projekt_id=projekt_id,
+                        archiv_sha256=archiv_sha256,
+                    )
+                importmodus = Importmodus.GAST_WIEDERBINDEN
         else:
             self._importziel_pruefen(kontext, ziel_gruppen_id, manifest=manifest)
         return ArchivImportPruefung(
             projekt_id,
             projektname,
             str(manifest.get("exported_at_utc", "")),
-            vorhanden,
+            importmodus,
         )
 
     def _upload_staging_pfad(self, staging_id: UUID) -> Path:
@@ -417,6 +513,7 @@ class ProjektArchivService:
         archiv_sha256: str,
         *,
         ziel_gruppen_id: UUID | None,
+        phase: str,
     ) -> tuple[bytes, str]:
         staging = self._upload_staging_pfad(staging_id)
         try:
@@ -426,17 +523,46 @@ class ProjektArchivService:
                 raise ArchivUngueltig("Das gestagte Archiv überschreitet die zulässige Größe.")
             archiv = archivpfad.read_bytes()
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as fehler:
+            LOGGER.warning(
+                "Projektimport abgelehnt phase=%s reason=IMPORT_STAGING_NOT_FOUND "
+                "staging_id=%s archiv_sha256=%s",
+                phase,
+                staging_id,
+                archiv_sha256[:16],
+            )
             raise ArchivUngueltig("Der gestagte Import ist nicht mehr verfügbar.") from fehler
         if not isinstance(metadaten, dict):
             raise ArchivUngueltig("Die Import-Stagingmetadaten sind ungültig.")
         erwartete_bindung = self._kontextbindung(kontext, ziel_gruppen_id)
-        if (
-            metadaten.get("staging_id") != str(staging_id)
-            or not hmac_compare(str(metadaten.get("archiv_sha256", "")), archiv_sha256)
-            or not hmac_compare(str(metadaten.get("kontextbindung", "")), erwartete_bindung)
-        ):
-            raise ZugriffVerweigert(NICHT_VERFUEGBAR)
+        if metadaten.get("staging_id") != str(staging_id):
+            self._importzugriff_verweigern(
+                "IMPORT_STAGING_ID_MISMATCH",
+                phase=phase,
+                staging_id=staging_id,
+                archiv_sha256=archiv_sha256,
+            )
+        if not hmac_compare(str(metadaten.get("archiv_sha256", "")), archiv_sha256):
+            self._importzugriff_verweigern(
+                "IMPORT_STAGING_HASH_MISMATCH",
+                phase=phase,
+                staging_id=staging_id,
+                archiv_sha256=archiv_sha256,
+            )
+        if not hmac_compare(str(metadaten.get("kontextbindung", "")), erwartete_bindung):
+            self._importzugriff_verweigern(
+                "IMPORT_STAGE_CONTEXT_MISMATCH",
+                phase=phase,
+                staging_id=staging_id,
+                archiv_sha256=archiv_sha256,
+            )
         if not hmac_compare(hashlib.sha256(archiv).hexdigest(), archiv_sha256):
+            LOGGER.warning(
+                "Projektimport abgelehnt phase=%s reason=IMPORT_STAGED_ARCHIVE_HASH_MISMATCH "
+                "staging_id=%s archiv_sha256=%s",
+                phase,
+                staging_id,
+                archiv_sha256[:16],
+            )
             raise ArchivUngueltig("Das gestagte Projektarchiv wurde verändert.")
         return archiv, str(metadaten.get("zielkontext", ""))
 
@@ -474,33 +600,71 @@ class ProjektArchivService:
         projektname = str(manifest.get("project_name", "")).strip()
         if not projektname:
             raise ArchivUngueltig("Der Projektname fehlt im Manifest.")
+        archiv_sha256 = hashlib.sha256(archiv).hexdigest()
+        importmodus = Importmodus.NEU
         with self._sperren.sperren(projekt_id):
-            vorhandener_fingerabdruck = self._vorhandener_fingerabdruck(projekt_id)
-            if vorhandener_fingerabdruck is not None:
-                self._autorisierung.projekt_zugriff_pruefen(
+            projekt_vorhanden = self._projekt_vorhanden(projekt_id)
+            if projekt_vorhanden:
+                darf_ersetzen = self._autorisierung.projekt_zugriff_erlaubt(
                     kontext, projekt_id, Projektaktion.IMPORTIEREN
-                )
-                self._autorisierung.projekt_zugriff_pruefen(
+                ) and self._autorisierung.projekt_zugriff_erlaubt(
                     kontext, projekt_id, Projektaktion.LOESCHEN
                 )
-                if not vorhandenes_projekt_ersetzen:
-                    raise ArchivKonflikt(
-                        "Die Projekt-ID ist bereits vorhanden. Bestätigen Sie ausdrücklich, "
-                        "dass das vorhandene Projekt ersetzt werden soll."
+                if darf_ersetzen:
+                    importmodus = Importmodus.ERSETZEN
+                    if not vorhandenes_projekt_ersetzen:
+                        raise ArchivKonflikt(
+                            "Die Projekt-ID ist bereits vorhanden. Bestätigen Sie ausdrücklich, "
+                            "dass das vorhandene Projekt ersetzt werden soll."
+                        )
+                    zuordnung = self._zugriff.projektzugehoerigkeit_laden(projekt_id)
+                    if zuordnung is None:
+                        raise ZugriffVerweigert(NICHT_VERFUEGBAR)
+                    self._atomar_uebernehmen(
+                        kontext,
+                        projekt_id,
+                        zuordnung.gruppen_id,
+                        inhalt,
+                        manifest,
+                        archiv_sha256=archiv_sha256,
+                        archivgroesse_bytes=len(archiv),
+                        ersetzen=True,
                     )
-                zuordnung = self._zugriff.projektzugehoerigkeit_laden(projekt_id)
-                if zuordnung is None:
-                    raise ZugriffVerweigert(NICHT_VERFUEGBAR)
-                self._atomar_uebernehmen(
-                    kontext,
-                    projekt_id,
-                    zuordnung.gruppen_id,
-                    inhalt,
-                    manifest,
-                    archiv_sha256=hashlib.sha256(archiv).hexdigest(),
-                    archivgroesse_bytes=len(archiv),
-                    ersetzen=True,
-                )
+                else:
+                    zuordnung = self._zugriff.projektzugehoerigkeit_laden(projekt_id)
+                    vorhandener_fingerabdruck = self._vorhandener_fingerabdruck(projekt_id)
+                    ablehnungsgrund = self._gast_wiederherstellung_ablehnungsgrund(
+                        kontext,
+                        projekt_id,
+                        zuordnung=zuordnung,
+                        ziel_gruppen_id=ziel_gruppen_id,
+                        archiv_sha256=archiv_sha256,
+                        archiv_fingerabdruck=str(manifest.get("project_fingerprint", "")),
+                        vorhandener_fingerabdruck=vorhandener_fingerabdruck,
+                        archivinhalt=inhalt,
+                    )
+                    if ablehnungsgrund is not None:
+                        self._importzugriff_verweigern(
+                            ablehnungsgrund,
+                            phase="execute",
+                            projekt_id=projekt_id,
+                            archiv_sha256=archiv_sha256,
+                        )
+                    importmodus = Importmodus.GAST_WIEDERBINDEN
+                    if vorhandenes_projekt_ersetzen:
+                        raise ArchivKonflikt(
+                            "Die Wiederherstellung darf kein fremdes Projekt ersetzen."
+                        )
+                    self._tabellendaten_laden(inhalt, projekt_id)
+                    if self._konsistenzpruefung is not None:
+                        self._konsistenzpruefung(projekt_id)
+                    self._gastprojekt_atomar_wiederbinden(
+                        kontext,
+                        projekt_id,
+                        archiv_sha256=archiv_sha256,
+                        archivgroesse_bytes=len(archiv),
+                        archiv_fingerabdruck=str(manifest["project_fingerprint"]),
+                    )
             else:
                 self._importziel_pruefen(kontext, ziel_gruppen_id, manifest=manifest)
                 self._atomar_uebernehmen(
@@ -509,16 +673,309 @@ class ProjektArchivService:
                     ziel_gruppen_id,
                     inhalt,
                     manifest,
-                    archiv_sha256=hashlib.sha256(archiv).hexdigest(),
+                    archiv_sha256=archiv_sha256,
                     archivgroesse_bytes=len(archiv),
                     ersetzen=False,
                 )
         return ImportErgebnis(
             projekt_id,
-            bereits_vorhanden=vorhandener_fingerabdruck is not None,
             projektname=projektname,
-            ersetzt=vorhandener_fingerabdruck is not None,
+            importmodus=importmodus,
         )
+
+    def _gast_wiederherstellung_ablehnungsgrund(
+        self,
+        kontext: Zugriffskontext,
+        projekt_id: UUID,
+        *,
+        zuordnung: Any,
+        ziel_gruppen_id: UUID | None,
+        archiv_sha256: str,
+        archiv_fingerabdruck: str,
+        vorhandener_fingerabdruck: str | None,
+        archivinhalt: dict[str, bytes],
+    ) -> str | None:
+        """Nennt intern den Grund; die öffentliche Meldung bleibt absichtlich generisch."""
+        if kontext.gast_geheimnis is None:
+            return "IMPORT_GUEST_REBIND_NO_GUEST_CONTEXT"
+        if ziel_gruppen_id is not None:
+            return "IMPORT_GUEST_REBIND_TARGET_CONTEXT_INVALID"
+        if zuordnung is None or zuordnung.zugriffsart is not Projektzugriffsart.GAST:
+            return "IMPORT_GUEST_REBIND_NOT_GUEST_PROJECT"
+        if vorhandener_fingerabdruck is None:
+            return "IMPORT_GUEST_REBIND_CURRENT_SNAPSHOT_MISSING"
+        archiv_fachfingerabdruck = self._payload_fingerabdruck(archivinhalt)
+        if not hmac_compare(archiv_fachfingerabdruck, vorhandener_fingerabdruck):
+            diagnose = self._snapshot_differenz(archivinhalt, projekt_id)
+            LOGGER.warning(
+                "Projektimport-Snapshotabweichung projekt_id=%s "
+                "manifest_fingerprint=%s export_fingerprint=%s current_fingerprint=%s "
+                "changed_components=%s changed_fields=%s component_hashes=%s",
+                projekt_id,
+                archiv_fingerabdruck,
+                archiv_fachfingerabdruck,
+                vorhandener_fingerabdruck,
+                diagnose["changed_components"],
+                diagnose["changed_fields"],
+                diagnose["component_hashes"],
+            )
+            return "IMPORT_GUEST_REBIND_FINGERPRINT_MISMATCH"
+        verbindung = sqlite3.connect(self._datenbankpfad)
+        try:
+            zeile = verbindung.execute(
+                """
+                SELECT details_json FROM archivmetadaten
+                WHERE projekt_id=? AND archivtyp='projekt_export'
+                  AND sha256=? AND status='erfolgreich'
+                LIMIT 1
+                """,
+                (str(projekt_id), archiv_sha256),
+            ).fetchone()
+        finally:
+            verbindung.close()
+        if zeile is None:
+            return "IMPORT_GUEST_REBIND_NO_EXPORT_RECORD"
+        try:
+            details = json.loads(zeile[0])
+        except (TypeError, json.JSONDecodeError):
+            return "IMPORT_GUEST_REBIND_EXPORT_DETAILS_INVALID"
+        if not isinstance(details, dict) or not hmac_compare(
+            str(details.get("project_fingerprint", "")), archiv_fingerabdruck
+        ):
+            return "IMPORT_GUEST_REBIND_EXPORT_FINGERPRINT_MISMATCH"
+        return None
+
+    def _snapshot_differenz(
+        self,
+        archivinhalt: dict[str, bytes],
+        projekt_id: UUID,
+    ) -> dict[str, Any]:
+        """Vergleicht Snapshot-Komponenten ohne fachliche Inhalte zu protokollieren."""
+        aktuelle_tabellen = self._datenbank_snapshot(projekt_id)
+        projektzeilen = aktuelle_tabellen.get("projekte", [])
+        if len(projektzeilen) != 1:
+            return {
+                "changed_components": ["projekt_snapshot"],
+                "changed_fields": {},
+                "component_hashes": {},
+            }
+        aktueller_inhalt = self._payload_erstellen(
+            projekt_id,
+            aktuelle_tabellen,
+            projektzeilen[0],
+        )
+        geaenderte_komponenten: list[str] = []
+        geaenderte_felder: dict[str, list[str]] = {}
+        komponenten_hashes: dict[str, dict[str, str]] = {}
+        dateipfade = sorted(
+            {pfad for pfad in set(archivinhalt) | set(aktueller_inhalt) if pfad != "README.txt"}
+        )
+        dateien_geaendert = False
+        datei_export_hashes: dict[str, str] = {}
+        datei_aktuell_hashes: dict[str, str] = {}
+        for pfad in dateipfade:
+            exportdaten = archivinhalt.get(pfad)
+            aktuelle_daten = aktueller_inhalt.get(pfad)
+            if exportdaten == aktuelle_daten:
+                continue
+            if pfad.startswith("database/") and pfad.endswith(".json"):
+                komponente = PurePosixPath(pfad).stem
+                geaenderte_komponenten.append(komponente)
+                geaenderte_felder[komponente] = self._tabellenfeld_differenz(
+                    exportdaten,
+                    aktuelle_daten,
+                )
+                komponenten_hashes[komponente] = {
+                    "export": self._optionaler_hash(exportdaten),
+                    "current": self._optionaler_hash(aktuelle_daten),
+                }
+            elif pfad == "project/project.json":
+                # Diese Datei spiegelt die bereits separat verglichene Tabelle `projekte`.
+                continue
+            else:
+                dateien_geaendert = True
+                datei_export_hashes[pfad] = self._optionaler_hash(exportdaten)
+                datei_aktuell_hashes[pfad] = self._optionaler_hash(aktuelle_daten)
+        if dateien_geaendert:
+            geaenderte_komponenten.append("projektdateien")
+            komponenten_hashes["projektdateien"] = {
+                "export": hashlib.sha256(self._json_bytes(datei_export_hashes)).hexdigest()[:16],
+                "current": hashlib.sha256(self._json_bytes(datei_aktuell_hashes)).hexdigest()[:16],
+            }
+        return {
+            "changed_components": sorted(set(geaenderte_komponenten)),
+            "changed_fields": {
+                komponente: felder
+                for komponente, felder in sorted(geaenderte_felder.items())
+                if felder
+            },
+            "component_hashes": dict(sorted(komponenten_hashes.items())),
+        }
+
+    @classmethod
+    def _tabellenfeld_differenz(
+        cls,
+        exportdaten: bytes | None,
+        aktuelle_daten: bytes | None,
+    ) -> list[str]:
+        try:
+            exportzeilen = json.loads(exportdaten) if exportdaten is not None else []
+            aktuelle_zeilen = json.loads(aktuelle_daten) if aktuelle_daten is not None else []
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+            return ["<ungueltige_json_struktur>"]
+        if not isinstance(exportzeilen, list) or not isinstance(aktuelle_zeilen, list):
+            return ["<ungueltige_tabellenstruktur>"]
+        if not all(isinstance(zeile, dict) for zeile in (*exportzeilen, *aktuelle_zeilen)):
+            return ["<ungueltige_zeilenstruktur>"]
+        felder = sorted(
+            set().union(
+                *(set(zeile) for zeile in (*exportzeilen, *aktuelle_zeilen)),
+            )
+        )
+        return [
+            feld
+            for feld in felder
+            if cls._json_bytes([zeile.get(feld) for zeile in exportzeilen])
+            != cls._json_bytes([zeile.get(feld) for zeile in aktuelle_zeilen])
+        ]
+
+    @staticmethod
+    def _optionaler_hash(daten: bytes | None) -> str:
+        return "fehlt" if daten is None else hashlib.sha256(daten).hexdigest()[:16]
+
+    @staticmethod
+    def _importzugriff_verweigern(
+        grund: str,
+        *,
+        phase: str,
+        projekt_id: UUID | None = None,
+        archiv_sha256: str = "",
+        staging_id: UUID | None = None,
+    ) -> None:
+        LOGGER.warning(
+            "Projektimport abgelehnt phase=%s reason=%s staging_id=%s "
+            "archiv_sha256=%s projekt_id=%s",
+            phase,
+            grund,
+            staging_id or "-",
+            archiv_sha256[:16],
+            projekt_id or "-",
+        )
+        raise ZugriffVerweigert(NICHT_VERFUEGBAR)
+
+    def _gastprojekt_atomar_wiederbinden(
+        self,
+        kontext: Zugriffskontext,
+        projekt_id: UUID,
+        *,
+        archiv_sha256: str,
+        archivgroesse_bytes: int,
+        archiv_fingerabdruck: str,
+    ) -> None:
+        """Bindet einen nachgewiesenen, unveränderten Gastexport an die neue Sitzung."""
+        if kontext.gast_geheimnis is None:
+            self._importzugriff_verweigern(
+                "IMPORT_GUEST_REBIND_NO_GUEST_CONTEXT",
+                phase="rebind",
+                projekt_id=projekt_id,
+                archiv_sha256=archiv_sha256,
+            )
+        jetzt = datetime.now(UTC)
+        verbindung = sqlite3.connect(self._datenbankpfad, timeout=5.0)
+        try:
+            initialisiere_schema(verbindung)
+            verbindung.execute("BEGIN IMMEDIATE")
+            zuordnung = verbindung.execute(
+                "SELECT zugriffsart FROM projektzugehoerigkeiten WHERE projekt_id=?",
+                (str(projekt_id),),
+            ).fetchone()
+            exportbeleg = verbindung.execute(
+                """
+                SELECT details_json FROM archivmetadaten
+                WHERE projekt_id=? AND archivtyp='projekt_export'
+                  AND sha256=? AND status='erfolgreich'
+                LIMIT 1
+                """,
+                (str(projekt_id), archiv_sha256),
+            ).fetchone()
+            if zuordnung is None or zuordnung[0] != Projektzugriffsart.GAST.value:
+                self._importzugriff_verweigern(
+                    "IMPORT_GUEST_REBIND_NOT_GUEST_PROJECT",
+                    phase="rebind",
+                    projekt_id=projekt_id,
+                    archiv_sha256=archiv_sha256,
+                )
+            if exportbeleg is None:
+                self._importzugriff_verweigern(
+                    "IMPORT_GUEST_REBIND_NO_EXPORT_RECORD",
+                    phase="rebind",
+                    projekt_id=projekt_id,
+                    archiv_sha256=archiv_sha256,
+                )
+            try:
+                exportdetails = json.loads(exportbeleg[0])
+            except (TypeError, json.JSONDecodeError):
+                self._importzugriff_verweigern(
+                    "IMPORT_GUEST_REBIND_EXPORT_DETAILS_INVALID",
+                    phase="rebind",
+                    projekt_id=projekt_id,
+                    archiv_sha256=archiv_sha256,
+                )
+            if not isinstance(exportdetails, dict) or not hmac_compare(
+                str(exportdetails.get("project_fingerprint", "")), archiv_fingerabdruck
+            ):
+                self._importzugriff_verweigern(
+                    "IMPORT_GUEST_REBIND_EXPORT_FINGERPRINT_MISMATCH",
+                    phase="rebind",
+                    projekt_id=projekt_id,
+                    archiv_sha256=archiv_sha256,
+                )
+            verbindung.execute(
+                """
+                UPDATE projektzugehoerigkeiten
+                SET gast_geheimnis_sha256=?, gast_ablauf_am_utc=?,
+                    zuletzt_aktiv_am_utc=?, revision=revision + 1
+                WHERE projekt_id=? AND zugriffsart='gast'
+                """,
+                (
+                    geheimnis_hash(kontext.gast_geheimnis),
+                    (jetzt + self._gast_ttl).isoformat(),
+                    jetzt.isoformat(),
+                    str(projekt_id),
+                ),
+            )
+            verbindung.execute(
+                """
+                INSERT INTO archivmetadaten (
+                    archiv_id, projekt_id, gruppen_id, archivtyp, archivversion,
+                    sha256, groesse_bytes, erstellt_von_benutzer_id,
+                    erstellt_am_utc, status, details_json
+                ) VALUES (?, ?, NULL, 'projekt_import', ?, ?, ?, NULL, ?, 'erfolgreich', ?)
+                """,
+                (
+                    str(uuid4()),
+                    str(projekt_id),
+                    ARCHIVVERSION,
+                    archiv_sha256,
+                    archivgroesse_bytes,
+                    jetzt.isoformat(),
+                    json.dumps(
+                        {
+                            "project_fingerprint": archiv_fingerabdruck,
+                            "restore_mode": "guest_rebind",
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                ),
+            )
+            verbindung.commit()
+        except Exception:
+            verbindung.rollback()
+            raise
+        finally:
+            verbindung.close()
 
     def _datenbank_snapshot(self, projekt_id: UUID) -> dict[str, list[dict[str, Any]]]:
         verbindung = sqlite3.connect(self._datenbankpfad, timeout=5.0)
@@ -626,6 +1083,7 @@ class ProjektArchivService:
             "compressed_payload_size_bytes": komprimiert,
             "uncompressed_payload_size_bytes": sum(len(daten) for daten in payload.values()),
             "project_fingerprint": fingerabdruck,
+            "project_fingerprint_scope": FACHLICHER_FINGERPRINT_SCOPE,
             "artifact_types": sorted(
                 {Path(pfad).suffix.casefold().lstrip(".") for pfad in payload if Path(pfad).suffix}
             ),
@@ -746,12 +1204,14 @@ class ProjektArchivService:
         }
         if not pflicht.issubset(inhalt):
             raise ArchivUngueltig("Das Archiv ist unvollständig.")
-        fingerprint_payload = {
-            pfad: hashlib.sha256(daten).hexdigest()
-            for pfad, daten in sorted(inhalt.items())
-            if pfad != "README.txt"
-        }
-        erwartet_fingerprint = hashlib.sha256(self._json_bytes(fingerprint_payload)).hexdigest()
+        fingerprint_scope = manifest.get("project_fingerprint_scope")
+        if fingerprint_scope is None:
+            # Archive vor Einführung des fachlichen Scopes bleiben importierbar.
+            erwartet_fingerprint = self._legacy_payload_fingerabdruck(inhalt)
+        elif fingerprint_scope == FACHLICHER_FINGERPRINT_SCOPE:
+            erwartet_fingerprint = self._payload_fingerabdruck(inhalt)
+        else:
+            raise ArchivUngueltig("Der Projektfingerprint-Scope wird nicht unterstützt.")
         if not hmac_compare(str(manifest.get("project_fingerprint", "")), erwartet_fingerprint):
             raise ArchivUngueltig("Der Projektfingerabdruck ist ungültig.")
 
@@ -1057,6 +1517,13 @@ class ProjektArchivService:
                         )
 
     def _vorhandener_fingerabdruck(self, projekt_id: UUID) -> str | None:
+        if not self._projekt_vorhanden(projekt_id):
+            return None
+        daten = self._datenbank_snapshot(projekt_id)
+        payload = self._payload_erstellen(projekt_id, daten, daten["projekte"][0])
+        return self._payload_fingerabdruck(payload)
+
+    def _projekt_vorhanden(self, projekt_id: UUID) -> bool:
         verbindung = sqlite3.connect(self._datenbankpfad)
         try:
             initialisiere_schema(verbindung)
@@ -1065,11 +1532,7 @@ class ProjektArchivService:
             ).fetchone()
         finally:
             verbindung.close()
-        if vorhanden is None:
-            return None
-        daten = self._datenbank_snapshot(projekt_id)
-        payload = self._payload_erstellen(projekt_id, daten, daten["projekte"][0])
-        return self._payload_fingerabdruck(payload)
+        return vorhanden is not None
 
     def _importziel_pruefen(
         self,
@@ -1152,6 +1615,35 @@ class ProjektArchivService:
 
     @classmethod
     def _payload_fingerabdruck(cls, payload: dict[str, bytes]) -> str:
+        fingerprint_payload = {
+            pfad: cls._fachlicher_datei_fingerabdruck(pfad, inhalt)
+            for pfad, inhalt in sorted(payload.items())
+            if pfad != "README.txt"
+        }
+        return hashlib.sha256(cls._json_bytes(fingerprint_payload)).hexdigest()
+
+    @classmethod
+    def _fachlicher_datei_fingerabdruck(cls, pfad: str, inhalt: bytes) -> str:
+        if pfad != "database/projektfortschritt.json":
+            return hashlib.sha256(inhalt).hexdigest()
+        try:
+            zeilen = json.loads(inhalt)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return hashlib.sha256(inhalt).hexdigest()
+        if not isinstance(zeilen, list) or not all(isinstance(zeile, dict) for zeile in zeilen):
+            return hashlib.sha256(inhalt).hexdigest()
+        fachliche_zeilen = [
+            {
+                schluessel: wert
+                for schluessel, wert in zeile.items()
+                if schluessel not in {"gespeichert_am_utc", "revision"}
+            }
+            for zeile in zeilen
+        ]
+        return hashlib.sha256(cls._json_bytes(fachliche_zeilen)).hexdigest()
+
+    @classmethod
+    def _legacy_payload_fingerabdruck(cls, payload: dict[str, bytes]) -> str:
         fingerprint_payload = {
             pfad: hashlib.sha256(inhalt).hexdigest()
             for pfad, inhalt in sorted(payload.items())

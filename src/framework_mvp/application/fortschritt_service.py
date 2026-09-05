@@ -119,8 +119,29 @@ class FortschrittService:
         effektiver_schritt = lineage.framework_schritt if lineage is not None else schritt
         effektiver_unterschritt = unterschritt if effektiver_schritt == schritt else ""
         zaehler, nenner = berechne_fortschritt(effektiver_schritt, effektiver_unterschritt)
-        jetzt = datetime.now(UTC)
         alt = self._zugriff.fortschritt_laden(projekt_id)
+        effektiver_status = status
+        if (
+            alt is not None
+            and alt.framework_schritt == effektiver_schritt
+            and alt.fachlicher_unterschritt == effektiver_unterschritt
+            and alt.status == "abgeschlossen"
+            and status == "in_bearbeitung"
+        ):
+            # Ein reiner UI-Rerun darf einen bereits abgeschlossenen Stand weder
+            # fachlich herabstufen noch durch Zeitstempel/Revision verändern.
+            effektiver_status = alt.status
+        if (
+            alt is not None
+            and alt.framework_schritt == effektiver_schritt
+            and alt.fachlicher_unterschritt == effektiver_unterschritt
+            and alt.fortschritt_zaehler == zaehler
+            and alt.fortschritt_nenner == nenner
+            and alt.phase == phase_fuer_schritt(effektiver_schritt)
+            and alt.status == effektiver_status
+        ):
+            return self.laden(kontext, projekt_id)
+        jetzt = datetime.now(UTC)
         self._zugriff.fortschritt_speichern(
             Projektfortschritt(
                 projekt_id=projekt_id,
@@ -129,7 +150,7 @@ class FortschrittService:
                 fortschritt_zaehler=zaehler,
                 fortschritt_nenner=nenner,
                 phase=phase_fuer_schritt(effektiver_schritt),
-                status=status,
+                status=effektiver_status,
                 gespeichert_am=jetzt,
                 revision=1 if alt is None else alt.revision + 1,
             )

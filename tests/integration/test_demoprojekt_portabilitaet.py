@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 
+from framework_mvp.application.autorisierung import geheimnis_hash
+from framework_mvp.application.projektarchiv_service import Importmodus
 from framework_mvp.bootstrap import (
     erstelle_autorisierungs_service,
     erstelle_datenprofil_service,
@@ -29,6 +33,17 @@ from framework_mvp.domain.models import ModellbestandteilId
 from framework_mvp.domain.models.zugriff import Projektaktion, Zugriffskontext
 from framework_mvp.ui.projektkontext import projektkontext_setzen
 from framework_mvp.workspace import WorkspaceKonfiguration
+
+
+def _projektdatei_pruefsummen(
+    workspace: WorkspaceKonfiguration, projekt_id: UUID
+) -> dict[str, str]:
+    projektwurzel = workspace.basisverzeichnis / "projects" / str(projekt_id)
+    return {
+        datei.relative_to(projektwurzel).as_posix(): hashlib.sha256(datei.read_bytes()).hexdigest()
+        for datei in sorted(projektwurzel.rglob("*"))
+        if datei.is_file()
+    }
 
 
 def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzbar(
@@ -196,6 +211,94 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
                 f"SELECT COUNT(*) FROM {tabelle} WHERE projekt_id=?",  # noqa: S608
                 (str(projekt_id),),
             ).fetchone()[0]
+
+
+def test_vollstaendiges_demo_wird_auf_gleicher_db_gestagt_an_neuen_gast_gebunden(
+    tmp_path: Path,
+) -> None:
+    """Deckt den produktiven Gast-Restore ohne Artefakt-Neuberechnung vollständig ab."""
+    datenbank = tmp_path / "gleich.sqlite"
+    workspace = WorkspaceKonfiguration.ermitteln(tmp_path / "gleich-workspace")
+    altes_geheimnis = "demo-alt-" + "a" * 40
+    alter_kontext = Zugriffskontext.gast(altes_geheimnis)
+    demo = erstelle_demoprojekt_service(datenbank, workspace).erstellen(alter_kontext)
+    projekt_id = demo.projekt.projekt_id
+    archiv_service = erstelle_projektarchiv_service(datenbank, workspace)
+    kontext_vorher = erstelle_projektkontext_service(datenbank, workspace).pruefen(projekt_id)
+    tabellen_vorher = archiv_service._datenbank_snapshot(projekt_id)  # noqa: SLF001
+    dateien_vorher = _projektdatei_pruefsummen(workspace, projekt_id)
+
+    archiv = archiv_service.exportieren(alter_kontext, projekt_id)
+    archiv_sha256 = hashlib.sha256(archiv).hexdigest()
+    manifest = archiv_service.validieren(archiv)
+    with sqlite3.connect(datenbank) as verbindung:
+        exportbeleg = verbindung.execute(
+            """
+            SELECT projekt_id, archivtyp, sha256, status, details_json
+            FROM archivmetadaten
+            WHERE projekt_id=? AND archivtyp='projekt_export' AND sha256=?
+            """,
+            (str(projekt_id), archiv_sha256),
+        ).fetchone()
+        zuordnungsart = verbindung.execute(
+            "SELECT zugriffsart FROM projektzugehoerigkeiten WHERE projekt_id=?",
+            (str(projekt_id),),
+        ).fetchone()
+    assert exportbeleg is not None
+    exportdetails = json.loads(exportbeleg[4])
+    assert exportbeleg[:4] == (
+        str(projekt_id),
+        "projekt_export",
+        archiv_sha256,
+        "erfolgreich",
+    )
+    assert exportdetails["project_fingerprint"] == manifest["project_fingerprint"]
+    assert zuordnungsart == ("gast",)
+
+    neues_geheimnis = "demo-neu-" + "b" * 40
+    uploader_kontext = Zugriffskontext.gast(neues_geheimnis)
+    staging = archiv_service.archiv_stagen(uploader_kontext, archiv)
+    pruef_kontext = Zugriffskontext.gast(neues_geheimnis)
+    pruefung = archiv_service.gestagten_import_pruefen(
+        pruef_kontext, staging.staging_id, staging.archiv_sha256
+    )
+    assert pruefung.importmodus is Importmodus.GAST_WIEDERBINDEN
+    import_kontext = Zugriffskontext.gast(neues_geheimnis)
+    ergebnis = archiv_service.gestagten_importieren(
+        import_kontext,
+        staging.staging_id,
+        staging.archiv_sha256,
+        erwartete_projekt_id=projekt_id,
+        erwarteter_importmodus=Importmodus.GAST_WIEDERBINDEN,
+    )
+
+    assert ergebnis.importmodus is Importmodus.GAST_WIEDERBINDEN
+    assert {
+        geheimnis_hash(kontext.gast_geheimnis or "")
+        for kontext in (uploader_kontext, pruef_kontext, import_kontext)
+    } == {geheimnis_hash(neues_geheimnis)}
+    kontext_nachher = erstelle_projektkontext_service(datenbank, workspace).pruefen(projekt_id)
+    assert kontext_nachher.framework_schritt == 10
+    assert kontext_nachher.referenzen == kontext_vorher.referenzen
+    assert archiv_service._datenbank_snapshot(projekt_id) == tabellen_vorher  # noqa: SLF001
+    assert _projektdatei_pruefsummen(workspace, projekt_id) == dateien_vorher
+    assert (
+        archiv_service._vorhandener_fingerabdruck(projekt_id)
+        == manifest[  # noqa: SLF001
+            "project_fingerprint"
+        ]
+    )
+    autorisierung = erstelle_autorisierungs_service(datenbank)
+    assert autorisierung.projekt_zugriff_erlaubt(
+        import_kontext, projekt_id, Projektaktion.BEARBEITEN
+    )
+    assert not autorisierung.projekt_zugriff_erlaubt(
+        alter_kontext, projekt_id, Projektaktion.ANSEHEN
+    )
+    assert demo.report_html.startswith(b"<!DOCTYPE html")
+    assert demo.report_pdf.startswith(b"%PDF")
+    staging_pfad = workspace.basisverzeichnis / ".import-staging" / f"upload-{staging.staging_id}"
+    assert not staging_pfad.exists()
 
 
 def test_neue_a_g_generation_bleibt_nach_neustart_aktiv_und_nutzt_kontrollierte_vorbelegung(

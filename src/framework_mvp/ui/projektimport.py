@@ -11,6 +11,7 @@ from uuid import UUID
 from framework_mvp.application.projektarchiv_service import (
     ArchivStaging,
     GestagterProjektimport,
+    Importmodus,
 )
 
 PROJEKTIMPORT_ZUSTAND = "projektimport_zustand"
@@ -39,7 +40,7 @@ class ProjektImportZustand:
     projekt_id: UUID | None = None
     projektname: str = ""
     exportiert_am: str = ""
-    bereits_vorhanden: bool | None = None
+    importmodus: Importmodus | None = None
     fehlermeldung: str = ""
 
     @classmethod
@@ -59,14 +60,14 @@ class ProjektImportZustand:
             self,
             phase=(
                 ProjektImportPhase.KONFLIKT
-                if pruefung.bereits_vorhanden
+                if pruefung.importmodus is Importmodus.ERSETZEN
                 else ProjektImportPhase.VALIDIERT
             ),
             archivversion=pruefung.archivversion,
             projekt_id=pruefung.projekt_id,
             projektname=pruefung.projektname,
             exportiert_am=pruefung.exportiert_am,
-            bereits_vorhanden=pruefung.bereits_vorhanden,
+            importmodus=pruefung.importmodus,
             ziel_gruppen_id=pruefung.ziel_gruppen_id,
         )
 

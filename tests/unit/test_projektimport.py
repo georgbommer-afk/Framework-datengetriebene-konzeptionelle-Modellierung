@@ -5,6 +5,7 @@ from uuid import uuid4
 from framework_mvp.application.projektarchiv_service import (
     ArchivStaging,
     GestagterProjektimport,
+    Importmodus,
 )
 from framework_mvp.ui.projektimport import (
     PROJEKTIMPORT_ZUSTAND,
@@ -42,7 +43,7 @@ def test_importzustand_bewahrt_staging_pruefung_und_konflikt() -> None:
         projekt_id,
         "Portables Projekt",
         "2026-08-19T10:00:00+00:00",
-        True,
+        Importmodus.ERSETZEN,
         "aktuelle Gastsitzung",
         None,
     )
@@ -52,7 +53,32 @@ def test_importzustand_bewahrt_staging_pruefung_und_konflikt() -> None:
     assert validiert.phase is ProjektImportPhase.KONFLIKT
     assert validiert.projekt_id == projekt_id
     assert validiert.archivversion == 1
-    assert validiert.bereits_vorhanden is True
+    assert validiert.importmodus is Importmodus.ERSETZEN
+
+
+def test_gastwiederherstellung_ist_ein_validierter_import_und_keine_ersetzen_freigabe() -> None:
+    staging_id = uuid4()
+    projekt_id = uuid4()
+    zustand = ProjektImportZustand.aus_staging(
+        ArchivStaging(staging_id, "c" * 64, "aktuelle Gastsitzung", None)
+    )
+
+    validiert = zustand.mit_pruefung(
+        GestagterProjektimport(
+            staging_id,
+            "c" * 64,
+            1,
+            projekt_id,
+            "Gesicherter Gaststand",
+            "2026-09-05T10:00:00+00:00",
+            Importmodus.GAST_WIEDERBINDEN,
+            "aktuelle Gastsitzung",
+            None,
+        )
+    )
+
+    assert validiert.phase is ProjektImportPhase.VALIDIERT
+    assert validiert.importmodus is Importmodus.GAST_WIEDERBINDEN
 
 
 def test_import_session_cleanup_entfernt_keinen_fremden_sessionzustand() -> None:

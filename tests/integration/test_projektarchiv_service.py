@@ -14,10 +14,17 @@ import pytest
 
 from framework_mvp.application.autorisierung import AutorisierungsService, geheimnis_hash
 from framework_mvp.application.projekt_service import ProjektService
-from framework_mvp.application.projektarchiv_service import ArchivGrenzen, ProjektArchivService
+from framework_mvp.application.projektarchiv_service import (
+    ArchivGrenzen,
+    Importmodus,
+    ProjektArchivService,
+)
 from framework_mvp.domain.exceptions import ArchivKonflikt, ArchivUngueltig, ZugriffVerweigert
 from framework_mvp.domain.models import Systemtyp, Untersuchungsauftrag
 from framework_mvp.domain.models.zugriff import (
+    Gruppenstatus,
+    Kursgruppe,
+    Projektaktion,
     Projektzugehoerigkeit,
     Projektzugriffsart,
     Zugriffskontext,
@@ -220,14 +227,258 @@ def test_import_verweigert_im_archiv_fehlende_manifestdatei(tmp_path: Path) -> N
         service.importieren(kontext, unvollstaendig.getvalue())
 
 
-def test_bekannte_uuid_allein_erlaubt_keinen_identischen_import(tmp_path: Path) -> None:
+def test_bekannte_uuid_und_abweichender_stand_erlauben_keine_uebernahme(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     projekt, kontext, service = _quelle(tmp_path)
     archiv = service.exportieren(kontext, projekt.projekt_id)
+    with sqlite3.connect(tmp_path / "quelle.sqlite") as verbindung:
+        verbindung.execute(
+            "UPDATE projekte SET bezeichnung='Inzwischen weiterbearbeitet' WHERE projekt_id=?",
+            (str(projekt.projekt_id),),
+        )
+        verbindung.commit()
     fremder_kontext = Zugriffskontext.gast("fremd" * 10)
     with pytest.raises(ZugriffVerweigert):
         service.import_pruefen(fremder_kontext, archiv)
     with pytest.raises(ZugriffVerweigert):
         service.importieren(fremder_kontext, archiv, vorhandenes_projekt_ersetzen=True)
+    assert "reason=IMPORT_GUEST_REBIND_FINGERPRINT_MISMATCH" in caplog.text
+
+
+def test_export_import_in_neuer_gastsitzung_auf_gleicher_datenbank(
+    tmp_path: Path,
+) -> None:
+    projekt, alter_kontext, service = _quelle(tmp_path)
+    archiv = service.exportieren(alter_kontext, projekt.projekt_id)
+    neues_geheimnis = "neue-session-" + "n" * 32
+    upload_kontext = Zugriffskontext.gast(neues_geheimnis)
+
+    staging = service.archiv_stagen(upload_kontext, archiv)
+    pruef_kontext = Zugriffskontext.gast(neues_geheimnis)
+    pruefung = service.gestagten_import_pruefen(
+        pruef_kontext, staging.staging_id, staging.archiv_sha256
+    )
+    assert pruefung.staging_id == staging.staging_id
+    assert pruefung.archiv_sha256 == staging.archiv_sha256
+    import_kontext = Zugriffskontext.gast(neues_geheimnis)
+    ergebnis = service.gestagten_importieren(
+        import_kontext,
+        staging.staging_id,
+        staging.archiv_sha256,
+        erwartete_projekt_id=pruefung.projekt_id,
+        erwarteter_importmodus=pruefung.importmodus,
+    )
+
+    assert ergebnis.projekt_id == projekt.projekt_id
+    assert {
+        geheimnis_hash(kontext.gast_geheimnis or "")
+        for kontext in (upload_kontext, pruef_kontext, import_kontext)
+    } == {geheimnis_hash(neues_geheimnis)}
+    assert service._kontextbindung(upload_kontext, None) == service._kontextbindung(  # noqa: SLF001
+        import_kontext, None
+    )
+    assert pruefung.gast_wiederherstellung
+    assert ergebnis.gast_wiederhergestellt
+    repository = SQLiteZugriffsRepository(tmp_path / "quelle.sqlite")
+    autorisierung = AutorisierungsService(repository)
+    assert autorisierung.projekt_zugriff_erlaubt(
+        import_kontext, projekt.projekt_id, Projektaktion.BEARBEITEN
+    )
+    assert not autorisierung.projekt_zugriff_erlaubt(
+        alter_kontext, projekt.projekt_id, Projektaktion.ANSEHEN
+    )
+    assert alter_kontext.gast_geheimnis is not None
+    assert alter_kontext.gast_geheimnis.encode() not in archiv
+    assert not _upload_staging_pfad(
+        WorkspaceKonfiguration(tmp_path / "quelle-workspace"), staging.staging_id
+    ).exists()
+
+
+def test_gastwiederbindung_verlangt_passenden_fingerprint_im_exportbeleg(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    projekt, alter_kontext, service = _quelle(tmp_path)
+    archiv = service.exportieren(alter_kontext, projekt.projekt_id)
+    with sqlite3.connect(tmp_path / "quelle.sqlite") as verbindung:
+        verbindung.execute(
+            """
+            UPDATE archivmetadaten SET details_json='{"project_fingerprint":"abweichend"}'
+            WHERE projekt_id=? AND archivtyp='projekt_export'
+            """,
+            (str(projekt.projekt_id),),
+        )
+        verbindung.commit()
+
+    with pytest.raises(ZugriffVerweigert):
+        service.import_pruefen(Zugriffskontext.gast("neuer-gast-" + "x" * 32), archiv)
+
+    assert "reason=IMPORT_GUEST_REBIND_EXPORT_FINGERPRINT_MISMATCH" in caplog.text
+
+
+def test_fachlicher_fingerprint_ignoriert_nur_volatile_fortschrittsfelder(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    projekt, alter_kontext, service = _quelle(tmp_path)
+    datenbank = tmp_path / "quelle.sqlite"
+    with sqlite3.connect(datenbank) as verbindung:
+        verbindung.execute(
+            """
+            INSERT INTO projektfortschritt (
+                projekt_id, framework_schritt, fachlicher_unterschritt,
+                fortschritt_zaehler, fortschritt_nenner, phase, status,
+                gespeichert_am_utc, revision
+            ) VALUES (?, 10, 'Konzeptionelles Modell ausgeben', 28, 28, 3,
+                      'in_bearbeitung', '2026-09-05T10:00:00+00:00', 1)
+            """,
+            (str(projekt.projekt_id),),
+        )
+        verbindung.commit()
+    archiv = service.exportieren(alter_kontext, projekt.projekt_id)
+    manifest = service.validieren(archiv)
+
+    with sqlite3.connect(datenbank) as verbindung:
+        verbindung.execute(
+            """
+            UPDATE projektfortschritt
+            SET gespeichert_am_utc='2026-09-05T10:01:00+00:00', revision=revision + 1
+            WHERE projekt_id=?
+            """,
+            (str(projekt.projekt_id),),
+        )
+        verbindung.commit()
+    assert (
+        service._vorhandener_fingerabdruck(projekt.projekt_id)
+        == manifest[  # noqa: SLF001
+            "project_fingerprint"
+        ]
+    )
+    neuer_gast = Zugriffskontext.gast("neuer-gast-" + "v" * 32)
+    assert service.import_pruefen(neuer_gast, archiv).importmodus is Importmodus.GAST_WIEDERBINDEN
+
+    with sqlite3.connect(datenbank) as verbindung:
+        verbindung.execute(
+            """
+            UPDATE projektfortschritt SET status='blockiert', revision=revision + 1
+            WHERE projekt_id=?
+            """,
+            (str(projekt.projekt_id),),
+        )
+        verbindung.commit()
+    with pytest.raises(ZugriffVerweigert):
+        service.import_pruefen(neuer_gast, archiv)
+    assert "IMPORT_GUEST_REBIND_FINGERPRINT_MISMATCH" in caplog.text
+    assert "changed_components=['projektfortschritt']" in caplog.text
+    assert "'status'" in caplog.text
+
+
+def test_archiv_ohne_fachlichen_fingerprint_scope_bleibt_validierbar(tmp_path: Path) -> None:
+    projekt, kontext, service = _quelle(tmp_path)
+    archiv = service.exportieren(kontext, projekt.projekt_id)
+    with zipfile.ZipFile(io.BytesIO(archiv)) as quelle:
+        dateien = {info.filename: quelle.read(info.filename) for info in quelle.infolist()}
+    manifest = json.loads(dateien.pop("manifest.json"))
+    manifest.pop("project_fingerprint_scope")
+    manifest["project_fingerprint"] = service._legacy_payload_fingerabdruck(  # noqa: SLF001
+        dateien
+    )
+    legacy_archiv = io.BytesIO()
+    with zipfile.ZipFile(legacy_archiv, "w", zipfile.ZIP_DEFLATED) as ziel:
+        for pfad, daten in dateien.items():
+            ziel.writestr(pfad, daten)
+        ziel.writestr("manifest.json", json.dumps(manifest).encode())
+
+    validiert = service.validieren(legacy_archiv.getvalue())
+
+    assert validiert["project_fingerprint"] == manifest["project_fingerprint"]
+
+
+def test_gastarchiv_kann_keine_inzwischen_geschuetzte_uuid_uebernehmen(
+    tmp_path: Path,
+) -> None:
+    projekt, alter_kontext, service = _quelle(tmp_path)
+    archiv = service.exportieren(alter_kontext, projekt.projekt_id)
+    repository = SQLiteZugriffsRepository(tmp_path / "quelle.sqlite")
+    leitung = repository.oidc_benutzer_speichern(
+        issuer="https://idp.example",
+        subject="leitung",
+        email="leitung@example.org",
+        anzeigename="Leitung",
+    )
+    jetzt = datetime.now(UTC)
+    gruppe = Kursgruppe(
+        uuid4(),
+        "Geschützter Kurs",
+        "",
+        leitung.benutzer_id,
+        None,
+        None,
+        20,
+        20,
+        10_000_000,
+        None,
+        Gruppenstatus.AKTIV,
+        jetzt,
+        jetzt,
+    )
+    repository.kursgruppe_speichern(gruppe)
+    repository.projektzugehoerigkeit_speichern(
+        Projektzugehoerigkeit(
+            projekt.projekt_id,
+            Projektzugriffsart.KURSGRUPPE,
+            gruppe.gruppen_id,
+            None,
+            None,
+            jetzt,
+            1,
+            jetzt,
+        )
+    )
+
+    fremder_gast = Zugriffskontext.gast("fremder-gast-" + "f" * 32)
+    with pytest.raises(ZugriffVerweigert):
+        service.import_pruefen(fremder_gast, archiv)
+    with pytest.raises(ZugriffVerweigert):
+        service.importieren(fremder_gast, archiv)
+
+    zuordnung = repository.projektzugehoerigkeit_laden(projekt.projekt_id)
+    assert zuordnung is not None
+    assert zuordnung.zugriffsart is Projektzugriffsart.KURSGRUPPE
+    assert zuordnung.gruppen_id == gruppe.gruppen_id
+
+
+def test_fehlgeschlagene_gastwiederbindung_rollt_neues_geheimnis_zurueck(
+    tmp_path: Path,
+) -> None:
+    projekt, alter_kontext, service = _quelle(tmp_path)
+    archiv = service.exportieren(alter_kontext, projekt.projekt_id)
+    with sqlite3.connect(tmp_path / "quelle.sqlite") as verbindung:
+        verbindung.execute(
+            """
+            CREATE TRIGGER import_protokoll_schlaegt_fehl
+            BEFORE INSERT ON archivmetadaten
+            WHEN NEW.archivtyp = 'projekt_import'
+            BEGIN
+                SELECT RAISE(ABORT, 'simulierter Protokollfehler');
+            END
+            """
+        )
+        verbindung.commit()
+
+    neuer_kontext = Zugriffskontext.gast("neue-session-" + "z" * 32)
+    with pytest.raises(sqlite3.IntegrityError, match="simulierter Protokollfehler"):
+        service.importieren(neuer_kontext, archiv)
+
+    autorisierung = AutorisierungsService(SQLiteZugriffsRepository(tmp_path / "quelle.sqlite"))
+    assert autorisierung.projekt_zugriff_erlaubt(
+        alter_kontext, projekt.projekt_id, Projektaktion.ANSEHEN
+    )
+    assert not autorisierung.projekt_zugriff_erlaubt(
+        neuer_kontext, projekt.projekt_id, Projektaktion.ANSEHEN
+    )
 
 
 def test_manifest_hashes_stimmen_mit_payload_ueberein(tmp_path: Path) -> None:
@@ -395,6 +646,7 @@ def test_staging_wird_nach_erfolg_und_validierungsfehler_entfernt(tmp_path: Path
         staging.staging_id,
         staging.archiv_sha256,
         erwartete_projekt_id=pruefung.projekt_id,
+        erwarteter_importmodus=pruefung.importmodus,
     )
 
     assert ergebnis.projekt_id == projekt.projekt_id
@@ -416,6 +668,7 @@ def test_staging_wird_nach_erfolg_und_validierungsfehler_entfernt(tmp_path: Path
 
 def test_staging_ist_an_kontext_gebunden_und_fehler_entfernt_es_sicher(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     projekt, kontext, service = _quelle(tmp_path)
     archiv = service.exportieren(kontext, projekt.projekt_id)
@@ -429,6 +682,7 @@ def test_staging_ist_an_kontext_gebunden_und_fehler_entfernt_es_sicher(
             staging.staging_id,
             staging.archiv_sha256,
         )
+    assert "reason=IMPORT_STAGE_CONTEXT_MISMATCH" in caplog.text
     assert staging_pfad.is_dir()
 
     pruefung = service.gestagten_import_pruefen(kontext, staging.staging_id, staging.archiv_sha256)
@@ -439,7 +693,7 @@ def test_staging_ist_an_kontext_gebunden_und_fehler_entfernt_es_sicher(
             staging.staging_id,
             staging.archiv_sha256,
             erwartete_projekt_id=pruefung.projekt_id,
-            vorhandenes_projekt_ersetzen=True,
+            erwarteter_importmodus=pruefung.importmodus,
         )
     assert not staging_pfad.exists()
     assert SQLiteProjektRepository(tmp_path / "quelle.sqlite").laden(projekt.projekt_id) is not None

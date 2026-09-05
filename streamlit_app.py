@@ -17,6 +17,7 @@ from framework_mvp.application.gast_service import GAST_HINWEIS, GastService
 from framework_mvp.application.kursdashboard_service import KursdashboardService
 from framework_mvp.application.kursgruppen_service import KursgruppenLoeschService
 from framework_mvp.application.mandanten_projekt_service import MandantenProjektService
+from framework_mvp.application.projektarchiv_service import Importmodus
 from framework_mvp.application.systemadmin_service import SystemadminService
 from framework_mvp.bootstrap import (
     ermittle_datenbankpfad,
@@ -160,6 +161,17 @@ def _gast_starten() -> None:
     st.rerun()
 
 
+def _gastimport_starten() -> None:
+    """Öffnet den Import mit einer isolierten Sitzung, aber ohne leeres Projekt."""
+    sitzung = GastService().sitzung_starten()
+    projektkontext_bereinigen(cast(MutableMapping[str, Any], st.session_state))
+    st.session_state.gast_geheimnis = sitzung.kontext.gast_geheimnis
+    st.session_state.pop("gast_projekt_id", None)
+    st.session_state.projektimport_offen = True
+    st.session_state.projektimport_startseite = True
+    st.rerun()
+
+
 def _demoprojekt_starten() -> None:
     sitzung = GastService().sitzung_starten()
     with st.spinner("Vollständiges Demoprojekt wird über die Schritte 1–10 erzeugt …"):
@@ -183,6 +195,308 @@ def _anwendung_beenden() -> None:
     st.rerun()
 
 
+def _projektimport_loggen(
+    phase: str,
+    *,
+    importzustand: ProjektImportZustand | None = None,
+    archiv_sha256: str = "",
+) -> None:
+    """Protokolliert technische Importdiagnose ohne Sitzungs- oder Geheimnisdaten."""
+    LOGGER.exception(
+        "Unerwarteter Projektimportfehler in Phase %s "
+        "(staging_id=%s, archiv_sha256=%s, zielkontext=%s, projekt_id=%s)",
+        phase,
+        importzustand.staging_id if importzustand is not None else "-",
+        (importzustand.archiv_sha256 if importzustand is not None else archiv_sha256)[:16],
+        importzustand.zielkontext if importzustand is not None else "neue Gastsitzung",
+        importzustand.projekt_id if importzustand is not None else "-",
+    )
+
+
+def _projektimport_fachfehler_loggen(
+    phase: str,
+    grund: str,
+    fehler: Domaenenfehler,
+    *,
+    importzustand: ProjektImportZustand | None = None,
+) -> None:
+    """Protokolliert erwartete Ablehnungen mit Code, aber ohne Geheimnisdaten."""
+    LOGGER.warning(
+        "Projektimport abgelehnt phase=%s reason=%s error_type=%s "
+        "staging_id=%s archiv_sha256=%s projekt_id=%s",
+        phase,
+        grund,
+        type(fehler).__name__,
+        importzustand.staging_id if importzustand is not None else "-",
+        importzustand.archiv_sha256[:16] if importzustand is not None else "",
+        importzustand.projekt_id if importzustand is not None else "-",
+    )
+
+
+def _projektimport_startseite_beenden(
+    importzustand: ProjektImportZustand | None,
+) -> None:
+    if importzustand is not None and kontext is not None:
+        try:
+            erstelle_projektarchiv_service(datenbankpfad, workspace).archiv_staging_verwerfen(
+                kontext,
+                importzustand.staging_id,
+                importzustand.archiv_sha256,
+            )
+        except Domaenenfehler as fehler:
+            _projektimport_fachfehler_loggen(
+                "discard_staging",
+                "IMPORT_STAGING_DISCARD_DOMAIN_ERROR",
+                fehler,
+                importzustand=importzustand,
+            )
+        except Exception:
+            _projektimport_loggen("staging_verwerfen", importzustand=importzustand)
+    projektimport_session_zuruecksetzen(cast(MutableMapping[str, Any], st.session_state))
+    st.session_state.pop("projektimport_startseite", None)
+    st.session_state.pop("gast_geheimnis", None)
+    st.rerun()
+
+
+def _projektimport_auf_startseite() -> None:
+    """Führt den rerun-stabilen Gastimport als Einstieg in einen Arbeitskontext aus."""
+    if kontext is None or kontext.gast_geheimnis is None:
+        return
+    generation = int(st.session_state.get("projektimport_generation", 0))
+    archiv_service = erstelle_projektarchiv_service(datenbankpfad, workspace)
+    importzustand = st.session_state.get(PROJEKTIMPORT_ZUSTAND)
+    if not isinstance(importzustand, ProjektImportZustand):
+        importzustand = None
+        st.session_state.pop(PROJEKTIMPORT_ZUSTAND, None)
+    with st.container(key="projektimport_bereich"):
+        st.html(
+            """
+            <style>
+            .st-key-projektimport_bereich
+            [data-testid="stFileUploaderDropzoneInstructions"] small,
+            .st-key-projektimport_bereich
+            [data-testid="stFileUploaderDropzoneInstructions"] span:last-child {
+                display: none;
+            }
+            </style>
+            """
+        )
+        if importzustand is None:
+            upload = st.file_uploader(
+                "ZIP-Projektarchiv auswählen",
+                type=["zip"],
+                key=f"cloud_projektimport_{generation}",
+                width="stretch",
+            )
+            abbrechen, _ = st.columns(2)
+            if abbrechen.button("Abbrechen", width="stretch", key="projektimport_start_abbrechen"):
+                _projektimport_startseite_beenden(None)
+            if upload is not None:
+                archivdaten = upload.getvalue()
+                try:
+                    staging = archiv_service.archiv_stagen(kontext, archivdaten)
+                except Domaenenfehler as fehler:
+                    _projektimport_fachfehler_loggen(
+                        "staging", "IMPORT_STAGING_DOMAIN_ERROR", fehler
+                    )
+                    st.error(str(fehler))
+                except Exception:
+                    _projektimport_loggen(
+                        "stagen", archiv_sha256=hashlib.sha256(archivdaten).hexdigest()
+                    )
+                    st.error("Das Projektarchiv konnte nicht sicher übernommen werden.")
+                else:
+                    st.session_state[PROJEKTIMPORT_ZUSTAND] = ProjektImportZustand.aus_staging(
+                        staging
+                    )
+                    st.rerun()
+            return
+
+        st.caption(
+            f"Archiv: SHA-256 {importzustand.archiv_sha256[:16]}… · "
+            f"Ziel: {importzustand.zielkontext}"
+        )
+        if importzustand.phase is ProjektImportPhase.FEHLGESCHLAGEN:
+            st.error(importzustand.fehlermeldung)
+            if st.button(
+                "Import schließen",
+                width="stretch",
+                key=projektimport_widget_key(
+                    "schliessen", importzustand.projekt_id, importzustand.archiv_sha256
+                ),
+            ):
+                _projektimport_startseite_beenden(importzustand)
+            return
+        if importzustand.phase is ProjektImportPhase.UEBERNOMMEN:
+            abbrechen, pruefen = st.columns(2)
+            if abbrechen.button(
+                "Abbrechen",
+                width="stretch",
+                key=projektimport_widget_key(
+                    "abbrechen", importzustand.projekt_id, importzustand.archiv_sha256
+                ),
+            ):
+                _projektimport_startseite_beenden(importzustand)
+            if pruefen.button(
+                "Projektarchiv prüfen",
+                type="primary",
+                width="stretch",
+                key=projektimport_widget_key(
+                    "pruefen", importzustand.projekt_id, importzustand.archiv_sha256
+                ),
+            ):
+                try:
+                    pruefung = archiv_service.gestagten_import_pruefen(
+                        kontext, importzustand.staging_id, importzustand.archiv_sha256
+                    )
+                except Domaenenfehler as fehler:
+                    _projektimport_fachfehler_loggen(
+                        "validate_staging",
+                        "IMPORT_VALIDATE_DOMAIN_ERROR",
+                        fehler,
+                        importzustand=importzustand,
+                    )
+                    st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.fehlgeschlagen(
+                        str(fehler)
+                    )
+                except Exception:
+                    _projektimport_loggen("pruefen", importzustand=importzustand)
+                    st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.fehlgeschlagen(
+                        "Das Projektarchiv konnte nicht vollständig geprüft werden."
+                    )
+                else:
+                    st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.mit_pruefung(pruefung)
+                st.rerun()
+            return
+
+        assert importzustand.projekt_id is not None
+        assert importzustand.importmodus is not None
+        st.write(f"**Projekt:** {importzustand.projektname}")
+        st.caption(
+            f"Projekt-ID: {importzustand.projekt_id} · "
+            f"Archivversion: {importzustand.archivversion} · "
+            f"Exportzeitpunkt: {importzustand.exportiert_am or 'nicht angegeben'}"
+        )
+        if importzustand.importmodus is Importmodus.GAST_WIEDERBINDEN:
+            st.info(
+                "Der unveränderte temporäre Projektstand ist noch vorhanden und wird sicher "
+                "an diese neue Gastsitzung gebunden."
+            )
+        elif importzustand.importmodus is Importmodus.ERSETZEN:
+            st.warning(
+                "Das bereits autorisierte Projekt wird durch den vollständig validierten "
+                "Archivstand ersetzt; Mandant und Berechtigungen bleiben erhalten."
+            )
+        abbrechen, uebernehmen = st.columns(2)
+        if abbrechen.button(
+            "Abbrechen",
+            width="stretch",
+            key=projektimport_widget_key(
+                "abbrechen", importzustand.projekt_id, importzustand.archiv_sha256
+            ),
+        ):
+            _projektimport_startseite_beenden(importzustand)
+        beschriftung = (
+            "Projekt wiederherstellen"
+            if importzustand.importmodus is Importmodus.GAST_WIEDERBINDEN
+            else "Vorhandenes Projekt ersetzen"
+            if importzustand.importmodus is Importmodus.ERSETZEN
+            else "Projekt importieren"
+        )
+        aktion = (
+            "wiederherstellen"
+            if importzustand.importmodus is Importmodus.GAST_WIEDERBINDEN
+            else "ersetzen"
+            if importzustand.importmodus is Importmodus.ERSETZEN
+            else "ausfuehren"
+        )
+        if uebernehmen.button(
+            beschriftung,
+            type="primary",
+            width="stretch",
+            key=projektimport_widget_key(
+                aktion, importzustand.projekt_id, importzustand.archiv_sha256
+            ),
+        ):
+            st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.in_ausfuehrung()
+            try:
+                ergebnis = archiv_service.gestagten_importieren(
+                    kontext,
+                    importzustand.staging_id,
+                    importzustand.archiv_sha256,
+                    erwartete_projekt_id=importzustand.projekt_id,
+                    erwarteter_importmodus=importzustand.importmodus,
+                )
+            except Domaenenfehler as fehler:
+                _projektimport_fachfehler_loggen(
+                    "execute_staging",
+                    "IMPORT_EXECUTE_DOMAIN_ERROR",
+                    fehler,
+                    importzustand=importzustand,
+                )
+                st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.fehlgeschlagen(str(fehler))
+                st.rerun()
+            except Exception:
+                _projektimport_loggen("execute_staging", importzustand=importzustand)
+                st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.fehlgeschlagen(
+                    "Der Projektimport konnte nicht vollständig abgeschlossen werden."
+                )
+                st.rerun()
+            try:
+                projektkontext = erstelle_projektkontext_service(
+                    datenbankpfad, workspace
+                ).wiederherstellen(ergebnis.projekt_id)
+            except Domaenenfehler as fehler:
+                _projektimport_fachfehler_loggen(
+                    "rehydrate",
+                    "IMPORT_REHYDRATE_FAILED",
+                    fehler,
+                    importzustand=importzustand,
+                )
+                st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.fehlgeschlagen(str(fehler))
+                st.rerun()
+            except Exception:
+                _projektimport_loggen("rehydrate", importzustand=importzustand)
+                st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.fehlgeschlagen(
+                    "Der Projektkontext konnte nicht wiederhergestellt werden."
+                )
+                st.rerun()
+            try:
+                fortschritt = erstelle_fortschritt_service(datenbankpfad).laden(
+                    kontext, ergebnis.projekt_id
+                )
+            except Domaenenfehler as fehler:
+                _projektimport_fachfehler_loggen(
+                    "post_restore_access",
+                    "IMPORT_POST_RESTORE_ACCESS_FAILED",
+                    fehler,
+                    importzustand=importzustand,
+                )
+                st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.fehlgeschlagen(str(fehler))
+                st.rerun()
+            except Exception:
+                _projektimport_loggen("rehydrate_progress", importzustand=importzustand)
+                st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.fehlgeschlagen(
+                    "Der Projektfortschritt konnte nicht wiederhergestellt werden."
+                )
+                st.rerun()
+            zustand = cast(MutableMapping[str, Any], st.session_state)
+            projektkontext_setzen(zustand, projektkontext)
+            st.session_state.projektkontext_rehydriert = str(ergebnis.projekt_id)
+            st.session_state.naechster_framework_bereich = FRAMEWORK_BEREICHE[
+                projektkontext.framework_schritt - 1
+            ]
+            fortschrittszustand_aus_persistenz_setzen(zustand, fortschritt)
+            projektimport_session_zuruecksetzen(zustand)
+            st.session_state.pop("projektimport_startseite", None)
+            st.session_state.gast_projekt_id = str(ergebnis.projekt_id)
+            st.session_state.projektimport_erfolgsmeldung = (
+                f"Projekt „{ergebnis.projektname}“ wurde "
+                + ("wiederhergestellt." if ergebnis.gast_wiederhergestellt else "importiert.")
+            )
+            st.rerun()
+
+
 def _startseite() -> None:
     st.header("Willkommen")
     st.write(
@@ -193,17 +507,23 @@ def _startseite() -> None:
     with links:
         st.subheader("Temporärer Bereich")
         st.caption("Keine Anmeldung · isoliertes Projekt · Export als portable Sicherung")
-        if st.button("Neues Projekt", type="primary", width="stretch"):
-            _gast_starten()
-        st.caption("Ohne Anmeldung arbeiten")
-        if st.button("Demoprojekt öffnen", width="stretch"):
-            try:
-                _demoprojekt_starten()
-            except Exception:
-                st.error(
-                    "Das Demoprojekt konnte nicht vollständig erzeugt werden. "
-                    "Es wurden keine Teildaten beibehalten."
-                )
+        if st.session_state.get("projektimport_startseite"):
+            _projektimport_auf_startseite()
+        else:
+            if st.button("Neues Projekt", type="primary", width="stretch"):
+                _gast_starten()
+            if st.button("Projekt importieren", width="stretch"):
+                _gastimport_starten()
+            st.caption("Ohne Anmeldung arbeiten")
+            if st.button("Demoprojekt öffnen", width="stretch"):
+                try:
+                    _demoprojekt_starten()
+                except Exception:
+                    LOGGER.exception("Das Demoprojekt konnte nicht vollständig erzeugt werden.")
+                    st.error(
+                        "Das Demoprojekt konnte nicht vollständig erzeugt werden. "
+                        "Es wurden keine Teildaten beibehalten."
+                    )
     with rechts:
         st.subheader("Private Kursgruppe")
         st.caption("OIDC-Anmeldung · nur ausdrücklich zugewiesene Gruppen und Projekte")
@@ -218,6 +538,10 @@ def _startseite() -> None:
 
 
 if st.session_state.pop("anwendung_beendet", False):
+    _startseite()
+    st.stop()
+
+if st.session_state.get("projektimport_startseite"):
     _startseite()
     st.stop()
 
@@ -487,7 +811,7 @@ def _projekt_id_aus_session() -> UUID | None:
 def _projekt_aktivieren(projekt_id: UUID | None) -> None:
     """Wechselt ausschließlich über die zentrale persistente Projektlineage."""
     zustand = cast(MutableMapping[str, Any], st.session_state)
-    if projekt_id is None:
+    if projekt_id is None or kontext is None:
         projektkontext_bereinigen(zustand)
         st.session_state.naechster_framework_bereich = FRAMEWORK_BEREICHE[0]
         return
@@ -512,12 +836,6 @@ def _projektaktionen(projekt_id: UUID | None) -> None:
     if kontext is None:
         return
     st.sidebar.subheader("Projektrahmen")
-    import_erlaubt = kontext.gast_geheimnis is not None or (
-        aktive_gruppen_id is not None
-        and autorisierung.gruppen_zugriff_erlaubt(
-            kontext, aktive_gruppen_id, Gruppenaktion.ARCHIVIEREN
-        )
-    )
     projekt = (
         roh_projekte.projekt_laden(projekt_id)
         if projekt_id is not None
@@ -529,16 +847,7 @@ def _projektaktionen(projekt_id: UUID | None) -> None:
         and projekt_id is not None
         and autorisierung.projekt_zugriff_erlaubt(kontext, projekt_id, Projektaktion.EXPORTIEREN)
     )
-    import_spalte, export_spalte = st.sidebar.columns(2)
-    if import_spalte.button(
-        "Projekt importieren",
-        type="primary",
-        width="stretch",
-        disabled=not import_erlaubt,
-        key=projektimport_widget_key("oeffnen", projekt_id or aktive_gruppen_id),
-    ):
-        st.session_state.projektimport_offen = True
-    if export_spalte.button(
+    if st.sidebar.button(
         "Projekt exportieren",
         type="primary",
         width="stretch",
@@ -557,235 +866,6 @@ def _projektaktionen(projekt_id: UUID | None) -> None:
             }
         except Domaenenfehler as fehler:
             st.sidebar.error(str(fehler))
-    if import_erlaubt and st.session_state.get("projektimport_offen"):
-        generation = int(st.session_state.get("projektimport_generation", 0))
-        archiv_service = erstelle_projektarchiv_service(datenbankpfad, workspace)
-        importzustand = st.session_state.get(PROJEKTIMPORT_ZUSTAND)
-        if not isinstance(importzustand, ProjektImportZustand):
-            importzustand = None
-            st.session_state.pop(PROJEKTIMPORT_ZUSTAND, None)
-        with st.sidebar.container(key="projektimport_bereich"):
-            st.html(
-                """
-                <style>
-                .st-key-projektimport_bereich
-                [data-testid="stFileUploaderDropzoneInstructions"] small,
-                .st-key-projektimport_bereich
-                [data-testid="stFileUploaderDropzoneInstructions"] span:last-child {
-                    display: none;
-                }
-                </style>
-                """
-            )
-            if importzustand is None:
-                upload = st.file_uploader(
-                    "ZIP-Projektarchiv auswählen",
-                    type=["zip"],
-                    key=f"cloud_projektimport_{generation}",
-                    width="stretch",
-                )
-                if upload is not None:
-                    try:
-                        staging = archiv_service.archiv_stagen(
-                            kontext,
-                            upload.getvalue(),
-                            ziel_gruppen_id=aktive_gruppen_id,
-                        )
-                    except Domaenenfehler as fehler:
-                        st.error(str(fehler))
-                    except Exception:
-                        st.error("Das Projektarchiv konnte nicht sicher übernommen werden.")
-                    else:
-                        st.session_state[PROJEKTIMPORT_ZUSTAND] = ProjektImportZustand.aus_staging(
-                            staging
-                        )
-                        st.rerun()
-            else:
-                importkennung = importzustand.projekt_id or projekt_id
-                st.caption(
-                    f"Archiv: SHA-256 {importzustand.archiv_sha256[:16]}… · "
-                    f"Ziel: {importzustand.zielkontext}"
-                )
-                if importzustand.phase is ProjektImportPhase.FEHLGESCHLAGEN:
-                    st.error(importzustand.fehlermeldung)
-                    if st.button(
-                        "Import schließen",
-                        width="stretch",
-                        key=projektimport_widget_key(
-                            "schliessen",
-                            importkennung,
-                            importzustand.archiv_sha256,
-                        ),
-                    ):
-                        projektimport_session_zuruecksetzen(
-                            cast(MutableMapping[str, Any], st.session_state)
-                        )
-                        st.rerun()
-                elif importzustand.phase is ProjektImportPhase.UEBERNOMMEN:
-                    abbrechen, pruefen = st.columns(2)
-                    if abbrechen.button(
-                        "Abbrechen",
-                        width="stretch",
-                        key=projektimport_widget_key(
-                            "abbrechen",
-                            importkennung,
-                            importzustand.archiv_sha256,
-                        ),
-                    ):
-                        try:
-                            archiv_service.archiv_staging_verwerfen(
-                                kontext,
-                                importzustand.staging_id,
-                                importzustand.archiv_sha256,
-                                ziel_gruppen_id=importzustand.ziel_gruppen_id,
-                            )
-                        except Domaenenfehler:
-                            pass
-                        projektimport_session_zuruecksetzen(
-                            cast(MutableMapping[str, Any], st.session_state)
-                        )
-                        st.rerun()
-                    if pruefen.button(
-                        "Projektarchiv prüfen",
-                        type="primary",
-                        width="stretch",
-                        key=projektimport_widget_key(
-                            "pruefen",
-                            importkennung,
-                            importzustand.archiv_sha256,
-                        ),
-                    ):
-                        try:
-                            pruefung = archiv_service.gestagten_import_pruefen(
-                                kontext,
-                                importzustand.staging_id,
-                                importzustand.archiv_sha256,
-                                ziel_gruppen_id=importzustand.ziel_gruppen_id,
-                            )
-                        except Domaenenfehler as fehler:
-                            st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.fehlgeschlagen(
-                                str(fehler)
-                            )
-                        except Exception:
-                            st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.fehlgeschlagen(
-                                "Das Projektarchiv konnte nicht vollständig geprüft werden."
-                            )
-                        else:
-                            st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.mit_pruefung(
-                                pruefung
-                            )
-                        st.rerun()
-                else:
-                    assert importzustand.projekt_id is not None
-                    assert importzustand.bereits_vorhanden is not None
-                    st.write(f"**Projekt:** {importzustand.projektname}")
-                    st.caption(
-                        f"Projekt-ID: {importzustand.projekt_id} · "
-                        f"Archivversion: {importzustand.archivversion} · "
-                        f"Exportzeitpunkt: {importzustand.exportiert_am or 'nicht angegeben'}"
-                    )
-                    if importzustand.bereits_vorhanden:
-                        vorhandenes_projekt = roh_projekte.projekt_laden(importzustand.projekt_id)
-                        vorhandener_name = (
-                            vorhandenes_projekt.bezeichnung
-                            if vorhandenes_projekt is not None
-                            else "vorhandenes Projekt"
-                        )
-                        st.warning(
-                            f"Aktuell vorhanden: **{vorhandener_name}**. Sämtliche "
-                            "projektbezogenen fachlichen Daten und Artefakte werden durch "
-                            "den vollständig validierten Archivstand ersetzt; Mandant und "
-                            "Berechtigungen bleiben erhalten."
-                        )
-                    abbrechen, uebernehmen = st.columns(2)
-                    if abbrechen.button(
-                        "Abbrechen",
-                        width="stretch",
-                        key=projektimport_widget_key(
-                            "abbrechen",
-                            importzustand.projekt_id,
-                            importzustand.archiv_sha256,
-                        ),
-                    ):
-                        try:
-                            archiv_service.archiv_staging_verwerfen(
-                                kontext,
-                                importzustand.staging_id,
-                                importzustand.archiv_sha256,
-                                ziel_gruppen_id=importzustand.ziel_gruppen_id,
-                            )
-                        except Domaenenfehler:
-                            pass
-                        projektimport_session_zuruecksetzen(
-                            cast(MutableMapping[str, Any], st.session_state)
-                        )
-                        st.rerun()
-                    beschriftung = (
-                        "Vorhandenes Projekt ersetzen"
-                        if importzustand.bereits_vorhanden
-                        else "Projekt importieren"
-                    )
-                    aktion = "ersetzen" if importzustand.bereits_vorhanden else "ausfuehren"
-                    if uebernehmen.button(
-                        beschriftung,
-                        type="primary",
-                        width="stretch",
-                        key=projektimport_widget_key(
-                            aktion,
-                            importzustand.projekt_id,
-                            importzustand.archiv_sha256,
-                        ),
-                    ):
-                        st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.in_ausfuehrung()
-                        try:
-                            ergebnis = archiv_service.gestagten_importieren(
-                                kontext,
-                                importzustand.staging_id,
-                                importzustand.archiv_sha256,
-                                erwartete_projekt_id=importzustand.projekt_id,
-                                ziel_gruppen_id=importzustand.ziel_gruppen_id,
-                                vorhandenes_projekt_ersetzen=(importzustand.bereits_vorhanden),
-                            )
-                            projektkontext = erstelle_projektkontext_service(
-                                datenbankpfad, workspace
-                            ).pruefen(ergebnis.projekt_id)
-                            fortschritt = erstelle_fortschritt_service(datenbankpfad).laden(
-                                kontext, ergebnis.projekt_id
-                            )
-                        except Domaenenfehler as fehler:
-                            st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.fehlgeschlagen(
-                                str(fehler)
-                            )
-                            st.rerun()
-                        except Exception:
-                            st.session_state[PROJEKTIMPORT_ZUSTAND] = importzustand.fehlgeschlagen(
-                                "Der Projektimport ist fehlgeschlagen; der bisherige "
-                                "Projektstand wurde beibehalten."
-                            )
-                            st.rerun()
-                        projektkontext_setzen(
-                            cast(MutableMapping[str, Any], st.session_state), projektkontext
-                        )
-                        st.session_state.auswahl_generation = (
-                            int(st.session_state.get("auswahl_generation", 0)) + 1
-                        )
-                        st.session_state.naechster_framework_bereich = FRAMEWORK_BEREICHE[
-                            fortschritt.schritt - 1
-                        ]
-                        fortschrittszustand_aus_persistenz_setzen(
-                            cast(MutableMapping[str, Any], st.session_state), fortschritt
-                        )
-                        projektimport_session_zuruecksetzen(
-                            cast(MutableMapping[str, Any], st.session_state)
-                        )
-                        st.session_state.pop("projektarchiv", None)
-                        if kontext.gast_geheimnis is not None:
-                            st.session_state.gast_projekt_id = str(ergebnis.projekt_id)
-                        st.session_state.projektimport_erfolgsmeldung = (
-                            f"Projekt „{ergebnis.projektname}“ wurde "
-                            + ("ersetzt." if ergebnis.ersetzt else "importiert.")
-                        )
-                        st.rerun()
     if archivzustand := st.session_state.get("projektarchiv"):
         if (
             projekt is None
@@ -809,6 +889,7 @@ def _projektaktionen(projekt_id: UUID | None) -> None:
             data=archiv,
             file_name=name,
             mime="application/zip",
+            on_click="ignore",
             width="stretch",
             key=f"projektexport_download_{projekt_id}_{archiv_sha256[:16]}",
         )
