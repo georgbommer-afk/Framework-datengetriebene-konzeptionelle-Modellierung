@@ -774,9 +774,7 @@ def _datenprofil_und_bestaetigung(
                     aktuell = datenprofil_service.aktuellste(importvorgang.import_id)
                     zustand["indikatorbedingungen"] = aktuell.profil.indikatorbedingungen
                     zustand["zusaetzliche_platzhalter"] = tuple(
-                        aktuell.profil.gesamtprofil.get(
-                            "bestaetigte_zusaetzliche_platzhalter", ()
-                        )
+                        aktuell.profil.gesamtprofil.get("bestaetigte_zusaetzliche_platzhalter", ())
                     )
                     zustand["profil_vorgaenger_id"] = aktuell.profil_id
                     zustand["profil_bearbeiten"] = True
@@ -1363,9 +1361,7 @@ def _zwischendatensatz(
     def weiter_zu_mapping() -> None:
         aktueller_datensatz = datensatz
         if aktueller_datensatz is None:
-            aktueller_datensatz = service.zwischendatensatz_erzeugen(
-                plan, ergebnis, datensatz_id
-            )
+            aktueller_datensatz = service.zwischendatensatz_erzeugen(plan, ergebnis, datensatz_id)
             zustand["zwischendatensatz"] = aktueller_datensatz
         st.session_state.aktueller_zwischendatensatz_id = str(
             aktueller_datensatz.zwischendatensatz_id
@@ -1410,7 +1406,7 @@ def _kann_weiter(zustand: dict[str, Any]) -> bool:
     return False
 
 
-def _navigation(zustand: dict[str, Any]) -> None:
+def _navigation(zustand: dict[str, Any], projekt_id: UUID) -> None:
     """Navigiert kompakt zwischen den fünf ETL-Abschnitten."""
     if zustand["schritt"] >= len(ETL_SCHRITTE):
         return
@@ -1421,6 +1417,7 @@ def _navigation(zustand: dict[str, Any]) -> None:
         zurueck_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] - 1),
         weiter_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] + 1),
         schluessel="etl_unterschritt_navigation",
+        fortschrittsabschluss=(projekt_id, 2),
     )
 
 
@@ -1479,7 +1476,7 @@ def zeige_etl_seite(
                 zustand,
                 datenprofil_service,
             )
-        _navigation(zustand)
+        _navigation(zustand, projekt_id)
     except (Domaenenfehler, Datenimportfehler) as fehler:
         st.error(str(fehler))
     except NichtUnterstuetzteSchemaversion as fehler:

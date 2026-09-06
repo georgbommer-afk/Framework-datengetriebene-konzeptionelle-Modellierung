@@ -337,10 +337,12 @@ def test_menschliche_entscheidungen_steuern_k_und_o(tmp_path: Path) -> None:
             (
                 FachlicheEntscheidungsart.OFFEN_UNSICHER
                 if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
+                or not wert.informationen
                 else FachlicheEntscheidungsart.UEBERNEHMEN
             ),
             "Aktivitäten müssen fachlich geprüft werden."
             if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
+            or not wert.informationen
             else "",
             jetzt,
         )
@@ -368,8 +370,27 @@ def test_menschliche_entscheidungen_steuern_k_und_o(tmp_path: Path) -> None:
         for wert in bestandteile
         if wert.bestandteil_id is ModellbestandteilId.DETAILLIERUNGSGRAD
     )
-    assert detaillierung.informationen and detaillierung.offene_eintrag_ids
-    assert detaillierung.status.value == "teilweise_offen"
+    assert detaillierung.informationen and not detaillierung.offene_eintrag_ids
+    assert detaillierung.status.value == "vollstaendig_zugeordnet"
+
+
+def test_vorschlag_ohne_information_kann_nicht_uebernommen_werden(tmp_path: Path) -> None:
+    vorschlaege, systematisch_offen = leite_modellbestandteile_ab(_basis(tmp_path))
+    ohne_information = next(wert for wert in vorschlaege if not wert.informationen)
+
+    with pytest.raises(Domaenenfehler, match="kein übernehmbarer Vorschlag"):
+        wende_fachliche_entscheidungen_an(
+            vorschlaege,
+            systematisch_offen,
+            (
+                FachlicheBestandteilentscheidung(
+                    ohne_information.bestandteil_id,
+                    FachlicheEntscheidungsart.UEBERNEHMEN,
+                    "",
+                    datetime.now(UTC),
+                ),
+            ),
+        )
 
 
 def test_nicht_uebernehmen_benoetigt_begruendung() -> None:

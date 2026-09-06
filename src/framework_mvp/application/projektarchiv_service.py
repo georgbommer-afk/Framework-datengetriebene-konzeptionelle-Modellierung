@@ -18,11 +18,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, NoReturn
 from uuid import UUID, uuid4
 
+from framework_mvp import __version__
 from framework_mvp.application.autorisierung import (
     NICHT_VERFUEGBAR,
     AutorisierungsService,
@@ -851,7 +851,7 @@ class ProjektArchivService:
         projekt_id: UUID | None = None,
         archiv_sha256: str = "",
         staging_id: UUID | None = None,
-    ) -> None:
+    ) -> NoReturn:
         LOGGER.warning(
             "Projektimport abgelehnt phase=%s reason=%s staging_id=%s "
             "archiv_sha256=%s projekt_id=%s",
@@ -1479,6 +1479,32 @@ class ProjektArchivService:
             if tabelle not in {"qualitaetsregeln", "qualitaetsmassnahmen"}:
                 if any(zeile.get("projekt_id") != str(projekt_id) for zeile in daten):
                     raise ArchivUngueltig("Das Archiv mischt Daten mehrerer Projekte.")
+            if tabelle == "projektfortschritt":
+                for zeile in daten:
+                    zeile.setdefault(
+                        "abgeschlossene_unterschritte_json",
+                        (
+                            "[5,5,3,4,4,3,1,1,1,1]"
+                            if zeile.get("status") == "abgeschlossen"
+                            else "[0,0,0,0,0,0,0,0,0,0]"
+                        ),
+                    )
+                    try:
+                        abschluesse = json.loads(zeile["abgeschlossene_unterschritte_json"])
+                    except (TypeError, json.JSONDecodeError) as fehler:
+                        raise ArchivUngueltig(
+                            "Der fachliche Abschlussstand ist ungültig."
+                        ) from fehler
+                    maxima = (5, 5, 3, 4, 4, 3, 1, 1, 1, 1)
+                    if (
+                        not isinstance(abschluesse, list)
+                        or len(abschluesse) != 10
+                        or any(
+                            not isinstance(wert, int) or not 0 <= wert <= maxima[index]
+                            for index, wert in enumerate(abschluesse)
+                        )
+                    ):
+                        raise ArchivUngueltig("Der fachliche Abschlussstand ist ungültig.")
             ergebnis[tabelle] = daten
         if len(ergebnis["projekte"]) != 1:
             raise ArchivUngueltig("Das Archiv muss genau ein Projekt enthalten.")
@@ -1632,14 +1658,27 @@ class ProjektArchivService:
             return hashlib.sha256(inhalt).hexdigest()
         if not isinstance(zeilen, list) or not all(isinstance(zeile, dict) for zeile in zeilen):
             return hashlib.sha256(inhalt).hexdigest()
-        fachliche_zeilen = [
-            {
+        fachliche_zeilen = []
+        for zeile in zeilen:
+            fachliche_zeile = {
                 schluessel: wert
                 for schluessel, wert in zeile.items()
                 if schluessel not in {"gespeichert_am_utc", "revision"}
             }
-            for zeile in zeilen
-        ]
+            abschluss_json = fachliche_zeile.get("abgeschlossene_unterschritte_json")
+            if abschluss_json is None:
+                abschluss = (
+                    [5, 5, 3, 4, 4, 3, 1, 1, 1, 1]
+                    if zeile.get("status") == "abgeschlossen"
+                    else [0] * 10
+                )
+            else:
+                try:
+                    abschluss = json.loads(abschluss_json)
+                except (TypeError, json.JSONDecodeError):
+                    abschluss = abschluss_json
+            fachliche_zeile["abgeschlossene_unterschritte_json"] = abschluss
+            fachliche_zeilen.append(fachliche_zeile)
         return hashlib.sha256(cls._json_bytes(fachliche_zeilen)).hexdigest()
 
     @classmethod
@@ -1653,10 +1692,7 @@ class ProjektArchivService:
 
     @staticmethod
     def _app_version() -> str:
-        try:
-            return version("framework-mvp")
-        except PackageNotFoundError:
-            return "0.1.0.dev0"
+        return __version__
 
 
 def hmac_compare(links: str, rechts: str) -> bool:

@@ -78,7 +78,7 @@ def _persistierte_analyse_rehydrieren(
     )
 
 
-def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
+def _navigation(zustand: dict[str, Any], weiter: bool, projekt_id: UUID) -> None:
     if zustand["schritt"] == len(SCHRITTE):
         return
     zeige_unterschritt_navigation(
@@ -88,6 +88,7 @@ def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
         zurueck_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] - 1),
         weiter_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] + 1),
         schluessel="process_mining_unterschritt_navigation",
+        fortschrittsabschluss=(projekt_id, 6),
     )
 
 
@@ -271,13 +272,23 @@ def zeige_process_mining_seite(
             st.write("### Aktive, erneut validierte Grundlage")
             st.write(f"**Projekt:** {projektname}")
             zeit = pd.to_datetime(daten["timestamp"], errors="coerce")
-            spalten = st.columns(4)
+            spalten = st.columns(3)
             spalten[0].metric("Ereignisse", len(daten))
             spalten[1].metric("Fälle", len(set(daten["case_id"].astype(str))))
             spalten[2].metric("Aktivitäten", len(set(daten["activity"].astype(str))))
-            spalten[3].metric(
-                "Zeitraum",
-                f"{zeit.min()} – {zeit.max()}" if not zeit.empty else "nicht bestimmbar",
+            gueltige_zeit = zeit.dropna()
+            zeitraum = st.columns(2)
+            zeitraum[0].metric(
+                "Zeitraum von",
+                gueltige_zeit.min().strftime("%d.%m.%Y %H:%M:%S")
+                if not gueltige_zeit.empty
+                else "nicht bestimmbar",
+            )
+            zeitraum[1].metric(
+                "Zeitraum bis",
+                gueltige_zeit.max().strftime("%d.%m.%Y %H:%M:%S")
+                if not gueltige_zeit.empty
+                else "nicht bestimmbar",
             )
             st.info(
                 "PM4Py erhält ausschließlich eine tiefe interne Arbeitskopie. E*, seine ID, "
@@ -316,7 +327,7 @@ def zeige_process_mining_seite(
                         zustand["gespeicherte_a_d"] = a_d
                         zustand["schritt"] = 3
                         st.rerun()
-            _navigation(zustand, True)
+            _navigation(zustand, True, projekt_id)
             return
 
         if zustand["schritt"] == 2:
@@ -336,6 +347,11 @@ def zeige_process_mining_seite(
                         max_value=1.0,
                         step=0.01,
                         key=k_key,
+                        help=(
+                            "k steuert beim Inductive Miner – infrequent, wie stark seltenes "
+                            "Verhalten abstrahiert wird. k = 0 nutzt den regulären Inductive "
+                            "Miner; der vollständige DFG bleibt unverändert."
+                        ),
                     )
                 )
                 notation = st.radio(
@@ -423,7 +439,7 @@ def zeige_process_mining_seite(
             zustand["schritt"] = 2
             st.rerun()
         if analyse is None:
-            _navigation(zustand, False)
+            _navigation(zustand, False, projekt_id)
             return
         a_d = zustand["gespeicherte_a_d"]
         st.success(

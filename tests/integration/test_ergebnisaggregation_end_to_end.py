@@ -567,6 +567,8 @@ def test_dt_db_busy_ratio_und_a_v_werden_vollstaendig_in_a_g_persistiert(tmp_pat
     assert a_v["artefaktversion"] == 2
     assert a_v["fertigstellungs_und_bearbeitungszeitabweichungen"]["einzelwerte"]
     assert a_v["ressourcenbezogene_busy_ratio"]["ressourcenstatistiken"]
+    details = service.gespeicherte_ergebnisdetails_laden(aggregation.aggregations_id)
+    assert details["performance"] == a_v
 
 
 def test_a_g_v1_bleibt_lesbar_waehrend_neue_speicherungen_v5_schreiben(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -839,5 +841,7 @@ def test_a_c_p_soll_mapping_sollzeitdaten_und_a_v_werden_reproduzierbar_referenz
     assert len(a_c["ergebnis"]["fallbezogene_diagnosen"]) == 2
     assert a_c["ergebnis"]["pm4py_version"]
     assert a_c["ergebnis"]["erstellt_am"]
+    details = service.gespeicherte_ergebnisdetails_laden(aggregation.aggregations_id)
+    assert details["conformance"] == a_c
     assert optionen["sollzeitdaten"]["sha256"] == sollzeit.sha256
     assert optionen["potenzielle_verbesserungspotenziale_a_v"]["sha256"]

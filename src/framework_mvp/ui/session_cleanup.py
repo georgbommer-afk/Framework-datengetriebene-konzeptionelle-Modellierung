@@ -89,6 +89,7 @@ def projekt_zustand_bereinigen(zustand: MutableMapping[str, Any], projekt_id: UU
         "wizard_entwurf",
         "wizard_entwurf_projekt_id",
         "wizard_schritt",
+        "_entwurf_abgeschlossene_unterschritte",
     ):
         zustand.pop(schluessel, None)
     for schluessel in tuple(zustand):

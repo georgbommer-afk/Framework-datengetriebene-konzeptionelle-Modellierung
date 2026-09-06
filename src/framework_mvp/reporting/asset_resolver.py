@@ -78,8 +78,12 @@ def resolve_report_assets(
         prozess.get("process_mining_analyse_id"),
         "prozessdarstellung.process_mining_analyse_id",
     )
+    prozessmodell_id = _uuid_text(
+        prozess.get("prozessmodell_id"),
+        "prozessdarstellung.prozessmodell_id",
+    )
 
-    if projekt_id is None or analyse_id is None:
+    if projekt_id is None or (analyse_id is None and prozessmodell_id is None):
         prozess["assets"] = {
             "modell_svg": False,
             "dfg_svg": False,
@@ -91,9 +95,11 @@ def resolve_report_assets(
 
     analyseordner = wurzel / "projects" / projekt_id / "process_mining"
 
-    modell_svg = analyseordner / f"{analyse_id}.model.svg"
-    dfg_svg = analyseordner / f"{analyse_id}.dfg.svg"
-    process_tree_svg = analyseordner / f"{analyse_id}.process-tree.svg"
+    modellreferenz = prozessmodell_id or analyse_id
+    analysereferenz = analyse_id or prozessmodell_id
+    modell_svg = analyseordner / f"{modellreferenz}.model.svg"
+    dfg_svg = analyseordner / f"{analysereferenz}.dfg.svg"
+    process_tree_svg = analyseordner / f"{analysereferenz}.process-tree.svg"
 
     prozess["svg_inline"] = _svg_fragment(modell_svg)
     prozess["dfg_svg_inline"] = _svg_fragment(dfg_svg)

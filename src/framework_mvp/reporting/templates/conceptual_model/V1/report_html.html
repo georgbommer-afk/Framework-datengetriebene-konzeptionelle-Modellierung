@@ -1327,6 +1327,23 @@
                     {{ kv("Median (s)", zwischenankunft.get("median_sekunden")) }}
                 </div>
             {% endif %}
+            {% set zwischenankuenfte = daten.zeitbezogene_datenauswahl.get("zwischenankunftszeiten", []) %}
+            {% if zwischenankuenfte %}
+                <h3>Zwischenankunftszeiten</h3>
+                <table class="data-table">
+                    <thead><tr><th>Definition</th><th>Anzahl</th><th>Mittelwert (s)</th><th>Median (s)</th></tr></thead>
+                    <tbody>
+                        {% for wert in zwischenankuenfte %}
+                            <tr>
+                                <td>{{ wert.get("definition", {}).get("bezeichnung", "–") }}</td>
+                                <td>{{ wert.get("statistik", {}).get("anzahl", "–") }}</td>
+                                <td>{{ wert.get("statistik", {}).get("mittelwert_sekunden", "–") }}</td>
+                                <td>{{ wert.get("statistik", {}).get("median_sekunden", "–") }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% endif %}
             {% set bearbeitungszeiten = daten.zeitbezogene_datenauswahl.get("bearbeitungszeiten", []) %}
             {% if bearbeitungszeiten %}
                 <h3>Bearbeitungszeiten · Ende(A) − Start(A)</h3>

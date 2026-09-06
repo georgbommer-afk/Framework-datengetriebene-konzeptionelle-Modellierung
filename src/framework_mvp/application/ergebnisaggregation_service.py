@@ -1375,6 +1375,30 @@ class ErgebnisaggregationService:
         aggregation, _ = self.laden(aggregations_id)
         return self._artefakte.lesen(aggregation.relativer_aggregations_pfad)
 
+    def gespeicherte_ergebnisdetails_laden(self, aggregations_id: UUID) -> dict[str, Any]:
+        """Lädt bereits validierte A_C-/A_V-Details, ohne Analysen erneut auszuführen."""
+        _, a_g = self.laden(aggregations_id)
+        details: dict[str, Any] = {}
+        referenzen = a_g.get("optionale_artefakte", {})
+        if not isinstance(referenzen, dict):
+            return details
+        for name, schluessel in (
+            ("conformance", "conformance_ergebnisse_a_c"),
+            ("performance", "potenzielle_verbesserungspotenziale_a_v"),
+        ):
+            referenz = referenzen.get(schluessel)
+            if not isinstance(referenz, dict) or not referenz.get("relativer_pfad"):
+                continue
+            try:
+                details[name] = json.loads(
+                    self._artefakte.lesen(str(referenz["relativer_pfad"]))
+                )
+            except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as fehler:
+                raise Importintegritaetsfehler(
+                    f"Das gespeicherte Detailergebnis {schluessel} ist ungültig."
+                ) from fehler
+        return details
+
     def aggregationen_fuer_aktive_analyse(
         self, projekt_id: UUID, freigabe_id: UUID, analyse_id: UUID
     ) -> list[Ergebnisaggregation]:

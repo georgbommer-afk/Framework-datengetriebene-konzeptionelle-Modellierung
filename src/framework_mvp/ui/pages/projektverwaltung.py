@@ -382,9 +382,7 @@ def _daten_loeschen_dialog(
                 if eintrag.zwischendatensatz_id == wert
             ),
         )
-        ziel = next(
-            wert for wert in datensaetze if wert.zwischendatensatz_id == datensatz_id
-        )
+        ziel = next(wert for wert in datensaetze if wert.zwischendatensatz_id == datensatz_id)
         st.warning(
             "Dieser Zwischendatensatz und ausschließlich davon abhängige Artefakte werden "
             "gelöscht. Rohimporte und andere Datensätze bleiben erhalten."
@@ -489,6 +487,7 @@ def _seitenleiste(
             str(projekt.projekt_id) if projekt is not None else None
         )
         st.session_state.wizard_schritt = 1
+        st.session_state.pop("_entwurf_abgeschlossene_unterschritte", None)
         st.session_state.auswahl_generation += 1
         st.rerun()
     if st.sidebar.button("Neues Projekt", width="stretch"):
@@ -498,6 +497,7 @@ def _seitenleiste(
         st.session_state.wizard_entwurf = _neuer_entwurf()
         st.session_state.wizard_entwurf_projekt_id = None
         st.session_state.wizard_schritt = 1
+        st.session_state.pop("_entwurf_abgeschlossene_unterschritte", None)
         st.session_state.auswahl_generation += 1
         st.rerun()
     projekt = _projekt_nach_id(projekte, neue_id)
@@ -985,6 +985,13 @@ def _navigation(
     daten: dict[str, Any],
 ) -> None:
     schritt = st.session_state.wizard_schritt
+    fachlich_bestaetigbar = (
+        bool(daten["problemstellung"] and daten["systemgrenze"])
+        if schritt == 1
+        else bool(daten["zwecke"])
+        if schritt == 2
+        else schritt < len(SCHRITTE)
+    )
 
     def weiter() -> None:
         if schritt < len(SCHRITTE):
@@ -992,9 +999,7 @@ def _navigation(
             return
         gespeichert = _speichern(service, projekt, daten)
         if gespeichert is not None:
-            schritt_abschliessen_und_weiter(
-                aktueller_schritt=1, projekt_id=gespeichert.projekt_id
-            )
+            schritt_abschliessen_und_weiter(aktueller_schritt=1, projekt_id=gespeichert.projekt_id)
 
     zeige_unterschritt_navigation(
         aktueller_unterschritt=schritt,
@@ -1008,6 +1013,11 @@ def _navigation(
             else "Weiter"
         ),
         schluessel="projektrahmen_unterschritt_navigation",
+        fortschrittsabschluss=(
+            (projekt.projekt_id if projekt is not None else None, 1)
+            if fachlich_bestaetigbar
+            else None
+        ),
     )
 
 

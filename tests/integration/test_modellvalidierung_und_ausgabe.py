@@ -6,11 +6,13 @@ import hashlib
 import json
 from dataclasses import replace
 from datetime import UTC, datetime
+from io import BytesIO
 from types import SimpleNamespace
 from typing import cast
 from uuid import uuid4
 
 import pytest
+from openpyxl import load_workbook
 
 from framework_mvp.application.modellableitung import MODELLBESTANDTEILE
 from framework_mvp.application.modellausgabe_service import ModellausgabeService
@@ -33,6 +35,7 @@ from framework_mvp.domain.models import (
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
+from framework_mvp.reporting.xlsx_renderer import SHEET_NAMES
 from framework_mvp.workspace import WorkspaceKonfiguration
 
 
@@ -542,11 +545,11 @@ def test_geaenderte_eingaben_oder_menschliche_entscheidung_invalidieren_arbeitsf
 
 
 @pytest.mark.parametrize(
-    ("html", "pdf"),
-    [(True, False), (False, True), (True, True)],
+    ("html", "pdf", "xlsx"),
+    [(True, False, False), (False, True, False), (False, False, True), (True, True, True)],
 )
-def test_html_pdf_und_gemeinsame_auswahl_enthalten_alle_16_ohne_mutation(
-    tmp_path, html, pdf
+def test_html_pdf_xlsx_und_gemeinsame_auswahl_enthalten_alle_16_ohne_mutation(
+    tmp_path, html, pdf, xlsx
 ) -> None:  # type: ignore[no-untyped-def]
     service, ausgaben, _, _, ableitungen = _umgebung(tmp_path)
     gespeichert = service.speichern(
@@ -561,6 +564,7 @@ def test_html_pdf_und_gemeinsame_auswahl_enthalten_alle_16_ohne_mutation(
         k_stern_id=gespeichert.k_stern_id,
         html=html,
         pdf=pdf,
+        xlsx=xlsx,
     )
     if html:
         assert ergebnis.report_html is not None
@@ -579,6 +583,14 @@ def test_html_pdf_und_gemeinsame_auswahl_enthalten_alle_16_ohne_mutation(
         assert ergebnis.report_pdf.startswith(b"%PDF-")
     else:
         assert ergebnis.report_pdf is None
+    if xlsx:
+        assert ergebnis.report_xlsx is not None
+        assert ergebnis.xlsx_dateiname == "Konzeptionelles Modell Förderanlage Süd ÄÖÜ.xlsx"
+        assert ergebnis.report_xlsx.startswith(b"PK")
+        arbeitsmappe = load_workbook(BytesIO(ergebnis.report_xlsx), read_only=True)
+        assert arbeitsmappe.sheetnames == list(SHEET_NAMES)
+    else:
+        assert ergebnis.report_xlsx is None
     assert service.laden(gespeichert.validierungslauf_id)[1] == vorher
 
 
@@ -597,7 +609,7 @@ def test_schritt_10_akzeptiert_nur_passendes_fachlich_validiertes_k_stern(tmp_pa
             html=True,
             pdf=False,
         )
-    with pytest.raises(Importintegritaetsfehler, match="Mindestens HTML oder PDF"):
+    with pytest.raises(Importintegritaetsfehler, match="Mindestens HTML, PDF oder XLSX"):
         ausgaben.erzeugen(
             validierungslauf_id=gespeichert.validierungslauf_id,
             projekt_id=gespeichert.projekt_id,

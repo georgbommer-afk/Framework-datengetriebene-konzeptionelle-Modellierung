@@ -1,4 +1,4 @@
-"""Algorithmus 10: HTML- und PDF-Ausgabe eines validierten K*."""
+"""Algorithmus 10: HTML-, PDF- und XLSX-Ausgabe eines validierten K*."""
 
 import hashlib
 import json
@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
+from framework_mvp import __version__
 from framework_mvp.application.dateinamen import (
     sicherer_dateiname,
     sicherer_dateinamenbestandteil,
@@ -18,6 +19,7 @@ from framework_mvp.reporting.asset_resolver import ReportAssetFehler, resolve_re
 from framework_mvp.reporting.html_renderer import HtmlRenderingFehler, render_report_html
 from framework_mvp.reporting.pdf_renderer import PdfRenderingFehler, render_report_pdf
 from framework_mvp.reporting.report_data import ReportDataFehler, build_report_data
+from framework_mvp.reporting.xlsx_renderer import XlsxRenderingFehler, render_report_xlsx
 from framework_mvp.workspace import WorkspaceKonfiguration
 
 
@@ -29,10 +31,12 @@ class StrukturierteModellausgabe:
     html_dateiname: str | None
     report_pdf: bytes | None
     pdf_dateiname: str | None
+    report_xlsx: bytes | None = None
+    xlsx_dateiname: str | None = None
 
 
 class ModellausgabeService:
-    """Rendert HTML und PDF aus derselben einmalig aufgebauten Reportdatenstruktur."""
+    """Rendert HTML, PDF und XLSX aus einer gemeinsamen Reportdatenstruktur."""
 
     def __init__(
         self,
@@ -52,9 +56,10 @@ class ModellausgabeService:
         k_stern_id: UUID,
         html: bool,
         pdf: bool,
+        xlsx: bool = False,
     ) -> StrukturierteModellausgabe:
-        if not html and not pdf:
-            raise Importintegritaetsfehler("Mindestens HTML oder PDF muss gewählt werden.")
+        if not html and not pdf and not xlsx:
+            raise Importintegritaetsfehler("Mindestens HTML, PDF oder XLSX muss gewählt werden.")
         k_stern = self._validierungen.uebergabe_schritt10(
             validierungslauf_id, projekt_id, k_stern_id
         )
@@ -65,7 +70,11 @@ class ModellausgabeService:
                 "angeforderten Projekt-ID."
             )
         try:
-            report_data = build_report_data(k_stern)
+            report_data = build_report_data(
+                k_stern,
+                projektbezeichnung=projekt.bezeichnung,
+                softwareversion=__version__,
+            )
             aufgeloeste_reportdaten = resolve_report_assets(
                 report_data,
                 workspace_root=self._workspace.basisverzeichnis,
@@ -79,11 +88,13 @@ class ModellausgabeService:
                     ziel = Path(temp) / "report.pdf"
                     render_report_pdf(aufgeloeste_reportdaten, ziel)
                     pdf_bytes = ziel.read_bytes()
+            xlsx_bytes = render_report_xlsx(aufgeloeste_reportdaten) if xlsx else None
         except (
             ReportDataFehler,
             ReportAssetFehler,
             HtmlRenderingFehler,
             PdfRenderingFehler,
+            XlsxRenderingFehler,
         ) as fehler:
             raise Importintegritaetsfehler(
                 f"Der Report aus K* konnte nicht erzeugt werden: {fehler}"
@@ -96,10 +107,12 @@ class ModellausgabeService:
         projektname = sicherer_dateinamenbestandteil(projekt.bezeichnung)
         basis = f"Konzeptionelles Modell {projektname}"
         ausgabe = StrukturierteModellausgabe(
-            html_bytes,
-            sicherer_dateiname(basis, "html") if html else None,
-            pdf_bytes,
-            sicherer_dateiname(basis, "pdf") if pdf else None,
+            report_html=html_bytes,
+            html_dateiname=sicherer_dateiname(basis, "html") if html else None,
+            report_pdf=pdf_bytes,
+            pdf_dateiname=sicherer_dateiname(basis, "pdf") if pdf else None,
+            report_xlsx=xlsx_bytes,
+            xlsx_dateiname=sicherer_dateiname(basis, "xlsx") if xlsx else None,
         )
         self._persistieren(projekt_id, validierungslauf_id, k_stern_id, ausgabe)
         return ausgabe
@@ -125,9 +138,25 @@ class ModellausgabeService:
         verzeichnis = self._reportverzeichnis(projekt_id, validierungslauf_id, k_stern_id)
         verzeichnis.mkdir(parents=True, exist_ok=True)
         dateien: dict[str, dict[str, str]] = {}
+        manifestpfad = verzeichnis / "manifest.json"
+        if manifestpfad.is_file():
+            try:
+                vorhanden = json.loads(manifestpfad.read_text(encoding="utf-8"))
+                if (
+                    vorhanden.get("artefaktart") == "konzeptionelle_modellausgabe"
+                    and vorhanden.get("artefaktversion") == 1
+                    and vorhanden.get("projekt_id") == str(projekt_id)
+                    and vorhanden.get("validierungslauf_id") == str(validierungslauf_id)
+                    and vorhanden.get("k_stern_id") == str(k_stern_id)
+                    and isinstance(vorhanden.get("dateien"), dict)
+                ):
+                    dateien.update(vorhanden["dateien"])
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                pass
         for formatname, inhalt, dateiname in (
             ("html", ausgabe.report_html, ausgabe.html_dateiname),
             ("pdf", ausgabe.report_pdf, ausgabe.pdf_dateiname),
+            ("xlsx", ausgabe.report_xlsx, ausgabe.xlsx_dateiname),
         ):
             if inhalt is None or dateiname is None:
                 continue
@@ -146,7 +175,7 @@ class ModellausgabeService:
             "k_stern_id": str(k_stern_id),
             "dateien": dateien,
         }
-        (verzeichnis / "manifest.json").write_text(
+        manifestpfad.write_text(
             json.dumps(manifest, ensure_ascii=False, sort_keys=True), encoding="utf-8"
         )
 
@@ -170,7 +199,7 @@ class ModellausgabeService:
             ):
                 raise Importintegritaetsfehler("Das Reportmanifest ist inkonsistent.")
             geladen: dict[str, tuple[bytes | None, str | None]] = {}
-            for formatname in ("html", "pdf"):
+            for formatname in ("html", "pdf", "xlsx"):
                 eintrag = manifest.get("dateien", {}).get(formatname)
                 if eintrag is None:
                     geladen[formatname] = (None, None)
@@ -190,4 +219,12 @@ class ModellausgabeService:
             ) from fehler
         html_inhalt, html_name = geladen["html"]
         pdf_inhalt, pdf_name = geladen["pdf"]
-        return StrukturierteModellausgabe(html_inhalt, html_name, pdf_inhalt, pdf_name)
+        xlsx_inhalt, xlsx_name = geladen["xlsx"]
+        return StrukturierteModellausgabe(
+            html_inhalt,
+            html_name,
+            pdf_inhalt,
+            pdf_name,
+            xlsx_inhalt,
+            xlsx_name,
+        )

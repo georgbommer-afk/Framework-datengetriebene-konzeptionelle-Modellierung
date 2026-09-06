@@ -484,8 +484,8 @@ class SQLiteZugriffsRepository:
                 INSERT INTO projektfortschritt (
                     projekt_id, framework_schritt, fachlicher_unterschritt,
                     fortschritt_zaehler, fortschritt_nenner, phase, status,
-                    gespeichert_am_utc, revision
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    gespeichert_am_utc, revision, abgeschlossene_unterschritte_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(projekt_id) DO UPDATE SET
                     framework_schritt = excluded.framework_schritt,
                     fachlicher_unterschritt = excluded.fachlicher_unterschritt,
@@ -494,6 +494,7 @@ class SQLiteZugriffsRepository:
                     phase = excluded.phase,
                     status = excluded.status,
                     gespeichert_am_utc = excluded.gespeichert_am_utc,
+                    abgeschlossene_unterschritte_json = excluded.abgeschlossene_unterschritte_json,
                     revision = projektfortschritt.revision + 1
                 """,
                 (
@@ -506,6 +507,7 @@ class SQLiteZugriffsRepository:
                     fortschritt.status,
                     fortschritt.gespeichert_am.isoformat(),
                     fortschritt.revision,
+                    json.dumps(fortschritt.abgeschlossene_unterschritte),
                 ),
             )
 
@@ -526,6 +528,9 @@ class SQLiteZugriffsRepository:
             status=zeile["status"],
             gespeichert_am=_zeit(zeile["gespeichert_am_utc"]),  # type: ignore[arg-type]
             revision=zeile["revision"],
+            abgeschlossene_unterschritte=tuple(
+                json.loads(zeile["abgeschlossene_unterschritte_json"])
+            ),
         )
 
     def einladung_speichern(self, einladung: Gruppeneinladung) -> None:

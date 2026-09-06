@@ -11,7 +11,7 @@ from framework_mvp.ui.fortschritt import (
     fortschrittsstand,
     fortschrittszustand_aus_persistenz_setzen,
 )
-from framework_mvp.ui.navigation import FRAMEWORK_BEREICHE
+from framework_mvp.ui.navigation import ENTWURFSABSCHLUESSE, FRAMEWORK_BEREICHE
 
 
 @pytest.mark.parametrize(
@@ -52,9 +52,30 @@ zeige_gesamtfortschritt(fortschrittsstand(FRAMEWORK_BEREICHE[8], {}))
 """
     ).run()
     assert not app.exception
-    assert len(app.get("progress")) == 1
+    assert len(app.get("progress")) == 4
     assert any("Phase 3" in wert.value for wert in app.caption)
-    assert any("Schritt 9" in wert.value for wert in app.markdown)
+    assert any("Aktuell: Schritt 9" in wert.value for wert in app.markdown)
+
+
+def test_neues_projekt_steht_auf_erster_position_aber_bei_null_prozent() -> None:
+    stand = fortschrittsstand(FRAMEWORK_BEREICHE[0], {})
+    assert (stand.framework_schritt, stand.unterschritt) == (1, 1)
+    assert stand.prozent == 0
+
+
+def test_navigation_allein_aendert_den_abschlussstand_nicht() -> None:
+    stand = fortschrittsstand(FRAMEWORK_BEREICHE[4], {})
+    assert stand.framework_schritt == 5
+    assert stand.prozent == 0
+
+
+def test_erfolgreicher_erster_entwurfsabschnitt_ergibt_zwei_prozent() -> None:
+    stand = fortschrittsstand(
+        FRAMEWORK_BEREICHE[0],
+        {ENTWURFSABSCHLUESSE: (1, 0, 0, 0, 0, 0, 0, 0, 0, 0)},
+    )
+    assert stand.prozent == 2
+    assert stand.phasenprozente == (4, 0, 0)
 
 
 def test_import_initialisiert_navigation_mit_persistiertem_unterschritt() -> None:
@@ -68,9 +89,12 @@ def test_import_initialisiert_navigation_mit_persistiertem_unterschritt() -> Non
         zaehler=16,
         nenner=31,
         prozent=52,
+        phasenprozente=(80, 0, 0),
+        abgeschlossene_unterschritte=(5, 5, 3, 1, 0, 0, 0, 0, 0, 0),
         status="in_bearbeitung",
         gespeichert_am=datetime.now(UTC),
         letzte_aktivitaet=datetime.now(UTC),
+        revision=4,
     )
     zustand = {"aktuelles_projekt_id": str(projekt_id)}
 

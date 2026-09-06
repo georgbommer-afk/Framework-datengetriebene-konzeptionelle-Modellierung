@@ -13,6 +13,7 @@ from uuid import uuid4
 import pytest
 
 from framework_mvp.application.autorisierung import AutorisierungsService, geheimnis_hash
+from framework_mvp.application.fortschritt_service import FortschrittService
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.application.projektarchiv_service import (
     ArchivGrenzen,
@@ -28,6 +29,9 @@ from framework_mvp.domain.models.zugriff import (
     Projektzugehoerigkeit,
     Projektzugriffsart,
     Zugriffskontext,
+)
+from framework_mvp.infrastructure.persistence.sqlite_fortschritt_repository import (
+    SQLiteFortschrittRepository,
 )
 from framework_mvp.infrastructure.persistence.sqlite_projekt_repository import (
     SQLiteProjektRepository,
@@ -117,6 +121,47 @@ def test_gast_importiert_in_eigenen_neuen_mandanten_und_kann_wiederoeffnen(
     assert (
         ziel_workspace.basisverzeichnis / "projects" / str(projekt.projekt_id) / "raw" / "daten.csv"
     ).read_text() == "a,b\n1,2\n"
+
+
+def test_import_bewahrt_partiellen_abschluss_und_aktuelle_position(tmp_path: Path) -> None:
+    projekt, kontext, service = _quelle(tmp_path)
+    quell_db = tmp_path / "quelle.sqlite"
+    quell_repository = SQLiteZugriffsRepository(quell_db)
+    fortschritt = FortschrittService(
+        quell_repository,
+        SQLiteFortschrittRepository(quell_db),
+        AutorisierungsService(quell_repository),
+    )
+    for schritt in range(1, 5):
+        fortschritt.schritt_abschliessen(kontext, projekt.projekt_id, schritt=schritt)
+    fortschritt.position_aktualisieren(
+        kontext,
+        projekt.projekt_id,
+        schritt=5,
+        unterschritt="Artefaktkette übernehmen",
+    )
+    archiv = service.exportieren(kontext, projekt.projekt_id)
+    ziel_db = tmp_path / "ziel-fortschritt.sqlite"
+    ziel_workspace = WorkspaceKonfiguration(tmp_path / "ziel-fortschritt-workspace")
+    ziel_repository = SQLiteZugriffsRepository(ziel_db)
+    ziel = ProjektArchivService(
+        ziel_db,
+        ziel_workspace,
+        ziel_repository,
+        AutorisierungsService(ziel_repository),
+    )
+
+    ziel.importieren(kontext, archiv)
+    geladen = FortschrittService(
+        ziel_repository,
+        SQLiteFortschrittRepository(ziel_db),
+        AutorisierungsService(ziel_repository),
+    ).laden(kontext, projekt.projekt_id)
+
+    assert geladen.prozent == 40
+    assert geladen.schritt == 5
+    assert geladen.unterschritt == "Artefaktkette übernehmen"
+    assert geladen.abgeschlossene_unterschritte == (5, 5, 3, 4, 0, 0, 0, 0, 0, 0)
 
 
 def test_vorhandenes_projekt_wird_nach_rueckfrage_vollstaendig_ersetzt(
@@ -807,6 +852,8 @@ def _vollstaendigen_fachstand_anlegen(
             return "Modell ergänzen und validieren"
         if spalte == "status":
             return status[tabelle]
+        if spalte == "abgeschlossene_unterschritte_json":
+            return "[5,5,3,4,4,3,1,1,1,0]"
         if spalte.endswith("_json"):
             return "{}"
         if "sha256" in spalte or "fingerabdruck" in spalte:

@@ -741,7 +741,7 @@ def _speichern(
         st.info("Speichern Sie den fallbezogenen Event Log, um mit Schritt 5 fortzufahren.")
 
 
-def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
+def _navigation(zustand: dict[str, Any], weiter: bool, projekt_id: UUID) -> None:
     if zustand["schritt"] == len(SCHRITTE):
         return
     zeige_unterschritt_navigation(
@@ -751,6 +751,7 @@ def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
         zurueck_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] - 1),
         weiter_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] + 1),
         schluessel="event_log_unterschritt_navigation",
+        fortschrittsabschluss=(projekt_id, 4),
     )
 
 
@@ -836,6 +837,6 @@ def zeige_event_log_seite(
                     zustand,
                     ergebnis_anzeigen=False,
                 )
-        _navigation(zustand, weiter)
+        _navigation(zustand, weiter, projekt_id)
     except (Domaenenfehler, Importintegritaetsfehler) as fehler:
         st.error(str(fehler))

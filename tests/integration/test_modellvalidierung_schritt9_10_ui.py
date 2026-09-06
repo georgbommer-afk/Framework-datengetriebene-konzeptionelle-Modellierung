@@ -122,11 +122,12 @@ class Validierungen:
 class Ausgaben:
     def persistierte_ausgabe_laden(self, **kwargs): return None
     def erzeugen(self, **kwargs):
-        assert kwargs["html"] is True and kwargs["pdf"] is True
+        assert kwargs["html"] is True and kwargs["pdf"] is True and kwargs["xlsx"] is True
         assert "excel" not in kwargs and "report" not in kwargs
         return StrukturierteModellausgabe(
             b"<!DOCTYPE html><style></style>", "modell.html",
             b"%PDF-1.7", "modell.pdf",
+            b"PK-xlsx", "modell.xlsx",
         )
 
 zeige_modellausgabe_seite(Projekte(), Validierungen(), Ausgaben())
@@ -264,22 +265,18 @@ def test_schritt_10_verlangt_validiertes_k_stern_und_bietet_ruecknavigation() ->
     )
 
 
-def test_schritt_10_bietet_html_pdf_und_nur_deaktivierten_xlsx_dummy() -> None:
+def test_schritt_10_bietet_html_pdf_und_funktionalen_xlsx_download() -> None:
     app = _schritt_10()
     assert not app.exception
     assert len(app.expander) == 17
-    dummy = next(
-        wert for wert in app.button if wert.label.endswith(".xlsx – noch nicht implementiert")
-    )
-    assert dummy.disabled
-    assert "Fördertechnik Ost ÄÖÜ.xlsx" in dummy.label
-    next(wert for wert in app.button if wert.label == "HTML und PDF erzeugen").click().run()
+    assert not any("noch nicht implementiert" in wert.label for wert in app.button)
+    next(wert for wert in app.button if wert.label == "HTML, PDF und Excel erzeugen").click().run()
     downloads = cast(list[Any], app.get("download_button"))
     assert {wert.label for wert in downloads} == {
         "HTML-Report herunterladen",
         "PDF-Report herunterladen",
+        "Excel-Ausgabe herunterladen",
     }
-    assert not any("Excel-Ausgabe herunterladen" == wert.label for wert in downloads)
     link = next(
         wert.value
         for wert in app.markdown
@@ -315,4 +312,4 @@ def test_seiten_dokumentieren_die_verbindlichen_vertraege() -> None:
     ):
         assert titel in schritt_9
     assert "Schritt 10 verändert dieses Modell nicht" in schritt_10
-    assert "framework_bereich_oeffnen(schritt=10" in schritt_9
+    assert "schritt_abschliessen_und_weiter(aktueller_schritt=9" in schritt_9

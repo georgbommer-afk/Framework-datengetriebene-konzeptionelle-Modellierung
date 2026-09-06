@@ -1,4 +1,4 @@
-"""Formatneutrale Aufbereitung eines validierten K* für HTML- und PDF-Layouts."""
+"""Formatneutrale Aufbereitung eines validierten K* für alle Reportlayouts."""
 
 import json
 from collections.abc import Mapping
@@ -213,6 +213,31 @@ def _info_werte_mit_praefix(
         for information in _informationen(bestandteil)
         if str(information.get("strukturreferenz", "")).startswith(praefix)
     ]
+
+
+def _wartestellenhinweise(quelle: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Projiziert potenzielle Wartezeiten aus A_G in die gemeinsame Reportstruktur."""
+    ergebnis: list[dict[str, Any]] = []
+    for uebergang in _listenwert(
+        quelle.get("potenzielle_wartezeiten", quelle.get("uebergaenge", []))
+    ):
+        if not isinstance(uebergang, Mapping):
+            continue
+        statistik = uebergang.get("statistik", {})
+        if not isinstance(statistik, Mapping):
+            statistik = {}
+        ergebnis.append(
+            {
+                "uebergang": {
+                    "von": uebergang.get("von_aktivitaet"),
+                    "zu": uebergang.get("zu_aktivitaet"),
+                },
+                "anzahl": statistik.get("anzahl"),
+                "mittlere_wartezeit_sekunden": statistik.get("mittelwert_sekunden"),
+                "mediane_wartezeit_sekunden": statistik.get("median_sekunden"),
+            }
+        )
+    return ergebnis
 
 
 def _fachliche_entscheidungen(
@@ -433,7 +458,34 @@ def _lineage_informationen(
     return ergebnis
 
 
-def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
+def _vollstaendige_modellbestandteile(
+    k_stern: Mapping[str, Any],
+    bestandteile: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Bewahrt jeden finalen K*-Bestandteil für formatübergreifende Detailausgaben."""
+    ergebnis: list[dict[str, Any]] = []
+    for bestandteil in bestandteile.values():
+        original = bestandteil.get("urspruenglicher_bestandteil", {})
+        if not isinstance(original, Mapping):
+            original = {}
+        ergebnis.append(
+            {
+                **_abschnitt_metadaten(k_stern, bestandteil),
+                "informationen": _normalisieren(_informationen(bestandteil)),
+                "menschliche_eintraege": _normalisieren(
+                    bestandteil.get("menschliche_eintraege", [])
+                ),
+            }
+        )
+    return ergebnis
+
+
+def build_report_data(
+    k_stern: Mapping[str, Any],
+    *,
+    projektbezeichnung: str | None = None,
+    softwareversion: str | None = None,
+) -> dict[str, Any]:
     """Projiziert ein bereits validiertes K* auf eine formatneutrale Reportstruktur.
 
     Die Funktion verändert K* nicht, lädt keine weiteren Artefakte und führt
@@ -534,24 +586,7 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
     )
     if not isinstance(warteschlangenanalyse, Mapping):
         warteschlangenanalyse = {}
-    wartestellenhinweise = []
-    for uebergang in _listenwert(warteschlangenanalyse.get("uebergaenge", [])):
-        if not isinstance(uebergang, Mapping):
-            continue
-        statistik = uebergang.get("statistik", {})
-        if not isinstance(statistik, Mapping):
-            statistik = {}
-        wartestellenhinweise.append(
-            {
-                "uebergang": {
-                    "von": uebergang.get("von_aktivitaet"),
-                    "zu": uebergang.get("zu_aktivitaet"),
-                },
-                "anzahl": statistik.get("anzahl"),
-                "mittlere_wartezeit_sekunden": statistik.get("mittelwert_sekunden"),
-                "mediane_wartezeit_sekunden": statistik.get("median_sekunden"),
-            }
-        )
+    wartestellenhinweise = _wartestellenhinweise(warteschlangenanalyse)
     if not wartestellenhinweise:
         wartestellenhinweise = _listenwert(
             _info_wert(
@@ -599,6 +634,10 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
     )
     if not isinstance(zeitbezogene_datenauswahl, Mapping):
         zeitbezogene_datenauswahl = {}
+    if not wartestellenhinweise:
+        # Potenzielle Wartezeiten sind auch dann berichtsfähige Messwerte, wenn sie
+        # fachlich noch keine explizit bestätigte Warteschlange in K* begründen.
+        wartestellenhinweise = _wartestellenhinweise(zeitbezogene_datenauswahl)
 
     prozessmodell_referenz = _info_wert(
         darstellung,
@@ -619,13 +658,11 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
         "dokument": {
             "titel": "Konzeptionelles Modell",
             "untertitel": "Validiertes konzeptionelles Modell K*",
+            "softwareversion": softwareversion,
         },
         "projekt": {
             "projekt_id": _normalisieren(k_stern.get("projekt_id")),
-            # K* v1 enthält die Projektbezeichnung nicht. Sie wird hier bewusst
-            # nicht live aus dem Projektservice nachgeladen, damit dieselbe
-            # K*-Version reproduzierbar dieselben Reportdaten erzeugt.
-            "bezeichnung": None,
+            "bezeichnung": projektbezeichnung,
         },
         "modell": {
             "k_stern_id": _normalisieren(k_stern.get("k_stern_id")),
@@ -737,7 +774,10 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
             "wartestellenhinweise": wartestellenhinweise,
             "berechnungsregel": _normalisieren(warteschlangenanalyse.get("berechnungsregel")),
             "ausgeschlossene_negative_werte": _normalisieren(
-                warteschlangenanalyse.get("ausgeschlossene_negative_werte")
+                warteschlangenanalyse.get(
+                    "anzahl_ueberlappungen",
+                    warteschlangenanalyse.get("ausgeschlossene_negative_werte"),
+                )
             ),
             "ausgeschlossene_nicht_auswertbare_werte": _normalisieren(
                 warteschlangenanalyse.get("ausgeschlossene_nicht_auswertbare_werte")
@@ -801,6 +841,7 @@ def build_report_data(k_stern: Mapping[str, Any]) -> dict[str, Any]:
             "notation_anzeige": _anzeigetext(prozessmodell_referenz.get("notation")),
             "relativer_pfad": _normalisieren(prozessmodell_referenz.get("relativer_pfad")),
         },
+        "modellbestandteile": _vollstaendige_modellbestandteile(k_stern, bestandteile),
         "lineage": {
             "k_referenz": _normalisieren(k_stern.get("k_referenz")),
             "o_referenz": _normalisieren(k_stern.get("o_referenz")),

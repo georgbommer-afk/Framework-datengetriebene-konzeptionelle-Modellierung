@@ -67,7 +67,7 @@ from framework_mvp.ui.fortschritt import (
     fortschrittszustand_aus_persistenz_setzen,
     zeige_gesamtfortschritt,
 )
-from framework_mvp.ui.navigation import FRAMEWORK_BEREICHE
+from framework_mvp.ui.navigation import FORTSCHRITTSEREIGNISSE, FRAMEWORK_BEREICHE
 from framework_mvp.ui.oidc import lokaler_test_claims, oidc_konfiguration_ermitteln
 from framework_mvp.ui.pages.datenqualitaet import zeige_datenqualitaet_seite
 from framework_mvp.ui.pages.ergebnisaggregation import zeige_ergebnisaggregation_seite
@@ -1133,29 +1133,51 @@ if aktive_projekt_id is not None:
             st.error("Die angeforderte Ressource ist nicht verfügbar.")
         st.stop()
 
-stand = fortschrittsstand(seite, st.session_state)
-zeige_gesamtfortschritt(stand)
-
+navigationsstand = fortschrittsstand(seite, st.session_state)
+fortschrittsanzeige = None
 if aktive_projekt_id is not None and autorisierung.projekt_zugriff_erlaubt(
     kontext, aktive_projekt_id, Projektaktion.BEARBEITEN
 ):
     try:
         fortschritt_service = erstelle_fortschritt_service(datenbankpfad)
+        offene_ereignisse = list(st.session_state.get(FORTSCHRITTSEREIGNISSE, []))
+        verbleibende_ereignisse: list[dict[str, Any]] = []
+        for ereignis in offene_ereignisse:
+            try:
+                ereignis_projekt_id = UUID(str(ereignis["projekt_id"]))
+                ereignis_schritt = int(ereignis["schritt"])
+                ereignis_unterschritt = int(ereignis["unterschritt"])
+                if ereignis_unterschritt == 0:
+                    fortschritt_service.schritt_abschliessen(
+                        kontext, ereignis_projekt_id, schritt=ereignis_schritt
+                    )
+                else:
+                    fortschritt_service.unterschritt_abschliessen(
+                        kontext,
+                        ereignis_projekt_id,
+                        schritt=ereignis_schritt,
+                        unterschritt=ereignis_unterschritt,
+                    )
+            except (Domaenenfehler, KeyError, TypeError, ValueError):
+                verbleibende_ereignisse.append(ereignis)
+        st.session_state[FORTSCHRITTSEREIGNISSE] = verbleibende_ereignisse
         if st.session_state.get("folgeartefakte_veraltet") == str(aktive_projekt_id):
             fortschritt_service.auf_datenbasis_zuruecksetzen(
                 kontext,
                 aktive_projekt_id,
                 unterschritt="Transformieren und verknüpfen",
             )
-        else:
-            fortschritt_service.aktualisieren(
-                kontext,
-                aktive_projekt_id,
-                schritt=stand.framework_schritt,
-                unterschritt=stand.unterschritt_name,
-            )
+        fortschrittsanzeige = fortschritt_service.position_aktualisieren(
+            kontext,
+            aktive_projekt_id,
+            schritt=navigationsstand.framework_schritt,
+            unterschritt=navigationsstand.unterschritt_name,
+        )
     except Domaenenfehler:
         pass
+
+stand = fortschrittsstand(seite, st.session_state, fortschrittsanzeige)
+zeige_gesamtfortschritt(stand)
 
 if seite == "1 Projektrahmen definieren":
     zeige_projektverwaltung(

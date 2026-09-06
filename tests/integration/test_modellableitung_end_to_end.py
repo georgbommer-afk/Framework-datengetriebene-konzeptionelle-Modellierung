@@ -292,14 +292,23 @@ def _entscheidungen(
     *, unsicher: frozenset[ModellbestandteilId] = frozenset()
 ) -> tuple[FachlicheBestandteilentscheidung, ...]:
     jetzt = datetime(2026, 8, 31, tzinfo=UTC)
+    ohne_vorschlag = frozenset(
+        {
+            ModellbestandteilId.EINGABEN,
+            ModellbestandteilId.WARTESCHLANGEN,
+            ModellbestandteilId.ANNAHMEN,
+            ModellbestandteilId.VEREINFACHUNGEN,
+        }
+    )
+    bewusst_offen = unsicher | ohne_vorschlag
     return tuple(
         FachlicheBestandteilentscheidung(
             definition.bestandteil_id,
             FachlicheEntscheidungsart.OFFEN_UNSICHER
-            if definition.bestandteil_id in unsicher
+            if definition.bestandteil_id in bewusst_offen
             else FachlicheEntscheidungsart.UEBERNEHMEN,
             "Fachliche Prüfung in Schritt 9 erforderlich."
-            if definition.bestandteil_id in unsicher
+            if definition.bestandteil_id in bewusst_offen
             else "",
             jetzt,
         )

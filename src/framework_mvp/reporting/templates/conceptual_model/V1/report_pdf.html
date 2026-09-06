@@ -1404,6 +1404,17 @@
                             </div>
                         </div>
                     {% endif %}
+                    {% for wert in zeitdaten.get("zwischenankunftszeiten", []) %}
+                        <div class="pdf-kv-row">
+                            <div class="pdf-kv-label">
+                                Zwischenankunftszeit {{ wert.get("definition", {}).get("bezeichnung", "") }}
+                            </div>
+                            <div class="pdf-kv-value">
+                                Median {{ wert.get("statistik", {}).get("median_sekunden", "–") }} s
+                                · Ø {{ wert.get("statistik", {}).get("mittelwert_sekunden", "–") }} s
+                            </div>
+                        </div>
+                    {% endfor %}
                 </div>
                 {% if zeitdaten.get("bearbeitungszeiten") %}
                     <div class="pdf-kpi-list">

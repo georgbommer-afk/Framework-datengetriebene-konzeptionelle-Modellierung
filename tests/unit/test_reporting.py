@@ -1,14 +1,18 @@
 """Verträge der gemeinsamen Reporting-Pipeline für Schritt 10."""
 
 import copy
+from io import BytesIO
+from numbers import Real
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
+from openpyxl import load_workbook
 
 import framework_mvp.application.modellausgabe_service as ausgabe_modul
+import framework_mvp.reporting.xlsx_renderer as xlsx_modul
 from framework_mvp.application.modellausgabe_service import ModellausgabeService
 from framework_mvp.application.modellvalidierung_service import ModellvalidierungService
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
@@ -20,6 +24,7 @@ from framework_mvp.reporting.report_data import (
     ReportDataFehler,
     build_report_data,
 )
+from framework_mvp.reporting.xlsx_renderer import SHEET_NAMES, render_report_xlsx
 from framework_mvp.workspace import WorkspaceKonfiguration
 
 
@@ -54,7 +59,7 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
                     {
                         "status": "ableitbar",
                         "berechnungsregel": "Start(B) − Ende(A)",
-                        "uebergaenge": [
+                        "potenzielle_wartezeiten": [
                             {
                                 "von_aktivitaet": "A",
                                 "zu_aktivitaet": "B",
@@ -91,11 +96,16 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
                         "ankunftsregel": (
                             "Erster gültiger kanonischer Ereigniszeitstempel je Fall."
                         ),
-                        "zwischenankunftszeit": {
-                            "anzahl": 2,
-                            "mittelwert_sekunden": 120.0,
-                            "median_sekunden": 120.0,
-                        },
+                        "zwischenankunftszeiten": [
+                            {
+                                "definition": {"bezeichnung": "Auftragseingang"},
+                                "statistik": {
+                                    "anzahl": 2,
+                                    "mittelwert_sekunden": 120.0,
+                                    "median_sekunden": 120.0,
+                                },
+                            }
+                        ],
                         "bearbeitungszeiten": [
                             {
                                 "aktivitaet": "A",
@@ -103,6 +113,17 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
                                     "anzahl": 2,
                                     "mittelwert_sekunden": 60.0,
                                     "median_sekunden": 60.0,
+                                },
+                            }
+                        ],
+                        "potenzielle_wartezeiten": [
+                            {
+                                "von_aktivitaet": "A",
+                                "zu_aktivitaet": "B",
+                                "statistik": {
+                                    "anzahl": 2,
+                                    "mittelwert_sekunden": 90.0,
+                                    "median_sekunden": 90.0,
                                 },
                             }
                         ],
@@ -172,9 +193,121 @@ def test_build_report_data_projiziert_neue_felder_ohne_k_stern_mutation() -> Non
     assert report["ressourcen"]["zuordnungsmodus"] == "manuell"
     assert report["ressourcen"]["zuordnungsherkunft"].endswith("Schritt 7")
     assert (
-        report["daten"]["zeitbezogene_datenauswahl"]["zwischenankunftszeit"]["median_sekunden"]
+        report["daten"]["zeitbezogene_datenauswahl"]["zwischenankunftszeiten"][0][
+            "statistik"
+        ]["median_sekunden"]
         == 120.0
     )
+    assert len(report["modellbestandteile"]) == 16
+
+
+def test_report_nutzt_potenzielle_wartezeiten_aus_datenauswahl_ohne_warteschlange(
+) -> None:
+    k_stern = _k_stern()
+    bestandteile = cast(list[dict[str, Any]], k_stern["modellbestandteile"])
+    warteschlangen = next(
+        wert
+        for wert in bestandteile
+        if wert["bestandteil_id"] == "warteschlangen"
+    )
+    warteschlangen["urspruenglicher_bestandteil"]["informationen"] = []
+
+    report = build_report_data(k_stern)
+
+    assert report["warteschlangen"]["wartestellenhinweise"] == [
+        {
+            "uebergang": {"von": "A", "zu": "B"},
+            "anzahl": 2,
+            "mittlere_wartezeit_sekunden": 90.0,
+            "mediane_wartezeit_sekunden": 90.0,
+        }
+    ]
+
+
+def test_xlsx_renderer_erzeugt_zehn_geordnete_lesbare_arbeitsblaetter() -> None:
+    report = build_report_data(
+        _k_stern(),
+        projektbezeichnung="Fördertechnik Süd",
+        softwareversion="0.1.0-test",
+    )
+
+    inhalt = render_report_xlsx(report)
+    arbeitsmappe = load_workbook(BytesIO(inhalt), data_only=False)
+
+    assert arbeitsmappe.sheetnames == list(SHEET_NAMES)
+    assert all(not blatt.sheet_view.showGridLines for blatt in arbeitsmappe.worksheets)
+    assert arbeitsmappe["Übersicht"]["B6"].value == "Fördertechnik Süd"
+    assert any(
+        zelle.value == "Geprüft"
+        for zeile in arbeitsmappe["Validierung"].iter_rows()
+        for zelle in zeile
+    )
+    assert not any(
+        isinstance(zelle.value, str) and zelle.value.startswith("=")
+        for blatt in arbeitsmappe.worksheets
+        for zeile in blatt.iter_rows()
+        for zelle in zeile
+    )
+    assert all(
+        zelle.font.name == "Calibri"
+        for blatt in arbeitsmappe.worksheets
+        for zeile in blatt.iter_rows()
+        for zelle in zeile
+        if zelle.value is not None
+    )
+    datenblatt = arbeitsmappe["Daten & Datenauswahl"]
+    kopfzeile = next(
+        zeile
+        for zeile in datenblatt.iter_rows()
+        if zeile[0].value == "Kennwert" and zeile[1].value == "Bezug"
+    )
+    kopfwerte = [zelle.value for zelle in kopfzeile if zelle.value is not None]
+    assert "Minimum" not in kopfwerte and "Maximum" not in kopfwerte
+    statistikwerte = [
+        zeile
+        for zeile in datenblatt.iter_rows(min_row=kopfzeile[0].row + 1, values_only=False)
+        if zeile[0].value in {"Zwischenankunftszeit", "Bearbeitungszeit", "Wartezeit"}
+    ]
+    assert {zeile[0].value for zeile in statistikwerte} == {
+        "Zwischenankunftszeit",
+        "Bearbeitungszeit",
+        "Wartezeit",
+    }
+    assert all(isinstance(zeile[2].value, int) for zeile in statistikwerte)
+    assert all(isinstance(zeile[3].value, Real) for zeile in statistikwerte)
+    assert all(zeile[3].number_format == "0.00" for zeile in statistikwerte)
+    assert len(
+        {
+            datenblatt.column_dimensions[spalte].width
+            for spalte in ("A", "B", "C", "D", "E", "F", "G")
+        }
+    ) > 2
+
+
+def test_xlsx_renderer_bettet_prozessgrafik_als_png_ein(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = build_report_data(_k_stern())
+    projekt_id = report["projekt"]["projekt_id"]
+    analyse_id = report["prozessdarstellung"]["process_mining_analyse_id"]
+    ordner = tmp_path / "projects" / projekt_id / "process_mining"
+    ordner.mkdir(parents=True)
+    (ordner / f"{analyse_id}.model.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"></svg>',
+        encoding="utf-8",
+    )
+    png = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+        b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+        b"\x00\x00\x00\rIDAT\x08\xd7c\xf8\xcf\xc0\xf0\x1f\x00"
+        b"\x05\x00\x01\xff\x89\x99=\x1d\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    monkeypatch.setattr(xlsx_modul, "_svg_zu_png", lambda _: png)
+
+    inhalt = render_report_xlsx(resolve_report_assets(report, workspace_root=tmp_path))
+    arbeitsmappe = load_workbook(BytesIO(inhalt))
+
+    assert len(arbeitsmappe["Prozessmodell"]._images) == 1
 
 
 def test_aelteres_k_stern_ohne_optionale_felder_bleibt_renderbar(tmp_path: Path) -> None:
@@ -282,7 +415,7 @@ def test_pdf_renderer_verwendet_pdf_template_und_css(tmp_path: Path) -> None:
     assert ziel.read_bytes().startswith(b"%PDF-")
 
 
-def test_service_uebergibt_identische_gemeinsame_reportdaten_an_beide_renderer(
+def test_service_uebergibt_identische_gemeinsame_reportdaten_an_alle_renderer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     k_stern = _k_stern()
@@ -290,8 +423,12 @@ def test_service_uebergibt_identische_gemeinsame_reportdaten_an_beide_renderer(
     aufrufe = {"build": 0, "resolve": 0}
     renderer_ids: list[int] = []
 
-    def build(wert):  # type: ignore[no-untyped-def]
+    def build(wert, **metadaten):  # type: ignore[no-untyped-def]
         assert wert is k_stern
+        assert metadaten == {
+            "projektbezeichnung": "Fördertechnik Süd / ÄÖÜ",
+            "softwareversion": "1.2",
+        }
         aufrufe["build"] += 1
         return {"report_data_version": 1}
 
@@ -310,10 +447,15 @@ def test_service_uebergibt_identische_gemeinsame_reportdaten_an_beide_renderer(
         Path(ziel).write_bytes(b"%PDF-test")
         return Path(ziel)
 
+    def xlsx_renderer(wert):  # type: ignore[no-untyped-def]
+        renderer_ids.append(id(wert))
+        return b"PK-xlsx-test"
+
     monkeypatch.setattr(ausgabe_modul, "build_report_data", build)
     monkeypatch.setattr(ausgabe_modul, "resolve_report_assets", resolve)
     monkeypatch.setattr(ausgabe_modul, "render_report_html", html_renderer)
     monkeypatch.setattr(ausgabe_modul, "render_report_pdf", pdf_renderer)
+    monkeypatch.setattr(ausgabe_modul, "render_report_xlsx", xlsx_renderer)
     validierungen = SimpleNamespace(uebergabe_schritt10=lambda *_: k_stern)
     projekte = SimpleNamespace(
         projekt_laden=lambda projekt_id: SimpleNamespace(
@@ -332,13 +474,16 @@ def test_service_uebergibt_identische_gemeinsame_reportdaten_an_beide_renderer(
         k_stern_id=UUID(str(k_stern["k_stern_id"])),
         html=True,
         pdf=True,
+        xlsx=True,
     )
 
     assert aufrufe == {"build": 1, "resolve": 1}
-    assert renderer_ids == [id(aufgeloest), id(aufgeloest)]
+    assert renderer_ids == [id(aufgeloest), id(aufgeloest), id(aufgeloest)]
     assert ergebnis.report_html == b"<html></html>"
     assert ergebnis.report_pdf == b"%PDF-test"
+    assert ergebnis.report_xlsx == b"PK-xlsx-test"
     assert ergebnis.pdf_dateiname == "Konzeptionelles Modell Fördertechnik Süd ÄÖÜ.pdf"
+    assert ergebnis.xlsx_dateiname == "Konzeptionelles Modell Fördertechnik Süd ÄÖÜ.xlsx"
 
 
 def test_service_uebersetzt_reportingfehler_in_die_anwendungsschicht(
@@ -348,7 +493,7 @@ def test_service_uebersetzt_reportingfehler_in_die_anwendungsschicht(
     monkeypatch.setattr(
         ausgabe_modul,
         "build_report_data",
-        lambda _: (_ for _ in ()).throw(ReportDataFehler("inkompatibel")),
+        lambda _wert, **_metadaten: (_ for _ in ()).throw(ReportDataFehler("inkompatibel")),
     )
     service = ModellausgabeService(
         cast(

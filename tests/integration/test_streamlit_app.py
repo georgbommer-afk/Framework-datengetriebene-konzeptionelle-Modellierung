@@ -70,7 +70,7 @@ def test_anwendung_startet_mit_fuenf_schritten_und_tooltips(
     assert not anwendung.exception
     assert any(element.value == "1 Projektrahmen definieren" for element in anwendung.header)
     assert any("Gesamtfortschritt" in element.value for element in anwendung.caption)
-    assert len(anwendung.get("progress")) == 1
+    assert len(anwendung.get("progress")) == 4
     assert {element.label for element in anwendung.text_area} == {
         "Problemstellung",
         "Systemgrenze",
@@ -198,6 +198,7 @@ def test_untersuchungszwecke_und_logistikziele_sind_kompakt(
     """Vordefinierte und individuelle Zwecke teilen sich eine Auswahl."""
     anwendung = _anwendung_starten(tmp_path, monkeypatch)
     _schaltflaeche(anwendung, "Weiter").click().run()
+    assert any("Gesamtfortschritt: 0 %" in wert.value for wert in anwendung.caption)
     zwecke = next(
         element for element in anwendung.multiselect if element.label == "Untersuchungszwecke"
     )
@@ -218,6 +219,26 @@ def test_untersuchungszwecke_und_logistikziele_sind_kompakt(
     assert all(element.label != oberziel for element in anwendung.checkbox)
     assert not any(
         element.label == "Weiteres individuelles Ziel" for element in anwendung.text_area
+    )
+
+
+def test_erfolgreich_bestaetigter_erster_abschnitt_ergibt_zwei_prozent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    anwendung = _anwendung_starten(tmp_path, monkeypatch)
+    next(wert for wert in anwendung.text_area if wert.label == "Problemstellung").set_value(
+        "Fachlich bestätigte Problemstellung"
+    )
+    next(wert for wert in anwendung.text_area if wert.label == "Systemgrenze").set_value(
+        "Fachlich bestätigte Systemgrenze"
+    )
+    anwendung.run()
+
+    _schaltflaeche(anwendung, "Weiter").click().run()
+
+    assert any("Gesamtfortschritt: 2 %" in wert.value for wert in anwendung.caption)
+    assert any(
+        "Phase 1 – Aufbereitung der Datenbasis: 4 %" in wert.value for wert in anwendung.caption
     )
 
 
@@ -439,8 +460,8 @@ def test_vorhandene_datenquelle_ist_von_schritt_1_entkoppelt(
     assert not any("ERP-Export" in element.value for element in anwendung.markdown)
     assert not anwendung.date_input
     assert any(
-            element.label == "Projektrahmen speichern und zu Schritt 2: ETL durchführen"
-            for element in anwendung.button
+        element.label == "Projektrahmen speichern und zu Schritt 2: ETL durchführen"
+        for element in anwendung.button
     )
 
 

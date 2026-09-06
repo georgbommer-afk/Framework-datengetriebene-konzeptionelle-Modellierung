@@ -106,6 +106,7 @@ class Aggregation:
             konfigurationsfingerabdruck="6" * 64,
         ), {}
     def a_g_download_laden(self, aggregations_id): return b"{}"
+    def gespeicherte_ergebnisdetails_laden(self, aggregations_id): return {}
 
 zeige_ergebnisaggregation_seite(Projekte(), Aggregation())
 """
@@ -186,23 +187,21 @@ def test_unvollstaendige_ressourcen_zeigen_kompakte_manuelle_tabelle() -> None:
     assert not next(
         wert
         for wert in app.button
-        if wert.label
-        == "Ergebnisaggregation berechnen und weiter zu Schritt 8: Modellbestandteile ableiten"
+        if wert.label == "Ergebnisaggregation berechnen und speichern"
     ).disabled
 
 
-def test_a_g_speichern_setzt_id_uebergabe_und_schritt_acht() -> None:
+def test_a_g_speichern_setzt_id_uebergabe_und_zeigt_ergebnis() -> None:
     app = _app()
     next(
         wert
         for wert in app.button
-        if wert.label
-        == "Ergebnisaggregation berechnen und weiter zu Schritt 8: Modellbestandteile ableiten"
+        if wert.label == "Ergebnisaggregation berechnen und speichern"
     ).click().run()
 
     assert app.session_state["aktuelle_aggregations_id"] == ("66666666-6666-6666-6666-666666666666")
     assert app.session_state["test_uebergabe_schritt8"] is True
-    assert app.session_state["naechster_framework_bereich"] == ("8 Modellbestandteile ableiten")
+    assert any("Ergebnisse stehen unten" in wert.value for wert in app.success)
 
 
 def test_unveraenderte_a_g_konfiguration_bewahrt_aktive_folgeartefakte() -> None:
@@ -221,8 +220,7 @@ def test_unveraenderte_a_g_konfiguration_bewahrt_aktive_folgeartefakte() -> None
     next(
         wert
         for wert in app.button
-        if wert.label
-        == "Ergebnisaggregation berechnen und weiter zu Schritt 8: Modellbestandteile ableiten"
+        if wert.label == "Ergebnisaggregation berechnen und speichern"
     ).click().run()
 
     assert app.session_state["aktuelle_aggregations_id"] == alte_ag
@@ -234,10 +232,10 @@ def test_unveraenderte_a_g_konfiguration_bewahrt_aktive_folgeartefakte() -> None
     assert app.session_state["aktuelle_modellableitungs_id"] == "8" * 32
     assert app.session_state["aktuelle_validierungslauf_id"] == "b" * 32
     assert app.session_state["aktuelle_k_stern_id"] == "c" * 32
-    assert app.session_state["naechster_framework_bereich"] == "8 Modellbestandteile ableiten"
+    assert "naechster_framework_bereich" not in app.session_state
 
 
-def test_geaenderte_a_g_konfiguration_loest_folgeartefakte_und_oeffnet_schritt_acht() -> None:
+def test_geaenderte_a_g_konfiguration_loest_folgeartefakte_ohne_auto_navigation() -> None:
     app = _app()
     projekt_id = "11111111-1111-1111-1111-111111111111"
     app.session_state["aktuelle_aggregations_id"] = "77777777-7777-7777-7777-777777777777"
@@ -251,8 +249,7 @@ def test_geaenderte_a_g_konfiguration_loest_folgeartefakte_und_oeffnet_schritt_a
     next(
         wert
         for wert in app.button
-        if wert.label
-        == "Ergebnisaggregation berechnen und weiter zu Schritt 8: Modellbestandteile ableiten"
+        if wert.label == "Ergebnisaggregation berechnen und speichern"
     ).click().run()
 
     assert app.session_state["aktuelle_aggregations_id"] == ("66666666-6666-6666-6666-666666666666")
@@ -260,7 +257,7 @@ def test_geaenderte_a_g_konfiguration_loest_folgeartefakte_und_oeffnet_schritt_a
     assert "aktuelle_modellableitungs_id" not in app.session_state
     assert "aktuelle_validierungslauf_id" not in app.session_state
     assert "aktuelle_k_stern_id" not in app.session_state
-    assert app.session_state["naechster_framework_bereich"] == "8 Modellbestandteile ableiten"
+    assert "naechster_framework_bereich" not in app.session_state
 
 
 def test_schritt_7_hat_keine_redundante_vorschau_bestaetigung() -> None:
@@ -272,7 +269,7 @@ def test_schritt_7_hat_keine_redundante_vorschau_bestaetigung() -> None:
 def test_woped_url_iframe_und_fallback_sind_fest_und_bedingt() -> None:
     quelle = Path("src/framework_mvp/ui/pages/ergebnisaggregation.py").read_text(encoding="utf-8")
     assert 'WOPED_NEXT_URL = "https://taminofischer.github.io/woped-next/"' in quelle
-    assert "components.iframe(WOPED_NEXT_URL, height=900, scrolling=True)" in quelle
+    assert "st.iframe(WOPED_NEXT_URL, height=900, scrolling=True)" in quelle
     assert 'st.link_button("WoPeD Next in neuem Tab öffnen", WOPED_NEXT_URL)' in quelle
     assert 'if status == "Sollmodell muss zunächst erstellt werden"' in quelle
 
@@ -280,7 +277,9 @@ def test_woped_url_iframe_und_fallback_sind_fest_und_bedingt() -> None:
 def test_conformance_ergebnisdarstellung_und_mappingbestaetigung_sind_explizit() -> None:
     quelle = Path("src/framework_mvp/ui/pages/ergebnisaggregation.py").read_text(encoding="utf-8")
     assert "Ich bestätige die Zuordnung zwischen den Aktivitäten des Event Logs" in quelle
-    assert "Fitness nach Gleichung 3.13" in quelle
+    assert "Fitness nach Gleichung 3.14" in quelle
+    assert "Token-Based Replay erfolgreich durchgeführt." in quelle
+    assert "Performance- und Engpassanalyse erfolgreich durchgeführt." in quelle
     assert "pT · produzierte Tokens" in quelle
     assert "cT · konsumierte Tokens" in quelle
     assert "mT · fehlende Tokens" in quelle

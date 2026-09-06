@@ -11,6 +11,7 @@ from framework_mvp.application.ergebnisaggregation.sollprozess import (
     erstelle_aktivitaetsmapping,
     erzeuge_lineares_sollmodell,
     fitness_gleichung_3_13,
+    pruefe_pnml_markierungen,
     token_replay,
     validiere_pnml_sollmodell,
 )
@@ -122,6 +123,10 @@ def test_eindeutig_ableitbare_markierungen_erfordern_menschliche_bestaetigung() 
         "freigabedatum": date.today(),
         "menschlich_bestaetigt": True,
     }
+    pruefung = pruefe_pnml_markierungen("ohne-markierungen.pnml", ohne_markierungen)
+    assert not pruefung.markierungen_vollstaendig
+    assert pruefung.eindeutig_ableitbar
+    assert len(pruefung.quellplaetze) == len(pruefung.senkenplaetze) == 1
     with pytest.raises(Domaenenfehler, match="menschlich bestätigt"):
         validiere_pnml_sollmodell(
             **parameter,
@@ -134,6 +139,29 @@ def test_eindeutig_ableitbare_markierungen_erfordern_menschliche_bestaetigung() 
     assert modell.markierungen_abgeleitet
     assert modell.original_pnml == ohne_markierungen
     assert modell.replay_pnml != ohne_markierungen
+
+
+def test_vorhandene_markierungen_erfordern_keine_ableitungsentscheidung() -> None:
+    pruefung = pruefe_pnml_markierungen("modell.pnml", _linear().original_pnml)
+
+    assert pruefung.markierungen_vollstaendig
+    assert pruefung.eindeutig_ableitbar
+
+
+def test_mehrdeutige_fehlende_markierung_wird_nicht_geraten() -> None:
+    original = _linear().original_pnml
+    ohne_markierungen = re.sub(
+        rb"<initialMarking>.*?</initialMarking>", b"", original, flags=re.DOTALL
+    )
+    ohne_markierungen = re.sub(
+        rb"<finalmarkings>.*?</finalmarkings>", b"", ohne_markierungen, flags=re.DOTALL
+    ).replace(b"</page>", b'<place id="zweite_quelle" /></page>')
+
+    pruefung = pruefe_pnml_markierungen("mehrdeutig.pnml", ohne_markierungen)
+
+    assert not pruefung.markierungen_vollstaendig
+    assert not pruefung.eindeutig_ableitbar
+    assert len(pruefung.quellplaetze) == 2
 
 
 @pytest.mark.parametrize(
@@ -176,7 +204,9 @@ def test_uebergrosse_pnml_wird_vor_xml_import_abgewiesen() -> None:
         )
 
 
-def test_mapping_ist_exakt_oder_menschlich_und_replay_verwendet_vollstaendiges_log() -> None:
+def test_mapping_ist_exakt_oder_menschlich_und_replay_verwendet_vollstaendiges_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     projekt_id = uuid4()
     modell = _linear(projekt_id)
     mapping = erstelle_aktivitaetsmapping(
@@ -195,6 +225,11 @@ def test_mapping_ist_exakt_oder_menschlich_und_replay_verwendet_vollstaendiges_l
         }
     )
     vorher = log.copy(deep=True)
+    monkeypatch.setattr(
+        "framework_mvp.application.ergebnisaggregation.sollprozess.pm4py."
+        "fitness_token_based_replay",
+        lambda *args, **kwargs: pytest.fail("Ein zweiter Replay-Durchlauf ist unzulässig."),
+    )
     ergebnis = token_replay(event_log=log, sollmodell=modell, mapping=mapping)
     assert len(ergebnis.fallbezogene_diagnosen) == 2
     assert ergebnis.produzierte_tokens == 5

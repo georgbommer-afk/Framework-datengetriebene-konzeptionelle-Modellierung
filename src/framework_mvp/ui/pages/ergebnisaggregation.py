@@ -22,6 +22,7 @@ from framework_mvp.application.ergebnisaggregation.sollprozess import (
     aktivitaetsreferenz_csv,
     erstelle_aktivitaetsmapping,
     erzeuge_lineares_sollmodell,
+    pruefe_pnml_markierungen,
     validiere_pnml_sollmodell,
 )
 from framework_mvp.application.ergebnisaggregation.strukturierte_ergebnisse import (
@@ -60,7 +61,10 @@ from framework_mvp.ui.components.mathematische_formeln import (
     zeige_token_fitness_formel,
 )
 from framework_mvp.ui.components.voraussetzungshinweis import zeige_voraussetzungshinweis
-from framework_mvp.ui.navigation import framework_bereich_oeffnen
+from framework_mvp.ui.navigation import (
+    framework_bereich_oeffnen,
+    schritt_abschliessen_und_weiter,
+)
 
 WOPED_NEXT_URL = "https://taminofischer.github.io/woped-next/"
 PETRI_GRUNDLAGEN_URL = "https://doi.org/10.1007/978-94-009-0649-5_6"
@@ -519,15 +523,52 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
             key="ag_pnml_upload",
         )
         meta = _sollmodell_metadaten("ag_pnml")
-        markierung = st.radio(
-            "Umgang mit fehlenden Anfangs- oder Endmarkierungen",
-            (
-                "Import abbrechen",
-                "Aus eindeutigem Quell- und Senkenplatz ableiten",
-            ),
-            key="ag_pnml_markierung",
-        )
-        if st.button("PNML sicher validieren", disabled=upload is None, type="primary"):
+        markierungsableitung_bestaetigt = False
+        pnml_validierbar = upload is not None
+        if upload is not None:
+            pnml_bytes = upload.getvalue()
+            fingerprint = hashlib.sha256(pnml_bytes).hexdigest()
+            if st.session_state.get("ag_pnml_pruefung_sha") != fingerprint:
+                try:
+                    st.session_state.ag_pnml_markierungspruefung = pruefe_pnml_markierungen(
+                        upload.name, pnml_bytes
+                    )
+                    st.session_state.pop("ag_pnml_prueffehler", None)
+                except Domaenenfehler as fehler:
+                    st.session_state.ag_pnml_prueffehler = str(fehler)
+                    st.session_state.pop("ag_pnml_markierungspruefung", None)
+                st.session_state.ag_pnml_pruefung_sha = fingerprint
+            prueffehler = st.session_state.get("ag_pnml_prueffehler")
+            pruefung = st.session_state.get("ag_pnml_markierungspruefung")
+            if prueffehler:
+                st.error(f"PNML-Vorprüfung fehlgeschlagen: {prueffehler}")
+                pnml_validierbar = False
+            elif pruefung is not None and pruefung.markierungen_vollstaendig:
+                st.success(
+                    "Anfangs- und Endmarkierung sind in der PNML-Datei vorhanden. "
+                    "Es ist keine Ableitungsentscheidung erforderlich."
+                )
+            elif pruefung is not None and pruefung.eindeutig_ableitbar:
+                st.info(
+                    "Mindestens eine Markierung fehlt. Sie kann eindeutig aus Quellplatz "
+                    f"{pruefung.quellplaetze[0]} und Senkenplatz {pruefung.senkenplaetze[0]} "
+                    "abgeleitet werden. Das Original bleibt unverändert; nur die interne "
+                    "Replay-Arbeitskopie erhält die Markierung."
+                )
+                markierungsableitung_bestaetigt = st.checkbox(
+                    "Eindeutige Markierungsableitung für die Replay-Arbeitskopie bestätigen",
+                    key="ag_pnml_markierung_bestaetigt",
+                )
+                pnml_validierbar = markierungsableitung_bestaetigt
+            elif pruefung is not None:
+                st.error(
+                    "Die fehlenden Markierungen sind strukturell nicht eindeutig ableitbar: "
+                    f"{len(pruefung.quellplaetze)} Quellplätze und "
+                    f"{len(pruefung.senkenplaetze)} Senkenplätze. Es wird nichts geraten; "
+                    "korrigieren Sie die PNML-Datei im Modellierungswerkzeug."
+                )
+                pnml_validierbar = False
+        if st.button("PNML sicher validieren", disabled=not pnml_validierbar, type="primary"):
             try:
                 assert upload is not None
                 st.session_state.ag_sollmodell = validiere_pnml_sollmodell(
@@ -535,9 +576,7 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
                     dateiname=upload.name,
                     originalbytes=upload.getvalue(),
                     menschlich_bestaetigt=True,
-                    markierungsableitung_bestaetigt=(
-                        markierung == "Aus eindeutigem Quell- und Senkenplatz ableiten"
-                    ),
+                    markierungsableitung_bestaetigt=markierungsableitung_bestaetigt,
                     **meta,
                 )
                 st.session_state.pop("ag_aktivitaetsmapping", None)
@@ -1230,9 +1269,14 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
     st.write("**Immer enthalten:** unveränderte Referenz auf A_D")
     if vorschau.conformance_ergebnis is not None:
         conformance = vorschau.conformance_ergebnis
+        st.success("Token-Based Replay erfolgreich durchgeführt.")
         st.markdown("#### Sollprozess und Conformance Checking")
         zeige_token_fitness_formel()
-        st.metric("Fitness nach Gleichung 3.13", conformance.fitness)
+        st.metric("Fitness nach Gleichung 3.14", conformance.fitness)
+        st.caption(
+            "Fitness = 1 bedeutet vollständige Übereinstimmung im Token-Replay; "
+            "niedrigere Werte zeigen Abweichungen zwischen E* und P_Soll."
+        )
         token_spalten = st.columns(4)
         token_spalten[0].metric("pT · produzierte Tokens", conformance.produzierte_tokens)
         token_spalten[1].metric("cT · konsumierte Tokens", conformance.konsumierte_tokens)
@@ -1251,7 +1295,7 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
                 and abs(conformance.fitness - conformance.fitness_plausibilisierung_pm4py) > 0.01
             ):
                 st.warning(
-                    "Fitness nach Gleichung 3.13 und PM4Py-Plausibilisierung weichen "
+                    "Fitness nach Gleichung 3.14 und PM4Py-Plausibilisierung weichen "
                     "numerisch um mehr als 0,01 voneinander ab; der fachliche Hauptwert "
                     "wird nicht automatisch korrigiert."
                 )
@@ -1282,6 +1326,7 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
     performance = getattr(vorschau, "performance_zeitvergleich_ergebnis", None)
     busy = getattr(vorschau, "busy_ratio_ergebnis", None)
     if performance is not None or busy is not None:
+        st.success("Performance- und Engpassanalyse erfolgreich durchgeführt.")
         st.markdown("#### Performance- und Engpassanalyse")
     if performance is not None:
         if performance.dt_statistik is not None:
@@ -1306,6 +1351,16 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
                 hide_index=True,
                 width="stretch",
             )
+        if performance.ausschlussgruende and any(performance.ausschlussgruende.values()):
+            st.warning(
+                "dT/dB wurde nur für fachlich zuordenbare und zeitlich auswertbare Datensätze "
+                "berechnet. Ausschlüsse: "
+                + ", ".join(
+                    f"{name.replace('_', ' ')}: {anzahl}"
+                    for name, anzahl in performance.ausschlussgruende.items()
+                    if anzahl
+                )
+            )
     if busy is not None:
         st.write(
             "**Ressourcenbezogene Busy Ratio (Gl. 3.3–3.5):** BR < 1 bedeutet eine "
@@ -1326,6 +1381,15 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
             st.info(
                 "Nur eine Ressource besitzt gültige Busy-Ratio-Werte; ein Vergleich mit "
                 "übrigen Ressourcen wird nicht behauptet."
+            )
+        if busy.ausschlussgruende and any(busy.ausschlussgruende.values()):
+            st.info(
+                "Busy Ratio wurde nur für auswertbare Beobachtungen berechnet. Ausschlüsse: "
+                + ", ".join(
+                    f"{name.replace('_', ' ')}: {anzahl}"
+                    for name, anzahl in busy.ausschlussgruende.items()
+                    if anzahl
+                )
             )
     ressourcenanalyse = getattr(vorschau, "ressourcenanalyse", None)
     if ressourcenanalyse is not None:
@@ -1410,7 +1474,10 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
             )
     if vorschau.warnungen:
         for warnung in vorschau.warnungen:
-            st.warning(warnung)
+            if warnung.startswith("Conformance Checking wurde nicht berechnet"):
+                st.error(warnung)
+            else:
+                st.warning(warnung)
     with st.expander("Technische Details", expanded=False):
         st.json(
             {
@@ -1466,7 +1533,74 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
         )
 
 
-def _gespeichertes_a_g_anzeigen(a_g: dict[str, object]) -> None:
+def _gespeicherte_conformance_anzeigen(details: object) -> None:
+    struktur = details if isinstance(details, dict) else {}
+    ergebnis = struktur.get("ergebnis", {})
+    if not isinstance(ergebnis, dict) or not ergebnis:
+        return
+    st.markdown("#### Token-Based Replay · gespeichertes Ergebnis")
+    zeige_token_fitness_formel()
+    st.metric("Fitness nach Gleichung 3.14", ergebnis.get("fitness", "nicht berechenbar"))
+    tokens = st.columns(4)
+    tokens[0].metric("pT · produzierte Tokens", ergebnis.get("produzierte_tokens", 0))
+    tokens[1].metric("cT · konsumierte Tokens", ergebnis.get("konsumierte_tokens", 0))
+    tokens[2].metric("mT · fehlende Tokens", ergebnis.get("fehlende_tokens", 0))
+    tokens[3].metric("rT · verbleibende Tokens", ergebnis.get("verbleibende_tokens", 0))
+    faelle = st.columns(3)
+    konform = int(ergebnis.get("konforme_faelle", 0) or 0)
+    abweichend = int(ergebnis.get("abweichende_faelle", 0) or 0)
+    faelle[0].metric("Ausgewertete Fälle", konform + abweichend)
+    faelle[1].metric("Konforme Fälle", konform)
+    faelle[2].metric("Abweichende Fälle", abweichend)
+    diagnosen = ergebnis.get("fallbezogene_diagnosen", [])
+    if isinstance(diagnosen, list) and diagnosen:
+        with st.expander("Fallbezogene Token-Diagnosen", expanded=False):
+            st.dataframe(pd.DataFrame(diagnosen), hide_index=True, width="stretch")
+
+
+def _gespeicherte_performance_anzeigen(details: object) -> None:
+    struktur = details if isinstance(details, dict) else {}
+    performance = struktur.get("fertigstellungs_und_bearbeitungszeitabweichungen")
+    busy = struktur.get("ressourcenbezogene_busy_ratio")
+    if not isinstance(performance, dict) and not isinstance(busy, dict):
+        return
+    st.markdown("#### Performance- und Engpassanalyse · gespeichertes Ergebnis")
+    if isinstance(performance, dict):
+        for titel, schluessel in (
+            ("dT · Fertigstellungsabweichung", "dt_statistik"),
+            ("dB · Bearbeitungszeitabweichung", "db_statistik"),
+        ):
+            statistik = performance.get(schluessel)
+            if isinstance(statistik, dict):
+                st.write(f"**{titel}:**")
+                st.dataframe(pd.DataFrame([statistik]), hide_index=True, width="stretch")
+        ausschluss = performance.get("ausschlussgruende", {})
+        if isinstance(ausschluss, dict) and any(ausschluss.values()):
+            st.warning(
+                "dT/dB wurde nur für auswertbare Zuordnungen berechnet. Ausschlüsse: "
+                + ", ".join(f"{name}: {anzahl}" for name, anzahl in ausschluss.items() if anzahl)
+            )
+    if isinstance(busy, dict):
+        statistiken = busy.get("ressourcenstatistiken", [])
+        if isinstance(statistiken, list) and statistiken:
+            st.dataframe(pd.DataFrame(statistiken), hide_index=True, width="stretch")
+        engpass = str(busy.get("potenzieller_engpass", "") or "")
+        if engpass:
+            st.warning(
+                f"{engpass} besitzt den höchsten mittleren Busy-Ratio-Wert und ist damit "
+                "ein potenzieller Engpass; eine Ursache oder Warteschlange wird nicht behauptet."
+            )
+        ausschluss = busy.get("ausschlussgruende", {})
+        if isinstance(ausschluss, dict) and any(ausschluss.values()):
+            st.info(
+                "Busy Ratio wurde nur für auswertbare Beobachtungen berechnet. Ausschlüsse: "
+                + ", ".join(f"{name}: {anzahl}" for name, anzahl in ausschluss.items() if anzahl)
+            )
+
+
+def _gespeichertes_a_g_anzeigen(
+    a_g: dict[str, object], details: dict[str, object] | None = None
+) -> None:
     """Zeigt die persistierten Entscheidungen und Ergebnisse ohne Neuberechnung."""
     st.subheader("Gespeicherte Konfiguration und Ergebnisse A_G")
     st.write(
@@ -1479,6 +1613,9 @@ def _gespeichertes_a_g_anzeigen(a_g: dict[str, object]) -> None:
         st.json(kpi_konfigurationen, expanded=False)
     st.write("**Conformance Checking**")
     st.json(a_g.get("conformance_checking", {}), expanded=False)
+    details = details or {}
+    _gespeicherte_conformance_anzeigen(details.get("conformance"))
+    _gespeicherte_performance_anzeigen(details.get("performance"))
     strukturierte = a_g.get("strukturierte_ergebnisse", {})
     if isinstance(strukturierte, dict):
         for titel, schluessel in (
@@ -1526,7 +1663,9 @@ def zeige_ergebnisaggregation_seite(
                 )
             basis = service.grundlage_fuer_aggregation(aggregation.aggregations_id)
             _eingangsartefakte(basis)
-            _gespeichertes_a_g_anzeigen(a_g)
+            _gespeichertes_a_g_anzeigen(
+                a_g, service.gespeicherte_ergebnisdetails_laden(aggregation.aggregations_id)
+            )
             st.success("A_G ist gespeichert und erneut validiert.")
             st.download_button(
                 "A_G als JSON herunterladen",
@@ -1545,7 +1684,7 @@ def zeige_ergebnisaggregation_seite(
                 type="primary",
                 width="stretch",
             ):
-                framework_bereich_oeffnen(schritt=8, projekt_id=projekt_id)
+                schritt_abschliessen_und_weiter(aktueller_schritt=7, projekt_id=projekt_id)
             return
         except (Domaenenfehler, Importintegritaetsfehler, ValueError) as fehler:
             zeige_voraussetzungshinweis(
@@ -1640,7 +1779,7 @@ def zeige_ergebnisaggregation_seite(
     if navigation_links.button("Zurück", width="stretch"):
         framework_bereich_oeffnen(schritt=6, projekt_id=projekt_id)
     if navigation_rechts.button(
-        "Ergebnisaggregation berechnen und weiter zu Schritt 8: Modellbestandteile ableiten",
+        "Ergebnisaggregation berechnen und speichern",
         type="primary",
         width="stretch",
         disabled=ressourcenanalyse is None,
@@ -1709,7 +1848,9 @@ def zeige_ergebnisaggregation_seite(
                 aggregation.aggregations_id, projekt_id, freigabe_id, analyse_id
             )
             st.session_state.pop(bearbeitung_key, None)
-            framework_bereich_oeffnen(schritt=8, projekt_id=projekt_id)
+            st.success(
+                "A_G wurde gespeichert. Die Ergebnisse stehen unten zur fachlichen Prüfung bereit."
+            )
         except (
             Domaenenfehler,
             Importintegritaetsfehler,

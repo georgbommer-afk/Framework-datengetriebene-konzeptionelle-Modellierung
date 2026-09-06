@@ -1,4 +1,4 @@
-"""Eine Fortschrittsdefinition für Projektkopf und Lehrenden-Dashboard."""
+"""Persistente Navigation und fachlich gewichteter Projektfortschritt."""
 
 from __future__ import annotations
 
@@ -62,6 +62,46 @@ FACHLICHE_UNTERSCHRITTE: dict[int, tuple[str, ...]] = {
     10: ("Konzeptionelles Modell ausgeben",),
 }
 
+PHASENSCHRITTE: dict[int, tuple[int, ...]] = {
+    1: (1, 2, 3, 4, 5),
+    2: (6, 7),
+    3: (8, 9, 10),
+}
+LEERER_ABSCHLUSS = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+VOLLSTAENDIGER_ABSCHLUSS = tuple(len(FACHLICHE_UNTERSCHRITTE[schritt]) for schritt in range(1, 11))
+
+
+def _normalisiere_abschluesse(werte: tuple[int, ...]) -> tuple[int, ...]:
+    if len(werte) != 10:
+        return LEERER_ABSCHLUSS
+    return tuple(
+        min(max(int(werte[schritt - 1]), 0), len(FACHLICHE_UNTERSCHRITTE[schritt]))
+        for schritt in range(1, 11)
+    )
+
+
+def berechne_fortschritt(abschluesse: tuple[int, ...]) -> float:
+    """Berechnet 10 Prozentpunkte je Schritt, intern gleichmäßig geteilt."""
+    normalisiert = _normalisiere_abschluesse(abschluesse)
+    return sum(
+        10.0 * normalisiert[schritt - 1] / len(FACHLICHE_UNTERSCHRITTE[schritt])
+        for schritt in range(1, 11)
+    )
+
+
+def berechne_phasenfortschritt(abschluesse: tuple[int, ...]) -> tuple[float, float, float]:
+    """Normalisiert jede der drei Phasen unabhängig auf 0 bis 100 Prozent."""
+    normalisiert = _normalisiere_abschluesse(abschluesse)
+    ergebnis: list[float] = []
+    for phase in range(1, 4):
+        schritte = PHASENSCHRITTE[phase]
+        anteile = [
+            normalisiert[schritt - 1] / len(FACHLICHE_UNTERSCHRITTE[schritt])
+            for schritt in schritte
+        ]
+        ergebnis.append(100.0 * sum(anteile) / len(schritte))
+    return (ergebnis[0], ergebnis[1], ergebnis[2])
+
 
 @dataclass(frozen=True, slots=True)
 class Fortschrittsanzeige:
@@ -73,25 +113,16 @@ class Fortschrittsanzeige:
     zaehler: int
     nenner: int
     prozent: int
+    phasenprozente: tuple[int, int, int]
+    abgeschlossene_unterschritte: tuple[int, ...]
     status: str
     gespeichert_am: datetime
     letzte_aktivitaet: datetime
-
-
-def berechne_fortschritt(schritt: int, unterschritt: str = "") -> tuple[int, int]:
-    """Berechnet fachliche Teilstände; technische UI-Abschnitte zählen nicht."""
-    schritt = min(10, max(1, schritt))
-    vorher = sum(len(FACHLICHE_UNTERSCHRITTE[nr]) for nr in range(1, schritt))
-    aktuelle = FACHLICHE_UNTERSCHRITTE[schritt]
-    try:
-        index = aktuelle.index(unterschritt) + 1
-    except ValueError:
-        index = 0
-    return vorher + index, sum(map(len, FACHLICHE_UNTERSCHRITTE.values()))
+    revision: int
 
 
 class FortschrittService:
-    """Persistiert und rekonstruiert Fortschritt mit derselben zentralen Berechnung."""
+    """Ändert Abschlussstände nur über ausdrücklich benannte Erfolgsereignisse."""
 
     def __init__(
         self,
@@ -105,55 +136,113 @@ class FortschrittService:
         self._autorisierung = autorisierung
         self._aktive_lineage = aktive_lineage
 
-    def aktualisieren(
+    def position_aktualisieren(
         self,
         kontext: Zugriffskontext,
         projekt_id: UUID,
         *,
         schritt: int,
         unterschritt: str,
-        status: str = "in_bearbeitung",
     ) -> Fortschrittsanzeige:
+        """Persistiert ausschließlich die aktuelle Navigation, niemals Abschluss."""
         self._autorisierung.projekt_zugriff_pruefen(kontext, projekt_id, Projektaktion.BEARBEITEN)
-        lineage = self._aktive_lineage.laden(projekt_id) if self._aktive_lineage else None
-        effektiver_schritt = lineage.framework_schritt if lineage is not None else schritt
-        effektiver_unterschritt = unterschritt if effektiver_schritt == schritt else ""
-        zaehler, nenner = berechne_fortschritt(effektiver_schritt, effektiver_unterschritt)
+        schritt = min(max(schritt, 1), 10)
+        if unterschritt not in FACHLICHE_UNTERSCHRITTE[schritt]:
+            unterschritt = FACHLICHE_UNTERSCHRITTE[schritt][0]
         alt = self._zugriff.fortschritt_laden(projekt_id)
-        effektiver_status = status
+        abschluesse = (
+            LEERER_ABSCHLUSS
+            if alt is None
+            else _normalisiere_abschluesse(alt.abgeschlossene_unterschritte)
+        )
         if (
             alt is not None
-            and alt.framework_schritt == effektiver_schritt
-            and alt.fachlicher_unterschritt == effektiver_unterschritt
+            and alt.framework_schritt == schritt
+            and alt.fachlicher_unterschritt == unterschritt
+            and alt.phase == phase_fuer_schritt(schritt)
+        ):
+            return self._anzeige(alt)
+        self._speichern(
+            projekt_id=projekt_id,
+            schritt=schritt,
+            unterschritt=unterschritt,
+            abschluesse=abschluesse,
+            status=alt.status if alt is not None else "in_bearbeitung",
+            alt=alt,
+        )
+        return self.laden(kontext, projekt_id)
+
+    def unterschritt_abschliessen(
+        self,
+        kontext: Zugriffskontext,
+        projekt_id: UUID,
+        *,
+        schritt: int,
+        unterschritt: int,
+    ) -> Fortschrittsanzeige:
+        """Markiert nach einem erfolgreichen Fachereignis einen Unterpunkt als erledigt."""
+        self._autorisierung.projekt_zugriff_pruefen(kontext, projekt_id, Projektaktion.BEARBEITEN)
+        if schritt not in FACHLICHE_UNTERSCHRITTE:
+            raise ValueError("Der Framework-Schritt ist ungültig.")
+        maximum = len(FACHLICHE_UNTERSCHRITTE[schritt])
+        if not 1 <= unterschritt <= maximum:
+            raise ValueError("Der fachliche Unterschritt ist ungültig.")
+        alt = self._zugriff.fortschritt_laden(projekt_id)
+        abschluesse = list(
+            LEERER_ABSCHLUSS
+            if alt is None
+            else _normalisiere_abschluesse(alt.abgeschlossene_unterschritte)
+        )
+        if abschluesse[schritt - 1] >= unterschritt:
+            return self._anzeige(alt) if alt is not None else self.laden(kontext, projekt_id)
+        abschluesse[schritt - 1] = unterschritt
+        normalisiert = tuple(abschluesse)
+        status = "abgeschlossen" if normalisiert == VOLLSTAENDIGER_ABSCHLUSS else "in_bearbeitung"
+        self._speichern(
+            projekt_id=projekt_id,
+            schritt=alt.framework_schritt if alt is not None else schritt,
+            unterschritt=(
+                alt.fachlicher_unterschritt
+                if alt is not None
+                else FACHLICHE_UNTERSCHRITTE[schritt][unterschritt - 1]
+            ),
+            abschluesse=normalisiert,
+            status=status,
+            alt=alt,
+        )
+        return self.laden(kontext, projekt_id)
+
+    def schritt_abschliessen(
+        self, kontext: Zugriffskontext, projekt_id: UUID, *, schritt: int
+    ) -> Fortschrittsanzeige:
+        return self.unterschritt_abschliessen(
+            kontext,
+            projekt_id,
+            schritt=schritt,
+            unterschritt=len(FACHLICHE_UNTERSCHRITTE[schritt]),
+        )
+
+    def projekt_abschliessen(
+        self, kontext: Zugriffskontext, projekt_id: UUID
+    ) -> Fortschrittsanzeige:
+        """Persistiert einen nachweislich vollständig erzeugten Projektstand atomar."""
+        self._autorisierung.projekt_zugriff_pruefen(kontext, projekt_id, Projektaktion.BEARBEITEN)
+        alt = self._zugriff.fortschritt_laden(projekt_id)
+        if (
+            alt is not None
+            and alt.framework_schritt == 10
+            and alt.fachlicher_unterschritt == FACHLICHE_UNTERSCHRITTE[10][-1]
+            and alt.abgeschlossene_unterschritte == VOLLSTAENDIGER_ABSCHLUSS
             and alt.status == "abgeschlossen"
-            and status == "in_bearbeitung"
         ):
-            # Ein reiner UI-Rerun darf einen bereits abgeschlossenen Stand weder
-            # fachlich herabstufen noch durch Zeitstempel/Revision verändern.
-            effektiver_status = alt.status
-        if (
-            alt is not None
-            and alt.framework_schritt == effektiver_schritt
-            and alt.fachlicher_unterschritt == effektiver_unterschritt
-            and alt.fortschritt_zaehler == zaehler
-            and alt.fortschritt_nenner == nenner
-            and alt.phase == phase_fuer_schritt(effektiver_schritt)
-            and alt.status == effektiver_status
-        ):
-            return self.laden(kontext, projekt_id)
-        jetzt = datetime.now(UTC)
-        self._zugriff.fortschritt_speichern(
-            Projektfortschritt(
-                projekt_id=projekt_id,
-                framework_schritt=effektiver_schritt,
-                fachlicher_unterschritt=effektiver_unterschritt,
-                fortschritt_zaehler=zaehler,
-                fortschritt_nenner=nenner,
-                phase=phase_fuer_schritt(effektiver_schritt),
-                status=effektiver_status,
-                gespeichert_am=jetzt,
-                revision=1 if alt is None else alt.revision + 1,
-            )
+            return self._anzeige(alt)
+        self._speichern(
+            projekt_id=projekt_id,
+            schritt=10,
+            unterschritt=FACHLICHE_UNTERSCHRITTE[10][-1],
+            abschluesse=VOLLSTAENDIGER_ABSCHLUSS,
+            status="abgeschlossen",
+            alt=alt,
         )
         return self.laden(kontext, projekt_id)
 
@@ -164,73 +253,100 @@ class FortschrittService:
         *,
         unterschritt: str,
     ) -> None:
-        """Setzt den fachlichen Stand nach einer neuen ETL-Datenbasis bewusst auf Schritt 2."""
+        """Verwirft nach neuer ETL-Basis die Abschlüsse ab Schritt 2."""
         self._autorisierung.projekt_zugriff_pruefen(kontext, projekt_id, Projektaktion.BEARBEITEN)
-        zaehler, nenner = berechne_fortschritt(2, unterschritt)
-        jetzt = datetime.now(UTC)
         alt = self._zugriff.fortschritt_laden(projekt_id)
-        self._zugriff.fortschritt_speichern(
-            Projektfortschritt(
-                projekt_id=projekt_id,
-                framework_schritt=2,
-                fachlicher_unterschritt=unterschritt,
-                fortschritt_zaehler=zaehler,
-                fortschritt_nenner=nenner,
-                phase=phase_fuer_schritt(2),
-                status="in_bearbeitung",
-                gespeichert_am=jetzt,
-                revision=1 if alt is None else alt.revision + 1,
-            )
+        abschluesse = list(
+            LEERER_ABSCHLUSS
+            if alt is None
+            else _normalisiere_abschluesse(alt.abgeschlossene_unterschritte)
+        )
+        abschluesse[1:] = [0] * 9
+        neuer_stand = tuple(abschluesse)
+        if (
+            alt is not None
+            and alt.framework_schritt == 2
+            and alt.fachlicher_unterschritt == unterschritt
+            and alt.abgeschlossene_unterschritte == neuer_stand
+            and alt.status == "in_bearbeitung"
+        ):
+            return
+        self._speichern(
+            projekt_id=projekt_id,
+            schritt=2,
+            unterschritt=unterschritt,
+            abschluesse=neuer_stand,
+            status="in_bearbeitung",
+            alt=alt,
         )
 
     def laden(
         self, kontext: Zugriffskontext, projekt_id: UUID, *, dashboard: bool = False
     ) -> Fortschrittsanzeige:
+        """Lädt rein lesend; weder Artefakte noch Position werden als Abschluss gewertet."""
         aktion = Projektaktion.FORTSCHRITT_ANSEHEN if dashboard else Projektaktion.ANSEHEN
         self._autorisierung.projekt_zugriff_pruefen(kontext, projekt_id, aktion)
         gespeichert = self._zugriff.fortschritt_laden(projekt_id)
-        lineage = self._aktive_lineage.laden(projekt_id) if self._aktive_lineage else None
-        artefaktschritt = (
-            lineage.framework_schritt
-            if lineage is not None
-            else self._artefakte.hoechster_gespeicherter_schritt(projekt_id)
-        )
-        abweichend = (
-            lineage is not None
-            and gespeichert is not None
-            and gespeichert.framework_schritt != artefaktschritt
-        ) or (
-            lineage is None
-            and gespeichert is not None
-            and artefaktschritt > gespeichert.framework_schritt
-        )
-        if gespeichert is None or abweichend:
-            schritt = max(1, artefaktschritt)
-            zaehler, nenner = berechne_fortschritt(schritt)
+        if gespeichert is None:
+            zuordnung = self._zugriff.projektzugehoerigkeit_laden(projekt_id)
+            assert zuordnung is not None
             gespeichert = Projektfortschritt(
-                projekt_id,
-                schritt,
-                "",
-                zaehler,
-                nenner,
-                phase_fuer_schritt(schritt),
-                "in_bearbeitung",
-                datetime.now(UTC),
-                1,
+                projekt_id=projekt_id,
+                framework_schritt=1,
+                fachlicher_unterschritt=FACHLICHE_UNTERSCHRITTE[1][0],
+                fortschritt_zaehler=0,
+                fortschritt_nenner=sum(map(len, FACHLICHE_UNTERSCHRITTE.values())),
+                phase=1,
+                status="in_bearbeitung",
+                gespeichert_am=zuordnung.zuletzt_aktiv_am,
+                revision=0,
+                abgeschlossene_unterschritte=LEERER_ABSCHLUSS,
             )
-            self._zugriff.fortschritt_speichern(gespeichert)
-        zuordnung = self._zugriff.projektzugehoerigkeit_laden(projekt_id)
+        return self._anzeige(gespeichert)
+
+    def _speichern(
+        self,
+        *,
+        projekt_id: UUID,
+        schritt: int,
+        unterschritt: str,
+        abschluesse: tuple[int, ...],
+        status: str,
+        alt: Projektfortschritt | None,
+    ) -> None:
+        self._zugriff.fortschritt_speichern(
+            Projektfortschritt(
+                projekt_id=projekt_id,
+                framework_schritt=schritt,
+                fachlicher_unterschritt=unterschritt,
+                fortschritt_zaehler=sum(abschluesse),
+                fortschritt_nenner=sum(map(len, FACHLICHE_UNTERSCHRITTE.values())),
+                phase=phase_fuer_schritt(schritt),
+                status=status,
+                gespeichert_am=datetime.now(UTC),
+                revision=1 if alt is None else alt.revision + 1,
+                abgeschlossene_unterschritte=abschluesse,
+            )
+        )
+
+    def _anzeige(self, gespeichert: Projektfortschritt) -> Fortschrittsanzeige:
+        zuordnung = self._zugriff.projektzugehoerigkeit_laden(gespeichert.projekt_id)
         assert zuordnung is not None
+        abschluesse = _normalisiere_abschluesse(gespeichert.abgeschlossene_unterschritte)
+        phasenwerte = berechne_phasenfortschritt(abschluesse)
         return Fortschrittsanzeige(
-            projekt_id=projekt_id,
+            projekt_id=gespeichert.projekt_id,
             schritt=gespeichert.framework_schritt,
             unterschritt=gespeichert.fachlicher_unterschritt,
             phase=gespeichert.phase,
             phasenname=PHASENNAMEN[gespeichert.phase],
             zaehler=gespeichert.fortschritt_zaehler,
             nenner=gespeichert.fortschritt_nenner,
-            prozent=round(100 * gespeichert.fortschritt_zaehler / gespeichert.fortschritt_nenner),
+            prozent=round(berechne_fortschritt(abschluesse)),
+            phasenprozente=(round(phasenwerte[0]), round(phasenwerte[1]), round(phasenwerte[2])),
+            abgeschlossene_unterschritte=abschluesse,
             status=gespeichert.status,
             gespeichert_am=gespeichert.gespeichert_am,
             letzte_aktivitaet=zuordnung.zuletzt_aktiv_am,
+            revision=gespeichert.revision,
         )

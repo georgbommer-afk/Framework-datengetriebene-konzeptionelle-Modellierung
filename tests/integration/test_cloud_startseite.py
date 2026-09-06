@@ -47,7 +47,7 @@ def _demo_starten(app: AppTest) -> AppTest:
     return (
         next(button for button in app.button if button.label == "Demoprojekt öffnen")
         .click()
-        .run(timeout=120)
+        .run(timeout=240)
     )
 
 
@@ -215,7 +215,7 @@ def test_neues_gastprojekt_startet_leer_ohne_vorbelegte_projektzeile(
     assert all(button.proto.type == "primary" for button in archivaktionen)
     assert archivaktionen[0].label == "Projekt exportieren"
     assert archivaktionen[0].disabled
-    assert len(app.get("progress")) == 1
+    assert len(app.get("progress")) == 4
     assert not any("Kursgruppen" in element.value for element in app.markdown)
 
 

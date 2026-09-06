@@ -6,6 +6,7 @@ import tempfile
 import warnings
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from importlib.metadata import version
 from pathlib import Path, PurePosixPath
@@ -13,6 +14,9 @@ from uuid import UUID, uuid4
 
 import pandas as pd
 import pm4py
+from pm4py.algo.evaluation.replay_fitness.variants import (
+    token_replay as token_replay_fitness,
+)
 from pm4py.objects.petri_net.obj import Marking, PetriNet
 from pm4py.objects.petri_net.utils import petri_utils
 
@@ -28,6 +32,37 @@ from framework_mvp.domain.models import (
 )
 
 MAX_PNML_BYTES = 10 * 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class PnmlMarkierungspruefung:
+    """Vorprüfung, die nur den erforderlichen Umgang mit PNML-Markierungen beschreibt."""
+
+    anfang_vorhanden: bool
+    ende_vorhanden: bool
+    eindeutig_ableitbar: bool
+    quellplaetze: tuple[str, ...]
+    senkenplaetze: tuple[str, ...]
+
+    @property
+    def markierungen_vollstaendig(self) -> bool:
+        return self.anfang_vorhanden and self.ende_vorhanden
+
+
+def pruefe_pnml_markierungen(dateiname: str, originalbytes: bytes) -> PnmlMarkierungspruefung:
+    """Unterscheidet vorhandene, eindeutig ableitbare und mehrdeutige Markierungen."""
+    _pnml_sicherheitspruefung(dateiname, originalbytes)
+    netz, anfang, ende = _pnml_einlesen(originalbytes)
+    quellen = tuple(sorted(str(platz.name) for platz in netz.places if not platz.in_arcs))
+    senken = tuple(sorted(str(platz.name) for platz in netz.places if not platz.out_arcs))
+    vollstaendig = bool(anfang) and bool(ende)
+    return PnmlMarkierungspruefung(
+        bool(anfang),
+        bool(ende),
+        vollstaendig or (len(quellen) == 1 and len(senken) == 1),
+        quellen,
+        senken,
+    )
 
 
 def _pnml_sicherheitspruefung(dateiname: str, inhalt: bytes) -> None:
@@ -387,7 +422,7 @@ def fitness_gleichung_3_13(
     fehlende_tokens: int,
     verbleibende_tokens: int,
 ) -> float | None:
-    """Berechnet Gleichung 3.13 exakt mit aggregierten Tokenmengen."""
+    """Berechnet Gleichung 3.14 exakt mit aggregierten Tokenmengen."""
     if konsumierte_tokens == 0 or produzierte_tokens == 0:
         return None
     return 0.5 * (1 - fehlende_tokens / konsumierte_tokens) + 0.5 * (
@@ -447,7 +482,9 @@ def token_replay(
         fehlende_tokens=m_t,
         verbleibende_tokens=r_t,
     )
-    pm4py_fitness = pm4py.fitness_token_based_replay(log, netz, anfang, ende).get("log_fitness")
+    # PM4Py wertet dieselben bereits erzeugten Replay-Diagnosen aus. Ein zweiter
+    # Replay-Durchlauf nur für die Plausibilisierungsfitness ist nicht erforderlich.
+    pm4py_fitness = token_replay_fitness.evaluate(diagnose_roh).get("log_fitness")
     pd.testing.assert_frame_equal(event_log, original, check_dtype=True)
     return ConformanceErgebnis(
         conformance_id or uuid4(),

@@ -121,7 +121,7 @@ def _aktives_event_log(projekt_id: UUID, service: EventLogService) -> UUID | Non
     return event_log_id
 
 
-def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
+def _navigation(zustand: dict[str, Any], weiter: bool, projekt_id: UUID) -> None:
     if zustand["schritt"] == len(SCHRITTE):
         return
     zeige_unterschritt_navigation(
@@ -131,30 +131,103 @@ def _navigation(zustand: dict[str, Any], weiter: bool) -> None:
         zurueck_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] - 1),
         weiter_callback=lambda: zustand.__setitem__("schritt", zustand["schritt"] + 1),
         schluessel="datenqualitaet_unterschritt_navigation",
+        fortschrittsabschluss=(projekt_id, 5),
     )
 
 
+_SCHRITTNAMEN = {
+    1: "Datenquellen und Untersuchungsauftrag",
+    2: "ETL und Zwischendatensatz T",
+    3: "Semantisches Mapping M",
+    4: "Event Log E",
+}
+
+
+def _qualitaetsdimension(bereich: str, kriterium: str) -> str:
+    """Ordnet vorhandene Kriterien erklärend ein, ohne einen neuen Score zu bilden."""
+    text = kriterium.casefold()
+    if bereich == "Q":
+        return "Nachvollziehbarkeit"
+    if bereich == "T":
+        return "Vollständigkeit" if "vollständig" in text else "Fehlerfreiheit"
+    if bereich == "M":
+        return "Verständlichkeit und Eindeutigkeit"
+    return "Interpretierbarkeit und Fehlerfreiheit"
+
+
 def _befundtabelle(befunde: tuple[QualityGateBefund, ...]) -> pd.DataFrame:
-    return pd.DataFrame(
-        [
+    gruppen: dict[tuple[str, str], list[QualityGateBefund]] = {}
+    for befund in befunde:
+        gruppen.setdefault((befund.bereich.value, befund.kriterium), []).append(befund)
+    zeilen = []
+    fachstatus = {
+        QualityGateStatus.FACHLICHE_BESTAETIGUNG_ERFORDERLICH,
+        QualityGateStatus.FACHLICH_ALS_MANGEL_BEWERTET,
+        QualityGateStatus.FACHLICH_BEGRUENDET_KEIN_MANGEL,
+    }
+    for (bereich, kriterium), werte in gruppen.items():
+        automatisch = [wert for wert in werte if wert.status not in fachstatus]
+        fachlich = [wert for wert in werte if wert.status in fachstatus]
+        blockierend = [wert for wert in werte if wert.blockiert]
+        rueckspruenge = sorted(
             {
-                "Artefakt": wert.bereich.value,
-                "Prüfkriterium": wert.kriterium,
-                "Ergebnis": wert.status.value,
-                "Feststellung": wert.meldung,
-                "Ereignisse": wert.betroffene_ereignisse,
-                "Fälle": wert.betroffene_faelle,
-                "Anteil": wert.anteil,
-                "Technische Quelle": ", ".join(wert.technische_quellen),
-                "Rücksprung": (
-                    f"Schritt {wert.ruecksprung_schritt}"
-                    if wert.ruecksprung_schritt is not None
-                    else "–"
-                ),
-                "Begründung": wert.begruendung,
+                wert.ruecksprung_schritt
+                for wert in blockierend
+                if wert.ruecksprung_schritt is not None
             }
-            for wert in befunde
-        ]
+        )
+        if blockierend:
+            gesamtergebnis = (
+                "Bewertung ausstehend"
+                if all(
+                    wert.status is QualityGateStatus.FACHLICHE_BESTAETIGUNG_ERFORDERLICH
+                    for wert in blockierend
+                )
+                else "Rücksprung erforderlich"
+            )
+        elif all(wert.status is QualityGateStatus.NICHT_ANWENDBAR for wert in werte):
+            gesamtergebnis = "Nicht anwendbar"
+        else:
+            gesamtergebnis = "Bestanden"
+        zeilen.append(
+            {
+                "Artefakt": bereich,
+                "Qualitätsdimension": _qualitaetsdimension(bereich, kriterium),
+                "Prüfkriterium": kriterium,
+                "Automatische Prüfung": "; ".join(wert.status.value for wert in automatisch)
+                or "keine getrennte automatische Prüfung",
+                "Fachliche Bewertung": "; ".join(wert.status.value for wert in fachlich)
+                or "nicht erforderlich",
+                "Gesamtergebnis": gesamtergebnis,
+                "Begründung/Feststellung": " | ".join(
+                    wert.begruendung or wert.meldung for wert in werte
+                ),
+                "Konsequenz": (
+                    "; ".join(
+                        f"Zurück zu Schritt {schritt}: {_SCHRITTNAMEN[schritt]}"
+                        for schritt in rueckspruenge
+                    )
+                    if rueckspruenge
+                    else (
+                        "Fachliche Bewertung abschließen"
+                        if gesamtergebnis == "Bewertung ausstehend"
+                        else "Keine Korrektur erforderlich"
+                    )
+                ),
+            }
+        )
+    return pd.DataFrame(
+        zeilen,
+        columns=(
+            "Artefakt",
+            "Qualitätsdimension",
+            "Prüfkriterium",
+            "Automatische Prüfung",
+            "Fachliche Bewertung",
+            "Gesamtergebnis",
+            "Begründung/Feststellung",
+            "Konsequenz",
+        ),
     )
 
 
@@ -219,7 +292,7 @@ def _artefaktkette(ergebnis: QualityGateErgebnis, kontext: EventLogKontext) -> N
 
 
 def _automatische_pruefung(ergebnis: QualityGateErgebnis) -> None:
-    st.write("### Datenqualitätsprüfung der erzeugten Artefakte")
+    st.write("### Zusammengeführte Qualitätsprüfung der erzeugten Artefakte")
     st.dataframe(_befundtabelle(ergebnis.befunde), hide_index=True, width="stretch")
     st.write("### Erforderliche und ausgewählte Quellspalten in T")
     st.dataframe(
@@ -371,7 +444,7 @@ def _abschluss(
         st.session_state.aktuelle_freigabe_id = str(freigabe.freigabe_id)
         st.session_state.freigegebenes_event_log_id = str(event_log_id)
     if freigabe is None and st.button(
-        "Event Log E als E* freigeben und zu Schritt 6",
+        "Event Log E unverändert als E* freigeben",
         type="primary",
     ):
         freigabe = service.freigeben(
@@ -487,13 +560,13 @@ def zeige_datenqualitaet_seite(
                         st.session_state.freigegebenes_event_log_id = str(event_log_id)
                         zustand["schritt"] = 4
                         st.rerun()
-            _navigation(zustand, True)
+            _navigation(zustand, True, projekt_id)
         elif zustand["schritt"] == 2:
             _automatische_pruefung(ergebnis)
-            _navigation(zustand, True)
+            _navigation(zustand, True, projekt_id)
         elif zustand["schritt"] == 3:
             vollstaendig = _menschliche_bewertung(ergebnis, kontext, zustand)
-            _navigation(zustand, vollstaendig)
+            _navigation(zustand, vollstaendig, projekt_id)
         else:
             _abschluss(
                 projekt_id,
@@ -502,6 +575,6 @@ def zeige_datenqualitaet_seite(
                 qualitaet_service,
                 zustand,
             )
-            _navigation(zustand, False)
+            _navigation(zustand, False, projekt_id)
     except (Domaenenfehler, Importintegritaetsfehler) as fehler:
         st.error(str(fehler))

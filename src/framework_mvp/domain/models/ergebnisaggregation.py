@@ -576,7 +576,7 @@ class TokenDiagnose:
 
 @dataclass(frozen=True, slots=True)
 class ConformanceErgebnis:
-    """A_C gemäß Token-Based Replay und Gleichung 3.13."""
+    """A_C gemäß Token-Based Replay und Gleichung 3.14."""
 
     conformance_id: UUID
     mapping_id: UUID

@@ -9,8 +9,13 @@ DB_LATEX = (
 )
 BUSY_RATIO_LATEX = r"BR(r,i)=\frac{t_{\mathrm{Bearb}}(r,i)}{t_{\mathrm{ZA}}(r,i+1)}"
 TOKEN_FITNESS_LATEX = (
-    r"Fitness=\frac{1}{2}\left(1-\frac{m_T}{c_T}\right)"
-    r"+\frac{1}{2}\left(1-\frac{r_T}{p_T}\right)"
+    r"fit(E^*,P_{\mathrm{Soll}})="
+    r"\frac{1}{2}\left(1-"
+    r"\frac{\sum_{\sigma\in E^*}n_{mT}(\sigma,P_{\mathrm{Soll}})}"
+    r"{\sum_{\sigma\in E^*}n_{cT}(\sigma,P_{\mathrm{Soll}})}\right)"
+    r"+\frac{1}{2}\left(1-"
+    r"\frac{\sum_{\sigma\in E^*}n_{rT}(\sigma,P_{\mathrm{Soll}})}"
+    r"{\sum_{\sigma\in E^*}n_{pT}(\sigma,P_{\mathrm{Soll}})}\right)"
 )
 
 
@@ -23,5 +28,5 @@ def zeige_performance_formeln() -> None:
 
 
 def zeige_token_fitness_formel() -> None:
-    """Zeigt die fest definierte Token-Fitness nach Gleichung 3.13."""
+    """Zeigt die fest definierte Token-Fitness nach Gleichung 3.14."""
     st.latex(TOKEN_FITNESS_LATEX)

@@ -198,7 +198,7 @@ class Gruppeneinladung:
 
 @dataclass(frozen=True, slots=True)
 class Projektfortschritt:
-    """Persistierter, zwischen Projekt- und Dashboardansicht geteilter Fortschritt."""
+    """Persistierte Navigation und davon getrennter fachlicher Abschlussstand."""
 
     projekt_id: UUID
     framework_schritt: int
@@ -209,6 +209,7 @@ class Projektfortschritt:
     status: str
     gespeichert_am: datetime
     revision: int
+    abgeschlossene_unterschritte: tuple[int, ...] = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
     def __post_init__(self) -> None:
         if not 1 <= self.framework_schritt <= 10:
@@ -219,6 +220,10 @@ class Projektfortschritt:
             raise Domaenenfehler("Der Fortschrittsbruch ist ungültig.")
         if self.status not in {"in_bearbeitung", "abgeschlossen", "blockiert"}:
             raise Domaenenfehler("Der Fortschrittsstatus ist ungültig.")
+        if len(self.abgeschlossene_unterschritte) != 10 or any(
+            not isinstance(wert, int) or wert < 0 for wert in self.abgeschlossene_unterschritte
+        ):
+            raise Domaenenfehler("Der fachliche Abschlussstand ist ungültig.")
 
 
 def phase_fuer_schritt(schritt: int) -> int:

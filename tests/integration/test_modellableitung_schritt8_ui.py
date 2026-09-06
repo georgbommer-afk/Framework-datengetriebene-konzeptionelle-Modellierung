@@ -137,10 +137,12 @@ def test_haupttabelle_hat_sechzehn_bestandteile_und_fuenf_spalten() -> None:
     assert len(app.dataframe[0].value) == 16
     assert len(app.expander) == 17
     assert app.expander[0].label.startswith("1. Problemstellung")
+    assert app.expander[0].proto.expanded
     assert app.expander[-2].label.startswith("16. Darstellung der Vorgänge des Systems")
     assert app.expander[-1].label == "Technische Details"
     assert not app.checkbox
     assert len(app.radio) == 16
+    assert all("Vorschlag übernehmen" not in radio.options for radio in app.radio)
     assert not app.text_area
     assert not {
         "Projekt",
@@ -158,13 +160,16 @@ def test_vorschau_entsteht_ohne_vorschauknopf_und_speichern_ist_zunaechst_gesper
         wert for wert in app.button if wert.label == "K und O speichern und zu Schritt 9"
     )
     assert speichern.disabled
-    assert any("Bitte prüfen Sie noch 16" in wert.value for wert in app.warning)
+    assert any("Offene Entscheidungen" in wert.value for wert in app.warning)
 
 
 def test_speichern_setzt_k_o_ids_und_oeffnet_schritt_neun() -> None:
     app = _app()
     for radio in app.radio:
-        radio.set_value("Vorschlag übernehmen")
+        radio.set_value("Offen / fachlich unsicher")
+    app.run()
+    for feld in app.text_area:
+        feld.set_value("Bewusst fachlich offengehalten.")
     app.run()
     next(
         wert for wert in app.button if wert.label == "K und O speichern und zu Schritt 9"
@@ -186,4 +191,4 @@ def test_seite_trennt_fachliche_und_technische_details_und_uebergibt_an_schritt_
         assert titel in quelle
     assert "Vorschlag nicht übernehmen" in quelle
     assert "Vorschau von K und O erzeugen" not in quelle
-    assert "framework_bereich_oeffnen(schritt=9" in quelle
+    assert "schritt_abschliessen_und_weiter(aktueller_schritt=8" in quelle

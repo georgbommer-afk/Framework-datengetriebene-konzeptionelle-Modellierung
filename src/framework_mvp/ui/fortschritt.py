@@ -1,4 +1,4 @@
-"""Zentrale fachliche Fortschrittsdefinition für das gesamte Framework."""
+"""Gemeinsame Anzeige für Navigation und fachlichen Abschlussfortschritt."""
 
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
@@ -8,10 +8,13 @@ import streamlit as st
 
 from framework_mvp.application.fortschritt_service import (
     FACHLICHE_UNTERSCHRITTE,
+    LEERER_ABSCHLUSS,
     PHASENNAMEN,
     Fortschrittsanzeige,
+    berechne_fortschritt,
+    berechne_phasenfortschritt,
 )
-from framework_mvp.ui.navigation import FRAMEWORK_BEREICHE
+from framework_mvp.ui.navigation import ENTWURFSABSCHLUESSE, FRAMEWORK_BEREICHE
 
 PHASEN = {phase: f"Phase {phase} – {name}" for phase, name in PHASENNAMEN.items()}
 
@@ -33,20 +36,20 @@ class Fortschrittsstand:
     unterschritt_name: str
     phase: int
     phase_name: str
-    gesamt_position: int
-    gesamt_anzahl: int
+    gesamt_prozent: int
+    phasenprozente: tuple[int, int, int]
+    abgeschlossene_unterschritte: tuple[int, ...]
 
     @property
     def anteil(self) -> float:
-        return self.gesamt_position / self.gesamt_anzahl
+        return self.gesamt_prozent / 100
 
     @property
     def prozent(self) -> int:
-        return round(self.anteil * 100)
+        return self.gesamt_prozent
 
 
 def unterschritte_fuer(framework_schritt: int) -> tuple[str, ...]:
-    """Liefert ausschließlich fachliche Unterabschnitte eines Framework-Schritts."""
     return FACHLICHE_UNTERSCHRITTE[framework_schritt]
 
 
@@ -75,16 +78,24 @@ def _aktueller_unterschritt(framework_schritt: int, zustand: Mapping[Any, Any]) 
     return min(max(nummer, 1), len(FACHLICHE_UNTERSCHRITTE[framework_schritt]))
 
 
-def fortschrittsstand(framework_bereich: str, zustand: Mapping[Any, Any]) -> Fortschrittsstand:
-    """Berechnet den Gesamtfortschritt deterministisch aus Navigation und Session-State."""
+def fortschrittsstand(
+    framework_bereich: str,
+    zustand: Mapping[Any, Any],
+    anzeige: Fortschrittsanzeige | None = None,
+) -> Fortschrittsstand:
+    """Kombiniert aktuelle UI-Position mit einem separaten Abschlussstand."""
     try:
         framework_schritt = FRAMEWORK_BEREICHE.index(framework_bereich) + 1
     except ValueError as fehler:
         raise ValueError("Unbekannter Framework-Bereich.") from fehler
     unterschritt = _aktueller_unterschritt(framework_schritt, zustand)
     phase = _phase_fuer(framework_schritt)
-    vorher = sum(len(FACHLICHE_UNTERSCHRITTE[n]) for n in range(1, framework_schritt))
-    gesamt = sum(len(werte) for werte in FACHLICHE_UNTERSCHRITTE.values())
+    abschluesse = (
+        anzeige.abgeschlossene_unterschritte
+        if anzeige is not None
+        else tuple(zustand.get(ENTWURFSABSCHLUESSE, LEERER_ABSCHLUSS))
+    )
+    phasenwerte = berechne_phasenfortschritt(abschluesse)
     return Fortschrittsstand(
         framework_schritt=framework_schritt,
         framework_name=framework_bereich.split(":", 1)[-1].strip()
@@ -95,13 +106,14 @@ def fortschrittsstand(framework_bereich: str, zustand: Mapping[Any, Any]) -> For
         unterschritt_name=FACHLICHE_UNTERSCHRITTE[framework_schritt][unterschritt - 1],
         phase=phase,
         phase_name=PHASEN[phase],
-        gesamt_position=vorher + unterschritt,
-        gesamt_anzahl=gesamt,
+        gesamt_prozent=round(berechne_fortschritt(abschluesse)),
+        phasenprozente=(round(phasenwerte[0]), round(phasenwerte[1]), round(phasenwerte[2])),
+        abgeschlossene_unterschritte=abschluesse,
     )
 
 
 def fortschrittsstand_aus_persistenz(anzeige: Fortschrittsanzeige) -> Fortschrittsstand:
-    """Bereitet einen autorisiert geladenen Stand für denselben zentralen Renderer auf."""
+    """Nutzt für eine Nur-Lese-Ansicht auch die persistierte Navigationsposition."""
     framework_schritt = min(max(anzeige.schritt, 1), len(FRAMEWORK_BEREICHE))
     unterschritte = FACHLICHE_UNTERSCHRITTE[framework_schritt]
     try:
@@ -111,25 +123,22 @@ def fortschrittsstand_aus_persistenz(anzeige: Fortschrittsanzeige) -> Fortschrit
     framework_bereich = FRAMEWORK_BEREICHE[framework_schritt - 1]
     return Fortschrittsstand(
         framework_schritt=framework_schritt,
-        framework_name=(
-            framework_bereich.split(":", 1)[-1].strip()
-            if ":" in framework_bereich
-            else framework_bereich.split(" ", 1)[-1]
-        ),
+        framework_name=framework_bereich.split(" ", 1)[-1],
         unterschritt=unterschritt,
         unterschritt_gesamt=len(unterschritte),
         unterschritt_name=anzeige.unterschritt or unterschritte[unterschritt - 1],
         phase=anzeige.phase,
         phase_name=PHASEN[anzeige.phase],
-        gesamt_position=anzeige.zaehler,
-        gesamt_anzahl=anzeige.nenner,
+        gesamt_prozent=anzeige.prozent,
+        phasenprozente=anzeige.phasenprozente,
+        abgeschlossene_unterschritte=anzeige.abgeschlossene_unterschritte,
     )
 
 
 def fortschrittszustand_aus_persistenz_setzen(
     zustand: MutableMapping[str, Any], anzeige: Fortschrittsanzeige
 ) -> None:
-    """Initialisiert nach einem Import exakt den persistierten fachlichen Unterschritt."""
+    """Stellt ausschließlich die separat persistierte Navigationsposition wieder her."""
     unterschritte = FACHLICHE_UNTERSCHRITTE[anzeige.schritt]
     try:
         unterschritt = unterschritte.index(anzeige.unterschritt) + 1
@@ -149,14 +158,16 @@ def fortschrittszustand_aus_persistenz_setzen(
 
 
 def zeige_gesamtfortschritt(stand: Fortschrittsstand) -> None:
-    """Rendert die einzige Fortschrittsanzeige der Anwendung."""
-    st.caption(
-        f"Gesamtfortschritt: {stand.prozent} % "
-        f"({stand.gesamt_position}/{stand.gesamt_anzahl}) · {stand.phase_name}"
-    )
-    st.progress(stand.anteil)
-    st.write(
-        f"**Schritt {stand.framework_schritt}: {stand.framework_name} · "
-        f"Unterschritt {stand.unterschritt}/{stand.unterschritt_gesamt}:** "
-        f"{stand.unterschritt_name}"
-    )
+    """Zeigt Gesamt-, Phasenfortschritt und Navigation getrennt in der Sidebar."""
+    with st.sidebar:
+        st.subheader("Fortschritt")
+        st.caption(f"Gesamtfortschritt: {stand.gesamt_prozent} %")
+        st.progress(stand.gesamt_prozent / 100)
+        for phase, prozent in enumerate(stand.phasenprozente, start=1):
+            st.caption(f"{PHASEN[phase]}: {prozent} %")
+            st.progress(prozent / 100)
+        st.write(f"**Aktuell: Schritt {stand.framework_schritt} – {stand.framework_name}**")
+        st.caption(
+            f"Unterschritt {stand.unterschritt}/{stand.unterschritt_gesamt}: "
+            f"{stand.unterschritt_name}"
+        )

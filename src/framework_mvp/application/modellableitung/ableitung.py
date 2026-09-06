@@ -833,6 +833,10 @@ def wende_fachliche_entscheidungen_an(
             entscheidung is not None
             and entscheidung.entscheidung is FachlicheEntscheidungsart.UEBERNEHMEN
         ):
+            if not vorschlag.informationen:
+                raise Domaenenfehler(
+                    f"Für {vorschlag.bezeichnung} liegt kein übernehmbarer Vorschlag vor."
+                )
             infos = tuple(
                 replace(
                     info,
@@ -841,6 +845,7 @@ def wende_fachliche_entscheidungen_an(
                 )
                 for info in vorschlag.informationen
             )
+            offene_nach_id[vorschlag.bestandteil_id].clear()
         elif entscheidung is not None:
             offene = offene_nach_id[vorschlag.bestandteil_id]
             offene.append(

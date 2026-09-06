@@ -1,4 +1,4 @@
-"""Framework-Schritt 10: Browser- und PDF-Ausgabe eines validierten K*."""
+"""Framework-Schritt 10: HTML-, PDF- und XLSX-Ausgabe eines validierten K*."""
 
 import html
 from uuid import UUID
@@ -6,10 +6,6 @@ from uuid import UUID
 import streamlit as st
 from streamlit import runtime
 
-from framework_mvp.application.dateinamen import (
-    sicherer_dateiname,
-    sicherer_dateinamenbestandteil,
-)
 from framework_mvp.application.modellausgabe_service import (
     ModellausgabeService,
     StrukturierteModellausgabe,
@@ -18,7 +14,10 @@ from framework_mvp.application.modellvalidierung_service import Modellvalidierun
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
-from framework_mvp.ui.navigation import framework_bereich_oeffnen
+from framework_mvp.ui.navigation import (
+    fortschrittsabschluss_vormerken,
+    framework_bereich_oeffnen,
+)
 
 
 def _aktive_ids() -> tuple[UUID, UUID, UUID] | None:
@@ -115,11 +114,6 @@ def zeige_modellausgabe_seite(
             expanded=False,
         )
     st.subheader("2. Ausgabe erzeugen")
-    xlsx_dateiname = sicherer_dateiname(
-        f"Konzeptionelles Modell {sicherer_dateinamenbestandteil(projekt.bezeichnung)}",
-        "xlsx",
-    )
-    st.button(f"{xlsx_dateiname} – noch nicht implementiert", disabled=True)
     signatur = (str(validierungslauf_id), str(k_stern_id))
     if "schritt10_ausgabe" not in st.session_state:
         try:
@@ -134,7 +128,7 @@ def zeige_modellausgabe_seite(
         if persistiert is not None:
             st.session_state.schritt10_ausgabe = persistiert
             st.session_state.schritt10_ausgabe_signatur = signatur
-    if st.button("HTML und PDF erzeugen", type="primary"):
+    if st.button("HTML, PDF und Excel erzeugen", type="primary"):
         try:
             st.session_state.schritt10_ausgabe = ausgabe_service.erzeugen(
                 validierungslauf_id=validierungslauf_id,
@@ -142,8 +136,11 @@ def zeige_modellausgabe_seite(
                 k_stern_id=k_stern_id,
                 html=True,
                 pdf=True,
+                xlsx=True,
             )
             st.session_state.schritt10_ausgabe_signatur = signatur
+            fortschrittsabschluss_vormerken(projekt_id=projekt_id, schritt=10, unterschritt=1)
+            st.rerun()
         except (Domaenenfehler, Importintegritaetsfehler, KeyError) as fehler:
             st.error(f"Die strukturierte Ausgabe konnte nicht erzeugt werden: {fehler}")
     ausgabe = st.session_state.get("schritt10_ausgabe")
@@ -173,4 +170,11 @@ def zeige_modellausgabe_seite(
                 ausgabe.report_pdf,
                 ausgabe.pdf_dateiname,
                 "application/pdf",
+            )
+        if ausgabe.report_xlsx is not None and ausgabe.xlsx_dateiname is not None:
+            st.download_button(
+                "Excel-Ausgabe herunterladen",
+                ausgabe.report_xlsx,
+                ausgabe.xlsx_dateiname,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )

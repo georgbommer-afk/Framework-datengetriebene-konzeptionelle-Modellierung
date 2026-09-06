@@ -18,6 +18,28 @@ FRAMEWORK_BEREICHE = (
     "10 Konzeptionelles Modell ausgeben",
 )
 
+FORTSCHRITTSEREIGNISSE = "_fachliche_fortschrittsereignisse"
+ENTWURFSABSCHLUESSE = "_entwurf_abgeschlossene_unterschritte"
+
+
+def fortschrittsabschluss_vormerken(
+    *, projekt_id: UUID | None, schritt: int, unterschritt: int
+) -> None:
+    """Merkt genau ein erfolgreich ausgelöstes fachliches Abschlussereignis vor."""
+    if projekt_id is None:
+        abschluesse = list(st.session_state.get(ENTWURFSABSCHLUESSE, (0,) * 10))
+        abschluesse[schritt - 1] = max(abschluesse[schritt - 1], unterschritt)
+        st.session_state[ENTWURFSABSCHLUESSE] = tuple(abschluesse)
+        return
+    ereignis = {
+        "projekt_id": str(projekt_id),
+        "schritt": schritt,
+        "unterschritt": unterschritt,
+    }
+    ereignisse = st.session_state.setdefault(FORTSCHRITTSEREIGNISSE, [])
+    if ereignis not in ereignisse:
+        ereignisse.append(ereignis)
+
 
 def zeige_unterschritt_navigation(
     *,
@@ -28,6 +50,7 @@ def zeige_unterschritt_navigation(
     weiter_callback: Callable[[], None],
     weiter_label: str = "Weiter",
     schluessel: str | None = None,
+    fortschrittsabschluss: tuple[UUID | None, int] | None = None,
 ) -> None:
     """Rendert das einheitliche zweispaltige Navigationsmuster der Schritte 1–9."""
     if not 1 <= aktueller_unterschritt <= anzahl_unterschritte:
@@ -49,6 +72,13 @@ def zeige_unterschritt_navigation(
         key=f"{schluessel}_weiter" if schluessel else None,
     ):
         weiter_callback()
+        if fortschrittsabschluss is not None:
+            projekt_id, framework_schritt = fortschrittsabschluss
+            fortschrittsabschluss_vormerken(
+                projekt_id=projekt_id,
+                schritt=framework_schritt,
+                unterschritt=aktueller_unterschritt,
+            )
         st.rerun()
 
 
@@ -76,4 +106,9 @@ def schritt_abschliessen_und_weiter(
     projekt_id: UUID,
 ) -> None:
     """Bewahrt den Projektbezug, öffnet den Folgeschritt und startet einen Rerun."""
+    fortschrittsabschluss_vormerken(
+        projekt_id=projekt_id,
+        schritt=aktueller_schritt,
+        unterschritt=0,
+    )
     framework_bereich_oeffnen(schritt=aktueller_schritt + 1, projekt_id=projekt_id)

@@ -12,7 +12,6 @@ from framework_mvp.application.ergebnisaggregation.sollprozess import (
     erstelle_aktivitaetsmapping,
     validiere_pnml_sollmodell,
 )
-from framework_mvp.application.fortschritt_service import FACHLICHE_UNTERSCHRITTE
 from framework_mvp.application.mandanten_projekt_service import (
     AutorisierterLoeschService,
     MandantenProjektService,
@@ -70,6 +69,7 @@ class DemoprojektErgebnis:
     projekt: Projekt
     report_html: bytes
     report_pdf: bytes
+    report_xlsx: bytes
 
 
 class DemoProjektService:
@@ -137,10 +137,11 @@ class DemoProjektService:
             try:
                 html = self._artefakte.lesen(f"{report_basis}/demoprojekt-modell.html")
                 pdf = self._artefakte.lesen(f"{report_basis}/demoprojekt-modell.pdf")
+                xlsx = self._artefakte.lesen(f"{report_basis}/demoprojekt-modell.xlsx")
             except Exception:
                 self._loeschen.projekt_loeschen(kontext, projekt.projekt_id)
             else:
-                return DemoprojektErgebnis(projekt, html, pdf)
+                return DemoprojektErgebnis(projekt, html, pdf, xlsx)
 
         projekt = self._projekt_anlegen(kontext)
         try:
@@ -506,21 +507,39 @@ class DemoProjektService:
         )
 
         entscheidungszeitpunkt = datetime.now(UTC)
+        modellableitungs_id = uuid4()
+        k_id = uuid4()
+        o_id = uuid4()
+        unentschiedene_vorschau = self._modellableitungen.vorschau(
+            projekt_id=projekt.projekt_id,
+            aggregations_id=aggregation.aggregations_id,
+            modellableitungs_id=modellableitungs_id,
+            k_id=k_id,
+            o_id=o_id,
+        )
         bestandteilentscheidungen = tuple(
             FachlicheBestandteilentscheidung(
-                definition.bestandteil_id,
-                FachlicheEntscheidungsart.UEBERNEHMEN,
-                "Der Vorschlag wird für das fachlich geprüfte Demomodell übernommen.",
+                bestandteil.bestandteil_id,
+                (
+                    FachlicheEntscheidungsart.UEBERNEHMEN
+                    if bestandteil.informationen
+                    else FachlicheEntscheidungsart.OFFEN_UNSICHER
+                ),
+                (
+                    "Der Vorschlag wird für das fachlich geprüfte Demomodell übernommen."
+                    if bestandteil.informationen
+                    else "Für diesen Bestandteil liegt im Demoprojekt kein Vorschlag vor."
+                ),
                 entscheidungszeitpunkt,
             )
-            for definition in MODELLBESTANDTEILE
+            for bestandteil in unentschiedene_vorschau.vorgeschlagene_bestandteile
         )
         ableitungsvorschau = self._modellableitungen.vorschau(
             projekt_id=projekt.projekt_id,
             aggregations_id=aggregation.aggregations_id,
-            modellableitungs_id=uuid4(),
-            k_id=uuid4(),
-            o_id=uuid4(),
+            modellableitungs_id=modellableitungs_id,
+            k_id=k_id,
+            o_id=o_id,
             entscheidungen=bestandteilentscheidungen,
         )
         ableitung = self._modellableitungen.speichern(
@@ -549,8 +568,9 @@ class DemoProjektService:
             k_stern_id=validierung.k_stern_id,
             html=True,
             pdf=True,
+            xlsx=True,
         )
-        if ausgabe.report_html is None or ausgabe.report_pdf is None:
+        if ausgabe.report_html is None or ausgabe.report_pdf is None or ausgabe.report_xlsx is None:
             raise ValueError("Die Demoausgabe wurde nicht vollständig erzeugt.")
         report_basis = f"projects/{projekt.projekt_id}/reports"
         self._artefakte.artefakt_speichern(
@@ -559,14 +579,16 @@ class DemoProjektService:
         self._artefakte.artefakt_speichern(
             f"{report_basis}/demoprojekt-modell.pdf", ausgabe.report_pdf
         )
-        self._fortschritt.aktualisieren(
-            kontext,
-            projekt.projekt_id,
-            schritt=10,
-            unterschritt=FACHLICHE_UNTERSCHRITTE[10][-1],
-            status="abgeschlossen",
+        self._artefakte.artefakt_speichern(
+            f"{report_basis}/demoprojekt-modell.xlsx", ausgabe.report_xlsx
         )
-        return DemoprojektErgebnis(projekt, ausgabe.report_html, ausgabe.report_pdf)
+        self._fortschritt.projekt_abschliessen(kontext, projekt.projekt_id)
+        return DemoprojektErgebnis(
+            projekt,
+            ausgabe.report_html,
+            ausgabe.report_pdf,
+            ausgabe.report_xlsx,
+        )
 
     @staticmethod
     def _behandlung(eintrag: dict[str, Any]) -> BehandlungOffenerEintrag:

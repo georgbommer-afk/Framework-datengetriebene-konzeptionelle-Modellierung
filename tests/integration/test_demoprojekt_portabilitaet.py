@@ -76,6 +76,7 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     } <= set(quell_rehydriert.referenzen)
     assert demo.report_html.startswith(b"<!DOCTYPE html")
     assert demo.report_pdf.startswith(b"%PDF")
+    assert demo.report_xlsx.startswith(b"PK")
 
     projekt = erstelle_projekt_service(quell_db).projekt_laden(projekt_id)
     assert projekt is not None
@@ -153,6 +154,10 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     assert persistierte_ausgabe is not None
     assert persistierte_ausgabe.report_html == demo.report_html
     assert persistierte_ausgabe.report_pdf == demo.report_pdf
+    assert persistierte_ausgabe.report_xlsx == demo.report_xlsx
+    quell_fortschritt = erstelle_fortschritt_service(quell_db).laden(quell_kontext, projekt_id)
+    assert quell_fortschritt.prozent == 100
+    assert quell_fortschritt.phasenprozente == (100, 100, 100)
 
     fremder_gast = Zugriffskontext.gast("fremd-" + "b" * 40)
     assert not erstelle_autorisierungs_service(quell_db).projekt_zugriff_erlaubt(
@@ -179,7 +184,10 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     assert (
         leere_session["aktuelle_k_stern_id"] == quell_rehydriert.referenzen["aktuelle_k_stern_id"]
     )
-    assert erstelle_fortschritt_service(ziel_db).laden(ziel_kontext, projekt_id).schritt == 10
+    ziel_fortschritt = erstelle_fortschritt_service(ziel_db).laden(ziel_kontext, projekt_id)
+    assert ziel_fortschritt.schritt == 10
+    assert ziel_fortschritt.prozent == 100
+    assert ziel_fortschritt.phasenprozente == (100, 100, 100)
     importierte_ausgabe = erstelle_modellausgabe_service(
         ziel_db, ziel_ws
     ).persistierte_ausgabe_laden(
@@ -190,6 +198,7 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     assert importierte_ausgabe is not None
     assert importierte_ausgabe.report_html == demo.report_html
     assert importierte_ausgabe.report_pdf == demo.report_pdf
+    assert importierte_ausgabe.report_xlsx == demo.report_xlsx
 
     with sqlite3.connect(ziel_db) as verbindung:
         for tabelle in (
@@ -297,6 +306,7 @@ def test_vollstaendiges_demo_wird_auf_gleicher_db_gestagt_an_neuen_gast_gebunden
     )
     assert demo.report_html.startswith(b"<!DOCTYPE html")
     assert demo.report_pdf.startswith(b"%PDF")
+    assert demo.report_xlsx.startswith(b"PK")
     staging_pfad = workspace.basisverzeichnis / ".import-staging" / f"upload-{staging.staging_id}"
     assert not staging_pfad.exists()
 

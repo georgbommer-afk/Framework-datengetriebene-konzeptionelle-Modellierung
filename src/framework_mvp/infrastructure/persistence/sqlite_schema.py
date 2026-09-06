@@ -6,7 +6,7 @@ from typing import Any
 
 from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemaversion
 
-SCHEMAVERSION = 12
+SCHEMAVERSION = 13
 
 PROJEKT_SCHEMA_VERSION_2 = """
 CREATE TABLE IF NOT EXISTS projekte (
@@ -454,6 +454,7 @@ CREATE TABLE IF NOT EXISTS projektfortschritt (
         CHECK (status IN ('in_bearbeitung', 'abgeschlossen', 'blockiert')),
     gespeichert_am_utc TEXT NOT NULL,
     revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+    abgeschlossene_unterschritte_json TEXT NOT NULL DEFAULT '[0,0,0,0,0,0,0,0,0,0]',
     FOREIGN KEY (projekt_id) REFERENCES projekte(projekt_id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS archivmetadaten (
@@ -586,7 +587,7 @@ def _migriere_version_1_auf_2(verbindung: sqlite3.Connection) -> None:
 
 
 def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
-    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 12."""
+    """Initialisiert oder migriert die gemeinsame Datenbank atomar auf Version 13."""
     verbindung.execute("PRAGMA foreign_keys = ON")
     verbindung.execute("PRAGMA busy_timeout = 5000")
     verbindung.execute("PRAGMA journal_mode = WAL")
@@ -633,6 +634,24 @@ def initialisiere_schema(verbindung: sqlite3.Connection) -> None:
         for anweisung in AKTIVE_PROJEKTLINEAGE_SCHEMA_VERSION_12.split(";"):
             if anweisung.strip():
                 verbindung.execute(anweisung)
+        fortschrittsspalten = {
+            zeile[1]
+            for zeile in verbindung.execute("PRAGMA table_info(projektfortschritt)").fetchall()
+        }
+        if "abgeschlossene_unterschritte_json" not in fortschrittsspalten:
+            verbindung.execute(
+                "ALTER TABLE projektfortschritt ADD COLUMN "
+                "abgeschlossene_unterschritte_json TEXT NOT NULL "
+                "DEFAULT '[0,0,0,0,0,0,0,0,0,0]'"
+            )
+            # Nur der frühere explizite Abschlussstatus ist eine belastbare
+            # Migrationsaussage. Eine bloße Position wird bewusst nicht als
+            # fachlicher Abschluss interpretiert.
+            verbindung.execute(
+                "UPDATE projektfortschritt "
+                "SET abgeschlossene_unterschritte_json='[5,5,3,4,4,3,1,1,1,1]' "
+                "WHERE status='abgeschlossen'"
+            )
         projekt_tabelle = verbindung.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'projekte'"
         ).fetchone()

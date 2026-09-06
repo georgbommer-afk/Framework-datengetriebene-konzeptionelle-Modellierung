@@ -211,7 +211,7 @@ def test_technischer_mangel_blockiert_e_stern_und_navigiert_zur_ursache(
 
 def test_erfolgreiche_freigabe_setzt_e_stern_kontext_und_erlaubt_schritt_sechs() -> None:
     app = _app(schritt=4)
-    _button(app, "Event Log E als E* freigeben und zu Schritt 6").click().run()
+    _button(app, "Event Log E unverändert als E* freigeben").click().run()
     assert not app.exception
     assert app.session_state["aktuelle_freigabe_id"] == "55555555-5555-5555-5555-555555555555"
     assert app.session_state["freigegebenes_event_log_id"] == (
@@ -230,9 +230,19 @@ def test_erfolgreiche_freigabe_setzt_e_stern_kontext_und_erlaubt_schritt_sechs()
 def test_automatische_pruefung_verwendet_die_fachliche_ueberschrift() -> None:
     app = _app(schritt=2)
     assert any(
-        "Datenqualitätsprüfung der erzeugten Artefakte" in wert.value for wert in app.markdown
+        "Qualitätsprüfung der erzeugten Artefakte" in wert.value for wert in app.markdown
     )
     assert not any("Verbindliche Kriterien aus Tabelle 3.14" in wert.value for wert in app.markdown)
+    assert list(app.dataframe[0].value.columns) == [
+        "Artefakt",
+        "Qualitätsdimension",
+        "Prüfkriterium",
+        "Automatische Prüfung",
+        "Fachliche Bewertung",
+        "Gesamtergebnis",
+        "Begründung/Feststellung",
+        "Konsequenz",
+    ]
 
 
 def test_persistierte_freigabe_rehydriert_entscheidungen_und_begruendungen() -> None:

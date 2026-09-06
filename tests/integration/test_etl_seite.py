@@ -96,11 +96,11 @@ def test_etl_seite_startet_und_markiert_schritt_zwei(
     assert "Datenquellenkatalog (Q)" in einleitung
     assert "Datenprofil (R)" in einleitung
     assert "Zwischendatensatz (T)" in einleitung
-    assert len(anwendung.get("progress")) == 1
+    assert len(anwendung.get("progress")) == 4
     assert any("Phase 1 – Aufbereitung der Datenbasis" in wert.value for wert in anwendung.caption)
+    assert any("Aktuell: Schritt 2 – ETL durchführen" in wert.value for wert in anwendung.markdown)
     assert any(
-        "Unterschritt 1/5" in wert.value and "Datenquelle und Datei" in wert.value
-        for wert in anwendung.markdown
+        "Unterschritt 1/5: Datenquelle und Datei" in wert.value for wert in anwendung.caption
     )
     assert not any(element.label == "Alle Schritte anzeigen" for element in anwendung.expander)
     assert not any(element.label == "Aktuelles Projekt" for element in anwendung.selectbox)

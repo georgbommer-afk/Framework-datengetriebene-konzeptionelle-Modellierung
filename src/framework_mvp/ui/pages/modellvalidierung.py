@@ -21,7 +21,10 @@ from framework_mvp.domain.models import (
     ZusaetzlicheModellanpassung,
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
-from framework_mvp.ui.navigation import framework_bereich_oeffnen
+from framework_mvp.ui.navigation import (
+    framework_bereich_oeffnen,
+    schritt_abschliessen_und_weiter,
+)
 
 
 def _aktive_ids() -> tuple[UUID, UUID, UUID, UUID] | None:
@@ -449,7 +452,7 @@ def _gespeichertes_k_stern(
         type="primary",
         width="stretch",
     ):
-        framework_bereich_oeffnen(schritt=10, projekt_id=projekt_id)
+        schritt_abschliessen_und_weiter(aktueller_schritt=9, projekt_id=projekt_id)
 
 
 def zeige_modellvalidierung_seite(
@@ -562,6 +565,6 @@ def zeige_modellvalidierung_seite(
                 "schritt10_html_medienreferenz",
             ):
                 st.session_state.pop(schluessel, None)
-            framework_bereich_oeffnen(schritt=10, projekt_id=projekt_id)
+            schritt_abschliessen_und_weiter(aktueller_schritt=9, projekt_id=projekt_id)
         except (ValueError, Domaenenfehler, Importintegritaetsfehler, KeyError) as fehler:
             st.error(f"K* konnte nicht gespeichert werden: {fehler}")

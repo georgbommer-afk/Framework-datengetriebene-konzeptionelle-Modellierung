@@ -1,7 +1,7 @@
 """Framework-Schritt 8: 16 Vorschläge fachlich prüfen und als K/O übernehmen."""
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid5
 
 import pandas as pd
@@ -21,7 +21,10 @@ from framework_mvp.domain.models import (
     ModellbestandteilId,
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
-from framework_mvp.ui.navigation import framework_bereich_oeffnen
+from framework_mvp.ui.navigation import (
+    framework_bereich_oeffnen,
+    schritt_abschliessen_und_weiter,
+)
 
 
 def _aktive_ids() -> tuple[UUID, UUID] | None:
@@ -118,9 +121,15 @@ def _haupttabelle(
                     or "–",
                     "Status": _status_text(status_nach_id[wert.bestandteil_id]),
                     "Fachliche Entscheidung": (
-                        entscheidungen[wert.bestandteil_id].entscheidung.value
+                        {
+                            FachlicheEntscheidungsart.UEBERNEHMEN: "In K übernommen",
+                            FachlicheEntscheidungsart.OFFEN_UNSICHER: (
+                                "Bewusst als offen/unsicher nach O übernommen"
+                            ),
+                            FachlicheEntscheidungsart.NICHT_UEBERNEHMEN: "Nicht übernommen",
+                        }[entscheidungen[wert.bestandteil_id].entscheidung]
                         if wert.bestandteil_id in entscheidungen
-                        else "noch nicht entschieden"
+                        else "Noch nicht entschieden"
                     ),
                 }
                 for wert in vorschlag.vorgeschlagene_bestandteile
@@ -162,16 +171,50 @@ def _fachliche_details(
     label_nach_art = {
         wert: label for label, wert in _ENTSCHEIDUNGSOPTIONEN.items() if wert is not None
     }
+
+    def aktuelle_auswahl(bestandteil: Any) -> str:
+        key = f"schritt8_{fingerabdruck}_{bestandteil.bestandteil_id.value}_auswahl"
+        vorherige = vorbelegung.get(bestandteil.bestandteil_id)
+        auswahl = st.session_state.get(
+            key,
+            label_nach_art.get(vorherige.entscheidung)
+            if vorherige is not None
+            else "Noch nicht entschieden",
+        )
+        if auswahl == "Vorschlag übernehmen" and not bestandteil.informationen:
+            return "Noch nicht entschieden"
+        return str(auswahl)
+
+    erster_unentschiedener = next(
+        (
+            wert.bestandteil_id
+            for wert in vorschau.vorgeschlagene_bestandteile
+            if aktuelle_auswahl(wert) == "Noch nicht entschieden"
+        ),
+        None,
+    )
     for index, bestandteil in enumerate(vorschau.vorgeschlagene_bestandteile, 1):
         basis_key = f"schritt8_{fingerabdruck}_{bestandteil.bestandteil_id.value}"
         vorherige_entscheidung = vorbelegung.get(bestandteil.bestandteil_id)
-        if vorherige_entscheidung is not None and f"{basis_key}_auswahl" not in st.session_state:
+        if (
+            vorherige_entscheidung is not None
+            and f"{basis_key}_auswahl" not in st.session_state
+            and not (
+                vorherige_entscheidung.entscheidung is FachlicheEntscheidungsart.UEBERNEHMEN
+                and not bestandteil.informationen
+            )
+        ):
             st.session_state[f"{basis_key}_auswahl"] = label_nach_art[
                 vorherige_entscheidung.entscheidung
             ]
             st.session_state[f"{basis_key}_begruendung"] = vorherige_entscheidung.begruendung
+        ist_unentschieden = aktuelle_auswahl(bestandteil) == "Noch nicht entschieden"
+        label = f"{index}. {bestandteil.bezeichnung} · {_status_text(bestandteil.status)}"
+        if ist_unentschieden:
+            label += " · Entscheidung erforderlich"
         with st.expander(
-            f"{index}. {bestandteil.bezeichnung} · {_status_text(bestandteil.status)}"
+            label,
+            expanded=bestandteil.bestandteil_id == erster_unentschiedener,
         ):
             if bestandteil.bestandteil_id in erneut_pruefen:
                 st.warning(
@@ -193,12 +236,19 @@ def _fachliche_details(
                 )
             for eintrag in offene_nach_bestandteil.get(bestandteil.bestandteil_id.value, []):
                 st.warning(f"Offener Punkt ({eintrag.kategorie.value}): {eintrag.begruendung}")
+            optionen = dict(_ENTSCHEIDUNGSOPTIONEN)
+            if not bestandteil.informationen:
+                optionen.pop("Vorschlag übernehmen")
+            if st.session_state.get(f"{basis_key}_auswahl") not in optionen:
+                st.session_state[f"{basis_key}_auswahl"] = "Noch nicht entschieden"
             auswahl = st.radio(
                 "Fachliche Entscheidung",
-                tuple(_ENTSCHEIDUNGSOPTIONEN),
+                tuple(optionen),
                 key=f"{basis_key}_auswahl",
             )
-            art = _ENTSCHEIDUNGSOPTIONEN[auswahl]
+            art = optionen[auswahl]
+            if art is None:
+                st.warning("Noch nicht entschieden – dieser Bestandteil blockiert die Speicherung.")
             begruendung = ""
             if art in {
                 FachlicheEntscheidungsart.OFFEN_UNSICHER,
@@ -341,7 +391,7 @@ def _gespeicherte_ableitung(
         type="primary",
         width="stretch",
     ):
-        framework_bereich_oeffnen(schritt=9, projekt_id=projekt_id)
+        schritt_abschliessen_und_weiter(aktueller_schritt=8, projekt_id=projekt_id)
 
 
 def zeige_modellableitung_seite(
@@ -391,7 +441,13 @@ def zeige_modellableitung_seite(
     vorbefuellen = getattr(service, "vorherige_entscheidungsvorbelegung", None)
     if callable(vorbefuellen):
         try:
-            vorbelegung, erneut_pruefen = vorbefuellen(projekt_id, aggregations_id, vorschlag)
+            vorbelegung, erneut_pruefen = cast(
+                tuple[
+                    dict[ModellbestandteilId, FachlicheBestandteilentscheidung],
+                    frozenset[ModellbestandteilId],
+                ],
+                vorbefuellen(projekt_id, aggregations_id, vorschlag),
+            )
         except (Domaenenfehler, Importintegritaetsfehler, KeyError, TypeError, ValueError):
             vorbelegung, erneut_pruefen = {}, frozenset()
     entscheidungen = _fachliche_details(
@@ -420,16 +476,21 @@ def zeige_modellableitung_seite(
     _haupttabelle(vorschlag, vorschau, entscheidungen_nach_id)
     _ergebnisuebersicht(vorschau)
     _technische_details(vorschau)
-    fehlend = len(vorschlag.vorgeschlagene_bestandteile) - len(entscheidungen)
-    if fehlend:
+    entschieden_ids = {wert.bestandteil_id for wert in entscheidungen}
+    fehlende_bestandteile = [
+        wert
+        for wert in vorschlag.vorgeschlagene_bestandteile
+        if wert.bestandteil_id not in entschieden_ids
+    ]
+    if fehlende_bestandteile:
         st.warning(
-            f"Bitte prüfen Sie noch {fehlend} Modellbestandteil"
-            f"{'e' if fehlend != 1 else ''}, bevor K und O gespeichert werden können."
+            "K und O können noch nicht gespeichert werden. Offene Entscheidungen:\n"
+            + "\n".join(f"- {wert.bezeichnung}" for wert in fehlende_bestandteile)
         )
     if st.button(
         "K und O speichern und zu Schritt 9",
         type="primary",
-        disabled=fehlend > 0,
+        disabled=bool(fehlende_bestandteile),
     ):
         try:
             ableitung = service.speichern(vorschau)
@@ -443,6 +504,6 @@ def zeige_modellableitung_seite(
                 "schritt10_ausgabe_signatur",
             ):
                 st.session_state.pop(schluessel, None)
-            framework_bereich_oeffnen(schritt=9, projekt_id=projekt_id)
+            schritt_abschliessen_und_weiter(aktueller_schritt=8, projekt_id=projekt_id)
         except (Domaenenfehler, Importintegritaetsfehler) as fehler:
             st.error(f"K und O konnten nicht gespeichert werden: {fehler}")

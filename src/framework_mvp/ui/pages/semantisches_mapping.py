@@ -643,7 +643,7 @@ def _pruefen_und_speichern(
         schritt_abschliessen_und_weiter(aktueller_schritt=3, projekt_id=mapping.projekt_id)
 
 
-def _navigation(zustand: dict[str, Any]) -> None:
+def _navigation(zustand: dict[str, Any], projekt_id: UUID) -> None:
     """Navigiert zwischen den drei fachlichen Mappingabschnitten."""
     schritt = zustand["schritt"]
     weiter_moeglich = (
@@ -656,6 +656,7 @@ def _navigation(zustand: dict[str, Any]) -> None:
         zurueck_callback=lambda: zustand.__setitem__("schritt", schritt - 1),
         weiter_callback=lambda: zustand.__setitem__("schritt", schritt + 1),
         schluessel="mapping_unterschritt_navigation",
+        fortschrittsabschluss=(projekt_id, 3),
     )
 
 
@@ -697,7 +698,7 @@ def zeige_event_log_konfiguration(
             _rollen_und_aktivitaet(daten, projekt_id, datensatz.zwischendatensatz_id, zustand)
         else:
             _pruefen_und_speichern(mapping_service, projektname, datensatz, daten, zustand)
-        _navigation(zustand)
+        _navigation(zustand, projekt_id)
     except (Domaenenfehler, Importintegritaetsfehler) as fehler:
         st.error(str(fehler))
 
