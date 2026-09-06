@@ -169,6 +169,34 @@ def test_transformation_startet_ohne_vorbelegten_typ() -> None:
     assert not any(e.label == "Transformationsvorschau berechnen" for e in anwendung.button)
 
 
+def test_werte_ersetzen_bleibt_auf_konkrete_werte_und_ersatzstrategien_begrenzt() -> None:
+    anwendung = AppTest.from_string(TRANSFORMATIONS_APP).run()
+    next(e for e in anwendung.selectbox if e.label == "Transformationsart").set_value(
+        "Werte ersetzen"
+    ).run()
+    next(e for e in anwendung.selectbox if e.label == "Quellspalte").set_value("Text").run()
+
+    assert not any(e.label == "Vergleichsart" for e in anwendung.selectbox)
+    next(e for e in anwendung.selectbox if e.label == "Zu ersetzende Werte").set_value(
+        "Einzelne konkrete Werte"
+    ).run()
+    next(e for e in anwendung.multiselect if e.label == "Suchwerte").set_value(
+        ["ohne Treffer"]
+    ).run()
+    next(e for e in anwendung.selectbox if e.label == "Ersatz").set_value(
+        "Frei definierter Wert"
+    ).run()
+    next(e for e in anwendung.text_input if e.label == "Frei definierter Ersatzwert").set_value(
+        "ersetzt"
+    ).run()
+    next(e for e in anwendung.selectbox if e.label == "Ziel").set_value(
+        "Bestehende Spalte überschreiben"
+    ).run()
+
+    assert not anwendung.exception
+    assert not next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
+
+
 def test_zeilen_loeschen_formular_zeigt_bedingung_und_vorschau() -> None:
     anwendung = AppTest.from_string(TRANSFORMATIONS_APP).run()
     next(e for e in anwendung.selectbox if e.label == "Transformationsart").set_value(
@@ -225,17 +253,17 @@ def test_textbereinigungsformular_zeigt_allgemeine_begrenzer_und_sicheren_standa
     assert not next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
 
 
-def test_wertersetzung_zeigt_regelvorschau_und_neue_zielspalte_vor_dem_speichern() -> None:
+def test_regelbasierte_abstraktion_wird_separat_angeboten_und_vorbereitet() -> None:
     anwendung = AppTest.from_string(TRANSFORMATIONS_APP).run()
     next(e for e in anwendung.selectbox if e.label == "Transformationsart").set_value(
-        "Werte ersetzen"
+        "Werte regelbasiert abstrahieren"
     ).run()
     next(e for e in anwendung.selectbox if e.label == "Quellspalte").set_value("Text").run()
     next(e for e in anwendung.selectbox if e.label == "Vergleichsart").set_value(
         "Beginnt mit"
     ).run()
     next(e for e in anwendung.text_input if e.label == "Suchwert / Muster").set_value("RS ")
-    next(e for e in anwendung.text_input if e.label == "Ersatzwert").set_value("RS").run()
+    next(e for e in anwendung.text_input if e.label == "Abstraktionswert").set_value("RS").run()
     next(e for e in anwendung.selectbox if e.label == "Ziel").set_value(
         "Neue Spalte erstellen"
     ).run()
@@ -248,7 +276,7 @@ def test_wertersetzung_zeigt_regelvorschau_und_neue_zielspalte_vor_dem_speichern
     assert "Quellspalte: Text" in zusammenfassung
     assert "Vergleichsart: Beginnt mit" in zusammenfassung
     assert "Suchwert/Muster: RS " in zusammenfassung
-    assert "Ersatzwert: RS" in zusammenfassung
+    assert "Abstraktionswert: RS" in zusammenfassung
     assert "Zielspalte: Text_aggregiert" in zusammenfassung
     assert "Betroffene Zeilen: 1" in zusammenfassung
     vorschau = next(
@@ -260,17 +288,17 @@ def test_wertersetzung_zeigt_regelvorschau_und_neue_zielspalte_vor_dem_speichern
     assert not next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
 
 
-def test_wertersetzung_meldet_ungueltigen_regex_und_keine_treffer() -> None:
+def test_regelbasierte_abstraktion_meldet_ungueltigen_regex_und_keine_treffer() -> None:
     anwendung = AppTest.from_string(TRANSFORMATIONS_APP).run()
     next(e for e in anwendung.selectbox if e.label == "Transformationsart").set_value(
-        "Werte ersetzen"
+        "Werte regelbasiert abstrahieren"
     ).run()
     next(e for e in anwendung.selectbox if e.label == "Quellspalte").set_value("Text").run()
     next(e for e in anwendung.selectbox if e.label == "Vergleichsart").set_value(
         "Regulärer Ausdruck"
     ).run()
     next(e for e in anwendung.text_input if e.label == "Suchwert / Muster").set_value("[")
-    next(e for e in anwendung.text_input if e.label == "Ersatzwert").set_value("x").run()
+    next(e for e in anwendung.text_input if e.label == "Abstraktionswert").set_value("x").run()
     next(e for e in anwendung.selectbox if e.label == "Ziel").set_value(
         "Bestehende Spalte überschreiben"
     ).run()

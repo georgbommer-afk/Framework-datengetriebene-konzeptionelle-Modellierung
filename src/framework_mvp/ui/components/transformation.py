@@ -83,19 +83,25 @@ def _konvertierung_formular(
 
 
 def _wertersetzung_formular(
-    daten: pd.DataFrame, profil: dict[str, Any]
+    daten: pd.DataFrame,
+    profil: dict[str, Any],
+    *,
+    regelbasiert: bool = False,
 ) -> tuple[tuple[str, ...], dict[str, Any], str] | None:
     profile = _profil_spalten(profil)
     spalte = fachliche_auswahl("Quellspalte", [str(name) for name in daten.columns])
-    vergleichsart = fachliche_auswahl(
-        "Vergleichsart",
-        tuple(Wertevergleichsart),
-        wert=Wertevergleichsart.EXAKTER_WERT,
-        format_func=lambda wert: wert.value,
-        help=(
-            "Bestimmt, ob vollständige Werte oder textuelle Regeln für die Ersetzung "
-            "verwendet werden."
-        ),
+    vergleichsart = (
+        fachliche_auswahl(
+            "Vergleichsart",
+            (
+                Wertevergleichsart.BEGINNT_MIT,
+                Wertevergleichsart.ENTHAELT,
+                Wertevergleichsart.REGULAERER_AUSDRUCK,
+            ),
+            format_func=lambda wert: wert.value,
+        )
+        if regelbasiert
+        else Wertevergleichsart.EXAKTER_WERT
     )
     if spalte is None or vergleichsart is None:
         st.info("Wählen Sie eine Quellspalte und eine Vergleichsart aus.")
@@ -175,7 +181,7 @@ def _wertersetzung_formular(
         suchanzeige = ", ".join(str(wert) for wert in serialisierbare_werte) or "–"
     else:
         suchwert = st.text_input("Suchwert / Muster")
-        ersatz = st.text_input("Ersatzwert")
+        ersatz = st.text_input("Abstraktionswert")
         if not suchwert:
             st.info("Geben Sie einen nichtleeren Suchwert beziehungsweise ein Muster ein.")
             return None
@@ -213,7 +219,8 @@ def _wertersetzung_formular(
     parameter["betroffene_beobachtungen"] = anzahl
     st.info(
         f"Quellspalte: {spalte} · Vergleichsart: {vergleichsart.value} · "
-        f"Suchwert/Muster: {suchanzeige} · Ersatzwert: {ersatz!s} · "
+        f"Suchwert/Muster: {suchanzeige} · "
+        f"{'Abstraktionswert' if regelbasiert else 'Ersatzwert'}: {ersatz!s} · "
         f"Zielspalte: {zielspalte} · Betroffene Zeilen: {anzahl}"
     )
     if anzahl == 0:
@@ -231,7 +238,10 @@ def _wertersetzung_formular(
     return (
         (spalte,),
         parameter,
-        f"{anzahl} Werte in {spalte} nach {vergleichsart.value} ersetzen ({zielspalte})",
+        (
+            f"{anzahl} Werte in {spalte} nach {vergleichsart.value} "
+            f"{'abstrahieren' if regelbasiert else 'ersetzen'} ({zielspalte})"
+        ),
     )
 
 
@@ -408,6 +418,8 @@ def _neuer_schritt(
         ergebnis = _konvertierung_formular(daten)
     elif art is Transformationsart.WERTE_ERSETZEN:
         ergebnis = _wertersetzung_formular(daten, profil)
+    elif art is Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN:
+        ergebnis = _wertersetzung_formular(daten, profil, regelbasiert=True)
     elif art is Transformationsart.EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN:
         ergebnis = _duplikate_formular(daten)
     elif art is Transformationsart.VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN:

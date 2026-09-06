@@ -462,7 +462,10 @@ def _wende_schritt_an(
         ):
             raise Domaenenfehler("Technische Zielnamen müssen eindeutig und nicht leer sein.")
         return daten.rename(columns=mapping).copy(), f"{len(mapping)} Spalten umbenannt"
-    if schritt.typ is Transformationsart.WERTE_ERSETZEN:
+    if schritt.typ in {
+        Transformationsart.WERTE_ERSETZEN,
+        Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN,
+    }:
         ersatz = parameter.get("ersatzwert")
         zielmodus = str(parameter.get("zielmodus", "Bestehende Spalte überschreiben"))
         if zielmodus not in {
@@ -472,6 +475,20 @@ def _wende_schritt_an(
             raise Domaenenfehler("Das Ziel der Wertersetzung ist unbekannt.")
         if not schritt.betroffene_spalten:
             raise Domaenenfehler("Für die Wertersetzung muss eine Quellspalte gewählt werden.")
+        if schritt.typ is Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN:
+            if len(schritt.betroffene_spalten) != 1:
+                raise Domaenenfehler(
+                    "Die regelbasierte Abstraktion benötigt genau eine Quellspalte."
+                )
+            vergleichsart = parameter.get("vergleichsart")
+            if vergleichsart not in {
+                Wertevergleichsart.BEGINNT_MIT.value,
+                Wertevergleichsart.ENTHAELT.value,
+                Wertevergleichsart.REGULAERER_AUSDRUCK.value,
+            }:
+                raise Domaenenfehler(
+                    "Die regelbasierte Abstraktion benötigt eine textuelle Vergleichsart."
+                )
         fehlende_spalten = [
             name for name in schritt.betroffene_spalten if name not in daten.columns
         ]
@@ -495,12 +512,22 @@ def _wende_schritt_an(
             maske = ermittle_wertersetzungsmaske(daten[name], parameter)
             anzahl = int(maske.sum())
             daten.loc[maske, zielspalte] = ersatz
-            return daten, f"{anzahl} Werte ersetzt; Zielspalte {zielspalte} erstellt"
+            aktion = (
+                "regelbasiert abstrahiert"
+                if schritt.typ is Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN
+                else "ersetzt"
+            )
+            return daten, f"{anzahl} Werte {aktion}; Zielspalte {zielspalte} erstellt"
         for name in schritt.betroffene_spalten:
             maske = ermittle_wertersetzungsmaske(daten[name], parameter)
             anzahl += int(maske.sum())
             daten.loc[maske, name] = ersatz
-        return daten, f"{anzahl} Werte ersetzt"
+        aktion = (
+            "regelbasiert abstrahiert"
+            if schritt.typ is Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN
+            else "ersetzt"
+        )
+        return daten, f"{anzahl} Werte {aktion}"
     if schritt.typ is Transformationsart.DATENTYP_KONVERTIEREN:
         fehler = 0
         for name in schritt.betroffene_spalten:
@@ -604,8 +631,18 @@ def fuehre_transformationsplan_aus(
         )
         if "nicht konvertierbare" in ergebnis and not ergebnis.startswith("0 "):
             warnungen.append(ergebnis)
-        if schritt.typ is Transformationsart.WERTE_ERSETZEN and ergebnis.startswith("0 Werte"):
-            warnungen.append("Die Wertersetzung hatte im aktuellen Datenstand keine Treffer.")
+        if schritt.typ in {
+            Transformationsart.WERTE_ERSETZEN,
+            Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN,
+        } and ergebnis.startswith("0 Werte"):
+            bezeichnung = (
+                "regelbasierte Abstraktion"
+                if schritt.typ is Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN
+                else "Wertersetzung"
+            )
+            warnungen.append(
+                f"Die {bezeichnung} hatte im aktuellen Datenstand keine Treffer."
+            )
     return Transformationsergebnis(
         daten=daten,
         vorschau=daten.head(MAXIMALE_VORSCHAUZEILEN).copy(deep=True),

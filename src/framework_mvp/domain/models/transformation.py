@@ -16,6 +16,7 @@ class Transformationsart(StrEnum):
     SPALTENAUSWAHL = "spaltenauswahl"
     UMBENENNEN = "umbenennen"
     WERTE_ERSETZEN = "werte_ersetzen"
+    WERTE_REGELBASIERT_ABSTRAHIEREN = "werte_regelbasiert_abstrahieren"
     DATENTYP_KONVERTIEREN = "datentyp_konvertieren"
     EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN = "exakte_tupel_duplikate_entfernen"
     VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN = "vollstaendig_leere_spalten_entfernen"
@@ -31,7 +32,7 @@ class Transformationsart(StrEnum):
 
 
 class Wertevergleichsart(StrEnum):
-    """Vergleichsarten der allgemeinen Transformation ``Werte ersetzen``."""
+    """Vergleichsarten für konkrete Ersetzungen und regelbasierte Abstraktionen."""
 
     EXAKTER_WERT = "Exakter Wert"
     BEGINNT_MIT = "Beginnt mit"
@@ -42,6 +43,7 @@ class Wertevergleichsart(StrEnum):
 FRAMEWORKKONFORME_TRANSFORMATIONSARTEN = (
     Transformationsart.DATENTYP_KONVERTIEREN,
     Transformationsart.WERTE_ERSETZEN,
+    Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN,
     Transformationsart.EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN,
     Transformationsart.VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN,
     Transformationsart.ZEILEN_LOESCHEN,
@@ -51,6 +53,9 @@ FRAMEWORKKONFORME_TRANSFORMATIONSARTEN = (
 TRANSFORMATIONSART_BEZEICHNUNGEN = {
     Transformationsart.DATENTYP_KONVERTIEREN: "Datentyp konvertieren",
     Transformationsart.WERTE_ERSETZEN: "Werte ersetzen",
+    Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN: (
+        "Werte regelbasiert abstrahieren"
+    ),
     Transformationsart.EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN: ("Exakte Tupel-Duplikate entfernen"),
     Transformationsart.VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN: (
         "Vollständig leere Spalten entfernen"

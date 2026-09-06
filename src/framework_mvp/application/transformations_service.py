@@ -4,6 +4,7 @@
 import gzip
 import hashlib
 import json
+import re
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from io import BytesIO
@@ -353,6 +354,89 @@ class TransformationsService:
         if not isinstance(struktur, dict):
             raise Importintegritaetsfehler("Die Transformations-Lineage ist ungültig.")
         return struktur
+
+    def regelbasierte_abstraktionen_laden(
+        self, datensatz: Zwischendatensatz
+    ) -> tuple[dict[str, object], ...]:
+        """Liest tatsächlich ausgeführte regelbasierte Abstraktionen aus T."""
+        artefakt = self._transformationsartefakt(datensatz)
+        plan = artefakt.get("transformationsplan", {})
+        schritte = plan.get("schritte", []) if isinstance(plan, dict) else []
+        historie = artefakt.get("transformationshistorie", [])
+        if not isinstance(schritte, list) or not isinstance(historie, list):
+            return ()
+        wirkung_nach_schritt = {
+            int(wert["schritt"]): str(wert.get("ergebnis_oder_warnung", ""))
+            for wert in historie
+            if isinstance(wert, dict)
+            and isinstance(wert.get("schritt"), int)
+        }
+        ergebnis: list[dict[str, object]] = []
+        regelarten = {
+            "Beginnt mit",
+            "Enthält",
+            "Regulärer Ausdruck",
+        }
+        for schritt in schritte:
+            if not isinstance(schritt, dict) or not bool(schritt.get("aktiviert", True)):
+                continue
+            typ = str(schritt.get("typ", ""))
+            try:
+                parameter = json.loads(str(schritt.get("parameter_json", "{}")))
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(parameter, dict):
+                continue
+            vergleichsart = str(parameter.get("vergleichsart", ""))
+            ist_neuer_typ = typ == Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN.value
+            ist_legacy = (
+                typ == Transformationsart.WERTE_ERSETZEN.value
+                and vergleichsart in regelarten
+            )
+            if not (ist_neuer_typ or ist_legacy) or vergleichsart not in regelarten:
+                continue
+            try:
+                reihenfolge = int(schritt["reihenfolge"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            wirkung = wirkung_nach_schritt.get(reihenfolge)
+            if wirkung is None:
+                continue
+            treffer = re.match(r"^(\d+) Werte (?:regelbasiert abstrahiert|ersetzt)", wirkung)
+            if treffer is None or int(treffer.group(1)) == 0:
+                continue
+            spalten = schritt.get("betroffene_spalten", [])
+            if not isinstance(spalten, list) or not spalten:
+                continue
+            quellspalte = str(spalten[0])
+            zielmodus = str(
+                parameter.get("zielmodus", "Bestehende Spalte überschreiben")
+            )
+            suchwert = str(parameter.get("suchwert", parameter.get("gesuchter_wert", "")))
+            vorher_muster = (
+                f"{suchwert}*"
+                if vergleichsart == "Beginnt mit"
+                else f"*{suchwert}*"
+                if vergleichsart == "Enthält"
+                else suchwert
+            )
+            ergebnis.append(
+                {
+                    "quellspalte": quellspalte,
+                    "vergleichsart": vergleichsart,
+                    "suchwert_muster": suchwert,
+                    "vorher_muster": vorher_muster,
+                    "abstraktionswert": parameter.get("ersatzwert"),
+                    "zielspalte": (
+                        str(parameter.get("zielspalte", "")).strip()
+                        if zielmodus == "Neue Spalte erstellen"
+                        else quellspalte
+                    ),
+                    "betroffene_beobachtungen": int(treffer.group(1)),
+                    "originalwerte_erhalten": zielmodus == "Neue Spalte erstellen",
+                }
+            )
+        return tuple(ergebnis)
 
     def _letzter_ausgefuehrter_stand(
         self, plan: Transformationsplan

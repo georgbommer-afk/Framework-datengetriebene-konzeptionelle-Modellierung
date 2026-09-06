@@ -1190,6 +1190,14 @@ class ErgebnisaggregationService:
     ) -> dict[str, Any]:
         basis = vorschau.grundlage
         p = basis.discovery_ergebnisse["prozessmodell_p"]
+        abstraktionen_laden = getattr(
+            self._transformationen, "regelbasierte_abstraktionen_laden", None
+        )
+        etl_abstraktionen = (
+            abstraktionen_laden(basis.zwischendatensatz)
+            if callable(abstraktionen_laden)
+            else ()
+        )
         return {
             "artefaktversion": AG_ARTEFAKTVERSION,
             "artefaktart": AG_ARTEFAKTART,
@@ -1246,6 +1254,9 @@ class ErgebnisaggregationService:
             },
             "strukturierte_ergebnisse": {
                 "ergebnisversion": STRUKTURIERTE_ERGEBNISVERSION,
+                "vereinfachungen": {
+                    "etl_abstraktionen": etl_abstraktionen,
+                },
                 "ressourcen": vorschau.ressourcenanalyse,
                 "entitaetsinstanzen_und_attribute": vorschau.entitaetsanalyse,
                 "warteschlangen_und_wartezeiten": vorschau.warteschlangenanalyse,

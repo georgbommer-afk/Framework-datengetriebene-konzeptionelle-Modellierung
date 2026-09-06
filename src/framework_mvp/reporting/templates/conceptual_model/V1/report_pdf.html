@@ -1243,6 +1243,43 @@
 
         {% endif %}
 
+        {% if vereinfachungen.get("etl_abstraktionen", []) %}
+
+            <h3 class="pdf-subheading">
+                Regelbasierte ETL-Abstraktionen
+            </h3>
+
+            <div class="pdf-compact-structure">
+
+                {% for abstraktion in vereinfachungen.get("etl_abstraktionen", []) %}
+
+                    <div class="pdf-compact-structure-row">
+
+                        <div class="pdf-compact-structure-label">
+                            {{ abstraktion.get("quellspalte", "–") }}
+                        </div>
+
+                        <div class="pdf-compact-structure-value">
+                            {{ abstraktion.get("vergleichsart", "–") }}
+                            „{{ abstraktion.get("suchwert_muster", "–") }}“
+                            → „{{ abstraktion.get("abstraktionswert", "–") }}“ ·
+                            {{ abstraktion.get("betroffene_beobachtungen", 0) }} Beobachtungen<br>
+                            Vorher/Muster: {{ abstraktion.get("vorher_muster", "–") }} ·
+                            Nachher: {{ abstraktion.get("abstraktionswert", "–") }} ·
+                            Zielspalte: {{ abstraktion.get("zielspalte", "–") }}
+                            {% if abstraktion.get("originalwerte_erhalten", false) %}
+                                · Originalwerte in der Quellspalte erhalten
+                            {% endif %}
+                        </div>
+
+                    </div>
+
+                {% endfor %}
+
+            </div>
+
+        {% endif %}
+
     </article>
 
     <!-- ========================================================

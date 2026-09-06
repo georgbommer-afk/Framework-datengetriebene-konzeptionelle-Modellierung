@@ -328,6 +328,43 @@ def test_ableitung_bleibt_belegt_offen_und_schliesst_p_soll_aus(tmp_path: Path) 
     assert any(wert.bestandteil_id is ModellbestandteilId.EINGABEN for wert in offen)
 
 
+def test_etl_abstraktion_wird_aus_a_g_als_vereinfachung_uebernommen(tmp_path: Path) -> None:
+    basis = _basis(tmp_path)
+    abstraktion = {
+        "quellspalte": "Von",
+        "vergleichsart": "Beginnt mit",
+        "suchwert_muster": "HRL-04-",
+        "vorher_muster": "HRL-04-*",
+        "abstraktionswert": "HRL-04",
+        "zielspalte": "Von_aggregiert",
+        "betroffene_beobachtungen": 185,
+        "originalwerte_erhalten": True,
+    }
+    basis.a_g["strukturierte_ergebnisse"]["vereinfachungen"] = {
+        "etl_abstraktionen": [abstraktion]
+    }
+
+    bestandteile, _ = leite_modellbestandteile_ab(basis)
+
+    vereinfachungen = next(
+        wert
+        for wert in bestandteile
+        if wert.bestandteil_id is ModellbestandteilId.VEREINFACHUNGEN
+    )
+    etl = next(
+        wert
+        for wert in vereinfachungen.informationen
+        if wert.strukturreferenz
+        == "strukturierte_ergebnisse.vereinfachungen.etl_abstraktionen"
+    )
+    assert etl.herkunftsartefakt is Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G
+    assert etl.wert == [abstraktion]
+    assert any(
+        wert.strukturreferenz == "discovery_ergebnisse_a_d.schwellwert_k.auswirkung"
+        for wert in vereinfachungen.informationen
+    )
+
+
 def test_menschliche_entscheidungen_steuern_k_und_o(tmp_path: Path) -> None:
     vorschlaege, systematisch_offen = leite_modellbestandteile_ab(_basis(tmp_path))
     jetzt = datetime.now(UTC)

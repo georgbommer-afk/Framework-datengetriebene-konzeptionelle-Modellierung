@@ -90,24 +90,45 @@ def _umgebung(tmp_path):  # type: ignore[no-untyped-def]
     projekt_id, modellableitungs_id, k_id, o_id = uuid4(), uuid4(), uuid4(), uuid4()
     bestandteile = []
     for index, definition in enumerate(MODELLBESTANDTEILE, 1):
+        information = {
+            "informations_id": f"info-{index}",
+            "bestandteil_id": definition.bestandteil_id.value,
+            "herkunftsartefakt": "U",
+            "herkunftsartefakt_id": str(projekt_id),
+            "herkunftsartefakt_sha256": "1" * 64,
+            "strukturreferenz": f"U.feld_{index}",
+            "wert": {"Text": f"Ursprung {index}", "Werte": [index, index + 1]},
+            "uebernahmeart": "direkte_uebernahme",
+        }
+        if definition.bestandteil_id is ModellbestandteilId.VEREINFACHUNGEN:
+            information.update(
+                {
+                    "herkunftsartefakt": "A_G",
+                    "strukturreferenz": (
+                        "strukturierte_ergebnisse.vereinfachungen.etl_abstraktionen"
+                    ),
+                    "wert": [
+                        {
+                            "quellspalte": "Von",
+                            "vergleichsart": "Beginnt mit",
+                            "suchwert_muster": "HRL-04-",
+                            "vorher_muster": "HRL-04-*",
+                            "abstraktionswert": "HRL-04",
+                            "zielspalte": "Von_aggregiert",
+                            "betroffene_beobachtungen": 185,
+                            "originalwerte_erhalten": True,
+                        }
+                    ],
+                    "uebernahmeart": "metadatenzusammenfassung",
+                }
+            )
         bestandteile.append(
             {
                 "bestandteil_id": definition.bestandteil_id.value,
                 "bezeichnung": definition.bezeichnung,
                 "status": "teilweise_offen" if index <= 2 else "vollstaendig_zugeordnet",
                 "verwendete_quellen": ["U"],
-                "informationen": [
-                    {
-                        "informations_id": f"info-{index}",
-                        "bestandteil_id": definition.bestandteil_id.value,
-                        "herkunftsartefakt": "U",
-                        "herkunftsartefakt_id": str(projekt_id),
-                        "herkunftsartefakt_sha256": "1" * 64,
-                        "strukturreferenz": f"U.feld_{index}",
-                        "wert": {"Text": f"Ursprung {index}", "Werte": [index, index + 1]},
-                        "uebernahmeart": "direkte_uebernahme",
-                    }
-                ],
+                "informationen": [information],
                 "offene_eintrag_ids": [f"offen-{index}"] if index <= 2 else [],
             }
         )
@@ -275,6 +296,14 @@ def test_k_stern_entsteht_idempotent_und_laesst_k_und_o_unveraendert(tmp_path) -
     zusaetzlich = k_stern["modellbestandteile"][5]["menschliche_eintraege"][-1]
     assert zusaetzlich["eintragstyp"] == "zusaetzliche_anpassung"
     assert zusaetzlich["fuer_k_stern_massgeblich"] is True
+    vereinfachungen = next(
+        wert
+        for wert in k_stern["modellbestandteile"]
+        if wert["bestandteil_id"] == ModellbestandteilId.VEREINFACHUNGEN.value
+    )
+    assert vereinfachungen["urspruenglicher_bestandteil"]["informationen"][0]["wert"][0][
+        "betroffene_beobachtungen"
+    ] == 185
     assert ableitungen.k == k_vorher
     assert ableitungen.o == o_vorher
 

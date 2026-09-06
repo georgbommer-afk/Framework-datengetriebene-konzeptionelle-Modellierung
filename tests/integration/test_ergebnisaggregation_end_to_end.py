@@ -100,6 +100,7 @@ class _Transformationen:
         self.tabelle = tabelle
         self.profil = profil
         self.raw_sha256 = raw_sha256
+        self.abstraktionen: tuple[dict[str, object], ...] = ()
 
     def zwischendatensatz_laden(self, datensatz_id: UUID):  # type: ignore[no-untyped-def]
         assert datensatz_id == self.datensatz.zwischendatensatz_id
@@ -114,6 +115,10 @@ class _Transformationen:
             ),
             profil=self.profil,
         )
+
+    def regelbasierte_abstraktionen_laden(self, datensatz):  # type: ignore[no-untyped-def]
+        assert datensatz == self.datensatz
+        return self.abstraktionen
 
 
 class _ProcessMining:
@@ -318,6 +323,18 @@ def _umgebung(tmp_path):  # type: ignore[no-untyped-def]
 
 def test_a_g_ohne_optionale_bestandteile_ist_idempotent_und_uebergabefaehig(tmp_path) -> None:  # type: ignore[no-untyped-def]
     service, _, _, _, projekt, freigabe, analyse, tabelle, event_log, modell = _umgebung(tmp_path)
+    service._transformationen.abstraktionen = (  # type: ignore[attr-defined]
+        {
+            "quellspalte": "Von",
+            "vergleichsart": "Beginnt mit",
+            "suchwert_muster": "HRL-04-",
+            "vorher_muster": "HRL-04-*",
+            "abstraktionswert": "HRL-04",
+            "zielspalte": "Von_aggregiert",
+            "betroffene_beobachtungen": 185,
+            "originalwerte_erhalten": True,
+        },
+    )
     t_vorher, e_vorher = tabelle.copy(deep=True), event_log.copy(deep=True)
     config = KpiKonfiguration(
         "servicegrad",
@@ -362,6 +379,18 @@ def test_a_g_ohne_optionale_bestandteile_ist_idempotent_und_uebergabefaehig(tmp_
     assert a_g["artefaktversion"] == 5
     assert a_g["kpi_konfigurationsversion"] == 2
     assert a_g["strukturierte_ergebnisse"]["ergebnisversion"] == 3
+    assert a_g["strukturierte_ergebnisse"]["vereinfachungen"]["etl_abstraktionen"] == [
+        {
+            "quellspalte": "Von",
+            "vergleichsart": "Beginnt mit",
+            "suchwert_muster": "HRL-04-",
+            "vorher_muster": "HRL-04-*",
+            "abstraktionswert": "HRL-04",
+            "zielspalte": "Von_aggregiert",
+            "betroffene_beobachtungen": 185,
+            "originalwerte_erhalten": True,
+        }
+    ]
     assert a_g["conformance_checking"] == {
         "sollprozess_vorhanden": False,
         "durchgefuehrt": False,

@@ -633,6 +633,21 @@ def _annahmen_vereinfachungen(sammlung: _Sammlung) -> None:
             "werden nicht automatisch als Annahmen ausgelegt.",
         )
     discovery_referenz = sammlung.basis.a_g.get("discovery_ergebnisse_a_d", {})
+    strukturierte = _strukturierte_ergebnisse(sammlung)
+    vereinfachungen = strukturierte.get("vereinfachungen", {})
+    etl_abstraktionen = (
+        vereinfachungen.get("etl_abstraktionen", [])
+        if isinstance(vereinfachungen, dict)
+        else []
+    )
+    if isinstance(etl_abstraktionen, list) and etl_abstraktionen:
+        sammlung.info(
+            ModellbestandteilId.VEREINFACHUNGEN,
+            Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
+            "strukturierte_ergebnisse.vereinfachungen.etl_abstraktionen",
+            etl_abstraktionen,
+            Uebernahmeart.METADATENZUSAMMENFASSUNG,
+        )
     k_roh = (
         discovery_referenz.get("schwellwert_k") if isinstance(discovery_referenz, dict) else None
     )
@@ -651,7 +666,7 @@ def _annahmen_vereinfachungen(sammlung: _Sammlung) -> None:
             },
             Uebernahmeart.METADATENZUSAMMENFASSUNG,
         )
-    else:
+    elif not (isinstance(etl_abstraktionen, list) and etl_abstraktionen):
         sammlung.oeffnen(
             ModellbestandteilId.VEREINFACHUNGEN,
             Offenheitskategorie.NICHT_ABLEITBAR,

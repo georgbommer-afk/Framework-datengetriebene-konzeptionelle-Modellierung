@@ -1074,6 +1074,31 @@
         </div>
     {% endif %}
 
+    {% if vereinfachungen.etl_abstraktionen %}
+        <div class="content-card">
+            <h2>Regelbasierte ETL-Abstraktionen</h2>
+
+            {% for abstraktion in vereinfachungen.etl_abstraktionen %}
+                <div class="human-input-entry">
+                    <strong>
+                        {{ abstraktion.quellspalte }} |
+                        {{ abstraktion.vergleichsart }} „{{ abstraktion.suchwert_muster }}“
+                        → „{{ abstraktion.abstraktionswert }}“ |
+                        {{ abstraktion.betroffene_beobachtungen }} Beobachtungen
+                    </strong>
+                    <div>
+                        Vorher/Muster: {{ abstraktion.vorher_muster }} ·
+                        Nachher: {{ abstraktion.abstraktionswert }} ·
+                        Zielspalte: {{ abstraktion.zielspalte }}
+                        {% if abstraktion.originalwerte_erhalten %}
+                            · Originalwerte in der Quellspalte erhalten
+                        {% endif %}
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+
     {{ fachliche_anpassungen(annahmen) }}
 
 </section>

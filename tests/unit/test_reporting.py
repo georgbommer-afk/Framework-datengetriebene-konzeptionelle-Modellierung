@@ -87,6 +87,25 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
                     "A_G",
                 )
             )
+        elif bestandteil_id == "vereinfachungen" and neue_felder:
+            informationen.append(
+                _information(
+                    "strukturierte_ergebnisse.vereinfachungen.etl_abstraktionen",
+                    [
+                        {
+                            "quellspalte": "Von",
+                            "vergleichsart": "Beginnt mit",
+                            "suchwert_muster": "HRL-04-",
+                            "vorher_muster": "HRL-04-*",
+                            "abstraktionswert": "HRL-04",
+                            "zielspalte": "Von_aggregiert",
+                            "betroffene_beobachtungen": 185,
+                            "originalwerte_erhalten": True,
+                        }
+                    ],
+                    "A_G",
+                )
+            )
         elif bestandteil_id == "datenauswahl" and neue_felder:
             informationen.append(
                 _information(
@@ -199,6 +218,32 @@ def test_build_report_data_projiziert_neue_felder_ohne_k_stern_mutation() -> Non
         == 120.0
     )
     assert len(report["modellbestandteile"]) == 16
+
+
+def test_etl_abstraktionen_sind_strukturiert_und_in_html_und_pdf_ausgebbar(
+    tmp_path: Path,
+) -> None:
+    report = build_report_data(_k_stern())
+
+    assert report["vereinfachungen"]["etl_abstraktionen"] == [
+        {
+            "quellspalte": "Von",
+            "vergleichsart": "Beginnt mit",
+            "suchwert_muster": "HRL-04-",
+            "vorher_muster": "HRL-04-*",
+            "abstraktionswert": "HRL-04",
+            "zielspalte": "Von_aggregiert",
+            "betroffene_beobachtungen": 185,
+            "originalwerte_erhalten": True,
+        }
+    ]
+    html = render_report_html(report)
+    assert "Regelbasierte ETL-Abstraktionen" in html
+    assert "HRL-04-*" in html
+    assert "185 Beobachtungen" in html
+
+    ziel = render_report_pdf(report, tmp_path / "abstraktionen.pdf")
+    assert ziel.read_bytes().startswith(b"%PDF-")
 
 
 def test_report_nutzt_potenzielle_wartezeiten_aus_datenauswahl_ohne_warteschlange(

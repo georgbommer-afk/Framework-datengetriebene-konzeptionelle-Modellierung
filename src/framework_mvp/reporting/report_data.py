@@ -612,6 +612,17 @@ def build_report_data(
     if not isinstance(schwellwert_auswirkung, Mapping):
         schwellwert_auswirkung = {}
 
+    etl_abstraktionen = _info_wert(
+        annahmen,
+        "strukturierte_ergebnisse.vereinfachungen.etl_abstraktionen",
+        [],
+    )
+    if not isinstance(etl_abstraktionen, list):
+        etl_abstraktionen = []
+    etl_abstraktionen = [
+        _normalisieren(wert) for wert in etl_abstraktionen if isinstance(wert, Mapping)
+    ]
+
     datenquellen = _info_werte_mit_praefix(daten, "datenquellen[")
     profile = [_profil_aufbereiten(wert) for wert in _info_werte_mit_praefix(daten, "profile[")]
 
@@ -822,6 +833,9 @@ def build_report_data(
             ),
             "prozessnotation_anzeige": _anzeigetext(_info_wert(annahmen, "prozessnotation")),
             "schwellwert_auswirkung": _normalisieren(schwellwert_auswirkung),
+        },
+        "vereinfachungen": {
+            "etl_abstraktionen": etl_abstraktionen,
         },
         "daten": {
             **_abschnitt_metadaten(k_stern, daten),

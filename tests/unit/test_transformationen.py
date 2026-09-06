@@ -15,6 +15,7 @@ from framework_mvp.application.transformation import (
     pruefe_join,
     transformiere_textwerte,
 )
+from framework_mvp.application.transformations_service import TransformationsService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     FRAMEWORKKONFORME_TRANSFORMATIONSARTEN,
@@ -49,6 +50,7 @@ def test_frameworkkonforme_transformationsarten_sind_explizit_begrenzt() -> None
     assert FRAMEWORKKONFORME_TRANSFORMATIONSARTEN == (
         Transformationsart.DATENTYP_KONVERTIEREN,
         Transformationsart.WERTE_ERSETZEN,
+        Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN,
         Transformationsart.EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN,
         Transformationsart.VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN,
         Transformationsart.ZEILEN_LOESCHEN,
@@ -171,7 +173,7 @@ def test_werte_ersetzen_behandelt_einzelwerte_platzhalter_und_ausreisser(
         ),
     ],
 )
-def test_regelbasierte_wertersetzung_ueberschreibt_die_quellspalte(
+def test_regelbasierte_abstraktion_ueberschreibt_die_quellspalte(
     vergleichsart: Wertevergleichsart,
     suchwert: str,
     erwartet: list[str],
@@ -188,7 +190,7 @@ def test_regelbasierte_wertersetzung_ueberschreibt_die_quellspalte(
         }
     )
     schritt = _schritt(
-        Transformationsart.WERTE_ERSETZEN,
+        Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN,
         ("ort",),
         {
             "vergleichsart": vergleichsart.value,
@@ -204,10 +206,10 @@ def test_regelbasierte_wertersetzung_ueberschreibt_die_quellspalte(
     assert list(ergebnis.daten.columns) == ["ort"]
 
 
-def test_regelbasierte_wertersetzung_schreibt_in_neue_spalte_und_bewahrt_original() -> None:
+def test_regelbasierte_abstraktion_schreibt_in_neue_spalte_und_bewahrt_original() -> None:
     daten = pd.DataFrame({"Von": ["HRL-04-024-21-10", "SRM-01", None]})
     schritt = _schritt(
-        Transformationsart.WERTE_ERSETZEN,
+        Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN,
         ("Von",),
         {
             "vergleichsart": Wertevergleichsart.BEGINNT_MIT.value,
@@ -233,7 +235,7 @@ def test_textregeln_bewahren_fehlwerte_leerstrings_und_nichttext_in_gemischter_s
         {"gemischt": pd.Series([None, pd.NA, "", 123, "123-A", "ABC"], dtype="object")}
     )
     schritt = _schritt(
-        Transformationsart.WERTE_ERSETZEN,
+        Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN,
         ("gemischt",),
         {
             "vergleichsart": Wertevergleichsart.BEGINNT_MIT.value,
@@ -251,7 +253,7 @@ def test_textregeln_bewahren_fehlwerte_leerstrings_und_nichttext_in_gemischter_s
 
 def test_ungueltiger_regex_wird_als_verstaendlicher_domaenenfehler_gemeldet() -> None:
     schritt = _schritt(
-        Transformationsart.WERTE_ERSETZEN,
+        Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN,
         ("ort",),
         {
             "vergleichsart": Wertevergleichsart.REGULAERER_AUSDRUCK.value,
@@ -265,9 +267,10 @@ def test_ungueltiger_regex_wird_als_verstaendlicher_domaenenfehler_gemeldet() ->
 
 
 @pytest.mark.parametrize(
-    ("parameter", "meldung"),
+    ("art", "parameter", "meldung"),
     [
         (
+            Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN,
             {
                 "vergleichsart": Wertevergleichsart.ENTHAELT.value,
                 "suchwert": "",
@@ -276,6 +279,7 @@ def test_ungueltiger_regex_wird_als_verstaendlicher_domaenenfehler_gemeldet() ->
             "darf nicht leer sein",
         ),
         (
+            Transformationsart.WERTE_ERSETZEN,
             {
                 "gesuchte_werte": ["ABC"],
                 "ersatzwert": "x",
@@ -285,6 +289,7 @@ def test_ungueltiger_regex_wird_als_verstaendlicher_domaenenfehler_gemeldet() ->
             "bereits vorhanden",
         ),
         (
+            Transformationsart.WERTE_ERSETZEN,
             {
                 "gesuchte_werte": ["ABC"],
                 "ersatzwert": "x",
@@ -296,17 +301,17 @@ def test_ungueltiger_regex_wird_als_verstaendlicher_domaenenfehler_gemeldet() ->
     ],
 )
 def test_wertersetzung_validiert_suchwert_und_zielspalte(
-    parameter: dict[str, object], meldung: str
+    art: Transformationsart, parameter: dict[str, object], meldung: str
 ) -> None:
-    schritt = _schritt(Transformationsart.WERTE_ERSETZEN, ("ort",), parameter)
+    schritt = _schritt(art, ("ort",), parameter)
 
     with pytest.raises(Domaenenfehler, match=meldung):
         fuehre_transformationsplan_aus(pd.DataFrame({"ort": ["ABC"]}), _plan(schritt))
 
 
-def test_wertersetzung_ohne_treffer_wird_in_der_pipeline_als_warnung_sichtbar() -> None:
+def test_regelbasierte_abstraktion_ohne_treffer_wird_als_warnung_sichtbar() -> None:
     schritt = _schritt(
-        Transformationsart.WERTE_ERSETZEN,
+        Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN,
         ("ort",),
         {
             "vergleichsart": Wertevergleichsart.ENTHAELT.value,
@@ -319,7 +324,77 @@ def test_wertersetzung_ohne_treffer_wird_in_der_pipeline_als_warnung_sichtbar() 
 
     assert ergebnis.daten["ort"].tolist() == ["ABC"]
     assert ergebnis.warnungen == (
-        "Die Wertersetzung hatte im aktuellen Datenstand keine Treffer.",
+        "Die regelbasierte Abstraktion hatte im aktuellen Datenstand keine Treffer.",
+    )
+
+
+def test_legacy_plan_mit_regelbasiertem_werte_ersetzen_bleibt_ausfuehrbar() -> None:
+    schritt = _schritt(
+        Transformationsart.WERTE_ERSETZEN,
+        ("Von",),
+        {
+            "vergleichsart": Wertevergleichsart.BEGINNT_MIT.value,
+            "suchwert": "HRL-04-",
+            "ersatzwert": "HRL-04",
+        },
+    )
+
+    ergebnis = fuehre_transformationsplan_aus(
+        pd.DataFrame({"Von": ["HRL-04-024", "SRM-01"]}), _plan(schritt)
+    )
+
+    assert ergebnis.daten["Von"].tolist() == ["HRL-04", "SRM-01"]
+    assert ergebnis.historie[0].ergebnis_oder_warnung == "1 Werte ersetzt"
+
+
+def test_t_dokumentiert_nur_ausgefuehrte_regelbasierte_abstraktionen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = object.__new__(TransformationsService)
+    artefakt = {
+        "transformationsplan": {
+            "schritte": [
+                {
+                    "typ": Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN.value,
+                    "betroffene_spalten": ["Von"],
+                    "parameter_json": (
+                        '{"vergleichsart":"Beginnt mit","suchwert":"HRL-04-",'
+                        '"ersatzwert":"HRL-04","zielmodus":"Neue Spalte erstellen",'
+                        '"zielspalte":"Von_aggregiert"}'
+                    ),
+                    "reihenfolge": 1,
+                    "aktiviert": True,
+                },
+                {
+                    "typ": Transformationsart.WERTE_ERSETZEN.value,
+                    "betroffene_spalten": ["Status"],
+                    "parameter_json": (
+                        '{"vergleichsart":"Exakter Wert","gesuchte_werte":["N/A"],'
+                        '"ersatzwert":"unbekannt"}'
+                    ),
+                    "reihenfolge": 2,
+                    "aktiviert": True,
+                },
+            ]
+        },
+        "transformationshistorie": [
+            {"schritt": 1, "ergebnis_oder_warnung": "185 Werte regelbasiert abstrahiert"},
+            {"schritt": 2, "ergebnis_oder_warnung": "4 Werte ersetzt"},
+        ],
+    }
+    monkeypatch.setattr(service, "_transformationsartefakt", lambda _: artefakt)
+
+    assert service.regelbasierte_abstraktionen_laden(object()) == (
+        {
+            "quellspalte": "Von",
+            "vergleichsart": "Beginnt mit",
+            "suchwert_muster": "HRL-04-",
+            "vorher_muster": "HRL-04-*",
+            "abstraktionswert": "HRL-04",
+            "zielspalte": "Von_aggregiert",
+            "betroffene_beobachtungen": 185,
+            "originalwerte_erhalten": True,
+        },
     )
 
 
