@@ -277,8 +277,7 @@ def test_projektimport_oeffnet_lokal_begrenzten_zip_upload(
     upload = next(wert for wert in app.file_uploader if wert.label == "ZIP-Projektarchiv auswählen")
     assert list(upload.proto.type) == [".zip"]
     quelle = APP.read_text(encoding="utf-8")
-    assert ".st-key-projektimport_bereich" in quelle
-    assert '[data-testid="stFileUploaderDropzoneInstructions"]' in quelle
+    assert '[data-testid="stFileUploaderDropzoneInstructions"]' not in quelle
 
 
 def _gastarchiv_exportieren(app: AppTest) -> bytes:

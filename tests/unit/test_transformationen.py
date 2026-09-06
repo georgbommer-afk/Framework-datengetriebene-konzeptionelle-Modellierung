@@ -21,6 +21,7 @@ from framework_mvp.domain.models import (
     Transformationsart,
     Transformationsplan,
     Transformationsschritt,
+    Wertevergleichsart,
 )
 
 
@@ -148,6 +149,178 @@ def test_werte_ersetzen_behandelt_einzelwerte_platzhalter_und_ausreisser(
     ergebnis = fuehre_transformationsplan_aus(daten, _plan(schritt))
     assert ergebnis.historie[0].ergebnis_oder_warnung == (f"{len(gesuchte_werte)} Werte ersetzt")
     assert all(wert not in ergebnis.daten["wert"].tolist() for wert in gesuchte_werte)
+
+
+@pytest.mark.parametrize(
+    ("vergleichsart", "suchwert", "erwartet"),
+    [
+        (
+            Wertevergleichsart.BEGINNT_MIT,
+            "HRL-04-",
+            ["HRL-04", "HRL-04", "SRM04-A", "A-SRM04-B", "bleibt"],
+        ),
+        (
+            Wertevergleichsart.ENTHAELT,
+            "SRM04",
+            ["HRL-04-024", "HRL-04-041", "SRM04", "SRM04", "bleibt"],
+        ),
+        (
+            Wertevergleichsart.REGULAERER_AUSDRUCK,
+            r"^HRL-04-.*$",
+            ["HRL-04", "HRL-04", "SRM04-A", "A-SRM04-B", "bleibt"],
+        ),
+    ],
+)
+def test_regelbasierte_wertersetzung_ueberschreibt_die_quellspalte(
+    vergleichsart: Wertevergleichsart,
+    suchwert: str,
+    erwartet: list[str],
+) -> None:
+    daten = pd.DataFrame(
+        {
+            "ort": [
+                "HRL-04-024",
+                "HRL-04-041",
+                "SRM04-A",
+                "A-SRM04-B",
+                "bleibt",
+            ]
+        }
+    )
+    schritt = _schritt(
+        Transformationsart.WERTE_ERSETZEN,
+        ("ort",),
+        {
+            "vergleichsart": vergleichsart.value,
+            "suchwert": suchwert,
+            "ersatzwert": "SRM04" if vergleichsart is Wertevergleichsart.ENTHAELT else "HRL-04",
+            "zielmodus": "Bestehende Spalte überschreiben",
+        },
+    )
+
+    ergebnis = fuehre_transformationsplan_aus(daten, _plan(schritt))
+
+    assert ergebnis.daten["ort"].tolist() == erwartet
+    assert list(ergebnis.daten.columns) == ["ort"]
+
+
+def test_regelbasierte_wertersetzung_schreibt_in_neue_spalte_und_bewahrt_original() -> None:
+    daten = pd.DataFrame({"Von": ["HRL-04-024-21-10", "SRM-01", None]})
+    schritt = _schritt(
+        Transformationsart.WERTE_ERSETZEN,
+        ("Von",),
+        {
+            "vergleichsart": Wertevergleichsart.BEGINNT_MIT.value,
+            "suchwert": "HRL-04-",
+            "ersatzwert": "HRL-04",
+            "zielmodus": "Neue Spalte erstellen",
+            "zielspalte": "Von_aggregiert",
+        },
+    )
+
+    ergebnis = fuehre_transformationsplan_aus(daten, _plan(schritt))
+
+    assert ergebnis.daten["Von"].iloc[:2].tolist() == ["HRL-04-024-21-10", "SRM-01"]
+    assert pd.isna(ergebnis.daten["Von"].iloc[2])
+    assert ergebnis.daten["Von_aggregiert"].iloc[:2].tolist() == ["HRL-04", "SRM-01"]
+    assert pd.isna(ergebnis.daten["Von_aggregiert"].iloc[2])
+    assert ergebnis.historie[0].spalten_vorher == 1
+    assert ergebnis.historie[0].spalten_nachher == 2
+
+
+def test_textregeln_bewahren_fehlwerte_leerstrings_und_nichttext_in_gemischter_spalte() -> None:
+    daten = pd.DataFrame(
+        {"gemischt": pd.Series([None, pd.NA, "", 123, "123-A", "ABC"], dtype="object")}
+    )
+    schritt = _schritt(
+        Transformationsart.WERTE_ERSETZEN,
+        ("gemischt",),
+        {
+            "vergleichsart": Wertevergleichsart.BEGINNT_MIT.value,
+            "suchwert": "123",
+            "ersatzwert": "Texttreffer",
+        },
+    )
+
+    ergebnis = fuehre_transformationsplan_aus(daten, _plan(schritt))
+
+    assert pd.isna(ergebnis.daten["gemischt"].iloc[0])
+    assert pd.isna(ergebnis.daten["gemischt"].iloc[1])
+    assert ergebnis.daten["gemischt"].iloc[2:].tolist() == ["", 123, "Texttreffer", "ABC"]
+
+
+def test_ungueltiger_regex_wird_als_verstaendlicher_domaenenfehler_gemeldet() -> None:
+    schritt = _schritt(
+        Transformationsart.WERTE_ERSETZEN,
+        ("ort",),
+        {
+            "vergleichsart": Wertevergleichsart.REGULAERER_AUSDRUCK.value,
+            "suchwert": "[",
+            "ersatzwert": "x",
+        },
+    )
+
+    with pytest.raises(Domaenenfehler, match="reguläre Ausdruck ist ungültig"):
+        fuehre_transformationsplan_aus(pd.DataFrame({"ort": ["ABC"]}), _plan(schritt))
+
+
+@pytest.mark.parametrize(
+    ("parameter", "meldung"),
+    [
+        (
+            {
+                "vergleichsart": Wertevergleichsart.ENTHAELT.value,
+                "suchwert": "",
+                "ersatzwert": "x",
+            },
+            "darf nicht leer sein",
+        ),
+        (
+            {
+                "gesuchte_werte": ["ABC"],
+                "ersatzwert": "x",
+                "zielmodus": "Neue Spalte erstellen",
+                "zielspalte": "ort",
+            },
+            "bereits vorhanden",
+        ),
+        (
+            {
+                "gesuchte_werte": ["ABC"],
+                "ersatzwert": "x",
+                "zielmodus": "Neue Spalte erstellen",
+                "zielspalte": "",
+            },
+            "darf nicht leer sein",
+        ),
+    ],
+)
+def test_wertersetzung_validiert_suchwert_und_zielspalte(
+    parameter: dict[str, object], meldung: str
+) -> None:
+    schritt = _schritt(Transformationsart.WERTE_ERSETZEN, ("ort",), parameter)
+
+    with pytest.raises(Domaenenfehler, match=meldung):
+        fuehre_transformationsplan_aus(pd.DataFrame({"ort": ["ABC"]}), _plan(schritt))
+
+
+def test_wertersetzung_ohne_treffer_wird_in_der_pipeline_als_warnung_sichtbar() -> None:
+    schritt = _schritt(
+        Transformationsart.WERTE_ERSETZEN,
+        ("ort",),
+        {
+            "vergleichsart": Wertevergleichsart.ENTHAELT.value,
+            "suchwert": "nicht vorhanden",
+            "ersatzwert": "x",
+        },
+    )
+
+    ergebnis = fuehre_transformationsplan_aus(pd.DataFrame({"ort": ["ABC"]}), _plan(schritt))
+
+    assert ergebnis.daten["ort"].tolist() == ["ABC"]
+    assert ergebnis.warnungen == (
+        "Die Wertersetzung hatte im aktuellen Datenstand keine Treffer.",
+    )
 
 
 def test_duplikate_werden_nur_als_vollstaendige_tupel_entfernt() -> None:

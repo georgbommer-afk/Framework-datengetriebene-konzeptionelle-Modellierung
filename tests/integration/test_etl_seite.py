@@ -225,6 +225,67 @@ def test_textbereinigungsformular_zeigt_allgemeine_begrenzer_und_sicheren_standa
     assert not next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
 
 
+def test_wertersetzung_zeigt_regelvorschau_und_neue_zielspalte_vor_dem_speichern() -> None:
+    anwendung = AppTest.from_string(TRANSFORMATIONS_APP).run()
+    next(e for e in anwendung.selectbox if e.label == "Transformationsart").set_value(
+        "Werte ersetzen"
+    ).run()
+    next(e for e in anwendung.selectbox if e.label == "Quellspalte").set_value("Text").run()
+    next(e for e in anwendung.selectbox if e.label == "Vergleichsart").set_value(
+        "Beginnt mit"
+    ).run()
+    next(e for e in anwendung.text_input if e.label == "Suchwert / Muster").set_value("RS ")
+    next(e for e in anwendung.text_input if e.label == "Ersatzwert").set_value("RS").run()
+    next(e for e in anwendung.selectbox if e.label == "Ziel").set_value(
+        "Neue Spalte erstellen"
+    ).run()
+    next(e for e in anwendung.text_input if e.label == "Name der Zielspalte").set_value(
+        "Text_aggregiert"
+    ).run()
+
+    assert not anwendung.exception
+    zusammenfassung = "\n".join(wert.value for wert in anwendung.info)
+    assert "Quellspalte: Text" in zusammenfassung
+    assert "Vergleichsart: Beginnt mit" in zusammenfassung
+    assert "Suchwert/Muster: RS " in zusammenfassung
+    assert "Ersatzwert: RS" in zusammenfassung
+    assert "Zielspalte: Text_aggregiert" in zusammenfassung
+    assert "Betroffene Zeilen: 1" in zusammenfassung
+    vorschau = next(
+        wert for wert in anwendung.dataframe if list(wert.value.columns) == ["Vorher", "Nachher"]
+    ).value
+    assert vorschau.to_dict(orient="records") == [
+        {"Vorher": "RS TX (abc)", "Nachher": "RS"}
+    ]
+    assert not next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
+
+
+def test_wertersetzung_meldet_ungueltigen_regex_und_keine_treffer() -> None:
+    anwendung = AppTest.from_string(TRANSFORMATIONS_APP).run()
+    next(e for e in anwendung.selectbox if e.label == "Transformationsart").set_value(
+        "Werte ersetzen"
+    ).run()
+    next(e for e in anwendung.selectbox if e.label == "Quellspalte").set_value("Text").run()
+    next(e for e in anwendung.selectbox if e.label == "Vergleichsart").set_value(
+        "Regulärer Ausdruck"
+    ).run()
+    next(e for e in anwendung.text_input if e.label == "Suchwert / Muster").set_value("[")
+    next(e for e in anwendung.text_input if e.label == "Ersatzwert").set_value("x").run()
+    next(e for e in anwendung.selectbox if e.label == "Ziel").set_value(
+        "Bestehende Spalte überschreiben"
+    ).run()
+
+    assert not anwendung.exception
+    assert any("reguläre Ausdruck ist ungültig" in wert.value for wert in anwendung.error)
+    assert next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
+
+    next(e for e in anwendung.text_input if e.label == "Suchwert / Muster").set_value(
+        r"^kein Treffer$"
+    ).run()
+    assert any("Keine Treffer" in wert.value for wert in anwendung.warning)
+    assert next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
+
+
 def test_zurueck_aus_dem_letzten_etl_abschnitt_bewahrt_den_zustand() -> None:
     anwendung = AppTest.from_string(ETL_NAVIGATION_APP).run()
     next(wert for wert in anwendung.button if wert.label == "Zurück").click().run()

@@ -30,6 +30,15 @@ class Transformationsart(StrEnum):
     TABELLEN_JOIN = "tabellen_join"
 
 
+class Wertevergleichsart(StrEnum):
+    """Vergleichsarten der allgemeinen Transformation ``Werte ersetzen``."""
+
+    EXAKTER_WERT = "Exakter Wert"
+    BEGINNT_MIT = "Beginnt mit"
+    ENTHAELT = "Enthält"
+    REGULAERER_AUSDRUCK = "Regulärer Ausdruck"
+
+
 FRAMEWORKKONFORME_TRANSFORMATIONSARTEN = (
     Transformationsart.DATENTYP_KONVERTIEREN,
     Transformationsart.WERTE_ERSETZEN,

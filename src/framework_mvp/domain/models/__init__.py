@@ -218,6 +218,7 @@ from framework_mvp.domain.models.transformation import (
     Transformationshistorie,
     Transformationsplan,
     Transformationsschritt,
+    Wertevergleichsart,
 )
 from framework_mvp.domain.models.zugriff import (
     Benutzer,
@@ -427,6 +428,7 @@ __all__ = [
     "Transformationshistorie",
     "Transformationsplan",
     "Transformationsschritt",
+    "Wertevergleichsart",
     "Vergleichsebene",
     "Vorkommensregel",
     "Zeitabweichung",

@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 import zipfile
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -21,7 +22,14 @@ from framework_mvp.application.projektarchiv_service import (
     ProjektArchivService,
 )
 from framework_mvp.domain.exceptions import ArchivKonflikt, ArchivUngueltig, ZugriffVerweigert
-from framework_mvp.domain.models import Systemtyp, Untersuchungsauftrag
+from framework_mvp.domain.models import (
+    Systemtyp,
+    Transformationsart,
+    Transformationsplan,
+    Transformationsschritt,
+    Untersuchungsauftrag,
+    Wertevergleichsart,
+)
 from framework_mvp.domain.models.zugriff import (
     Gruppenstatus,
     Kursgruppe,
@@ -30,6 +38,7 @@ from framework_mvp.domain.models.zugriff import (
     Projektzugriffsart,
     Zugriffskontext,
 )
+from framework_mvp.infrastructure.persistence.sqlite_etl_repository import SQLiteETLRepository
 from framework_mvp.infrastructure.persistence.sqlite_fortschritt_repository import (
     SQLiteFortschrittRepository,
 )
@@ -121,6 +130,42 @@ def test_gast_importiert_in_eigenen_neuen_mandanten_und_kann_wiederoeffnen(
     assert (
         ziel_workspace.basisverzeichnis / "projects" / str(projekt.projekt_id) / "raw" / "daten.csv"
     ).read_text() == "a,b\n1,2\n"
+
+
+def test_projektexport_import_bewahrt_regelbasierte_wertersetzung(tmp_path: Path) -> None:
+    projekt, kontext, service = _quelle(tmp_path)
+    schritt = Transformationsschritt.neu(
+        typ=Transformationsart.WERTE_ERSETZEN,
+        betroffene_spalten=("Von",),
+        parameter={
+            "vergleichsart": Wertevergleichsart.REGULAERER_AUSDRUCK.value,
+            "suchwert": r"^HRL-04-.*$",
+            "ersatzwert": "HRL-04",
+            "zielmodus": "Neue Spalte erstellen",
+            "zielspalte": "Von_aggregiert",
+        },
+        reihenfolge=1,
+        beschreibung="Lagerorte aggregieren",
+    )
+    plan = Transformationsplan.neu(projekt.projekt_id, (uuid4(),))
+    plan = replace(plan, schritte=(schritt,))
+    SQLiteETLRepository(tmp_path / "quelle.sqlite").plan_speichern(plan)
+
+    archiv = service.exportieren(kontext, projekt.projekt_id)
+    ziel_db = tmp_path / "ziel-mit-transformation.sqlite"
+    ziel_workspace = WorkspaceKonfiguration(tmp_path / "ziel-mit-transformation-workspace")
+    ziel_repository = SQLiteZugriffsRepository(ziel_db)
+    ziel = ProjektArchivService(
+        ziel_db,
+        ziel_workspace,
+        ziel_repository,
+        AutorisierungsService(ziel_repository),
+    )
+    ziel.importieren(kontext, archiv)
+
+    geladen = SQLiteETLRepository(ziel_db).plan_laden(plan.transformationsplan_id)
+    assert geladen is not None
+    assert geladen.schritte[0].parameter == schritt.parameter
 
 
 def test_import_bewahrt_partiellen_abschluss_und_aktuelle_position(tmp_path: Path) -> None:

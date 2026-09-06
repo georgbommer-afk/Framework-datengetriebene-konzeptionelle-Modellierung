@@ -9,6 +9,7 @@ import streamlit as st
 
 from framework_mvp.application.transformation import (
     ermittle_ersatzwert_aus_profil,
+    ermittle_wertersetzungsmaske,
     transformiere_textwerte,
     vorschau_zu_loeschender_zeilen,
     zaehle_zu_loeschende_zeilen,
@@ -21,6 +22,7 @@ from framework_mvp.domain.models import (
     Transformationsart,
     Transformationsplan,
     Transformationsschritt,
+    Wertevergleichsart,
 )
 from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.session_cleanup import folgeartefakte_zustand_invalidieren
@@ -84,78 +86,152 @@ def _wertersetzung_formular(
     daten: pd.DataFrame, profil: dict[str, Any]
 ) -> tuple[tuple[str, ...], dict[str, Any], str] | None:
     profile = _profil_spalten(profil)
-    spalte = fachliche_auswahl("Spalte", [str(name) for name in daten.columns])
-    auswahlart = fachliche_auswahl(
-        "Zu ersetzende Werte",
-        ("Einzelne konkrete Werte", "Fehlwertplatzhalter", "Potenzielle Ausreißer"),
+    spalte = fachliche_auswahl("Quellspalte", [str(name) for name in daten.columns])
+    vergleichsart = fachliche_auswahl(
+        "Vergleichsart",
+        tuple(Wertevergleichsart),
+        wert=Wertevergleichsart.EXAKTER_WERT,
+        format_func=lambda wert: wert.value,
+        help=(
+            "Bestimmt, ob vollständige Werte oder textuelle Regeln für die Ersetzung "
+            "verwendet werden."
+        ),
     )
-    if spalte is None or auswahlart is None:
-        st.info("Wählen Sie eine Spalte und die Art der zu ersetzenden Werte aus.")
+    if spalte is None or vergleichsart is None:
+        st.info("Wählen Sie eine Quellspalte und eine Vergleichsart aus.")
         return None
     spaltenprofil = profile.get(spalte, {})
     position = [str(name) for name in daten.columns].index(spalte)
     serie = cast(pd.Series, daten.iloc[:, position])
-    if auswahlart == "Einzelne konkrete Werte":
-        optionen = list(serie.dropna().drop_duplicates())
-    elif auswahlart == "Fehlwertplatzhalter":
-        zusaetzliche = tuple(profil.get("bestaetigte_zusaetzliche_platzhalter", ()))
-        optionen = [
-            wert
-            for wert in serie.dropna().drop_duplicates()
-            if _ist_platzhalter(wert, zusaetzliche)
-        ]
-    else:
-        numerisch = spaltenprofil.get("numerisch")
-        if not isinstance(numerisch, dict):
-            optionen = []
+    parameter: dict[str, Any] = {"vergleichsart": vergleichsart.value}
+    suchanzeige: str
+
+    if vergleichsart is Wertevergleichsart.EXAKTER_WERT:
+        auswahlart = fachliche_auswahl(
+            "Zu ersetzende Werte",
+            ("Einzelne konkrete Werte", "Fehlwertplatzhalter", "Potenzielle Ausreißer"),
+        )
+        if auswahlart is None:
+            st.info("Wählen Sie die Art der exakt zu ersetzenden Werte aus.")
+            return None
+        if auswahlart == "Einzelne konkrete Werte":
+            optionen = list(serie.dropna().drop_duplicates())
+        elif auswahlart == "Fehlwertplatzhalter":
+            zusaetzliche = tuple(profil.get("bestaetigte_zusaetzliche_platzhalter", ()))
+            optionen = [
+                wert
+                for wert in serie.dropna().drop_duplicates()
+                if _ist_platzhalter(wert, zusaetzliche)
+            ]
         else:
-            unten = numerisch.get("untere_ausreissergrenze")
-            oben = numerisch.get("obere_ausreissergrenze")
-            if unten is None or oben is None:
+            numerisches_profil = spaltenprofil.get("numerisch")
+            if not isinstance(numerisches_profil, dict):
                 optionen = []
             else:
-                zahlen = pd.Series(pd.to_numeric(serie, errors="coerce"), index=serie.index)
-                maske = (zahlen < unten) | (zahlen > oben)
-                optionen = list(serie.loc[maske].drop_duplicates())
-    gesuchte_werte = st.multiselect("Werte", optionen)
-    numerisch = spaltenprofil.get("numerisch")
-    kategorial = spaltenprofil.get("kategorial")
-    strategien = ["Frei definierter Wert"]
-    if isinstance(numerisch, dict):
-        strategien.extend(("Minimum", "Maximum", "Arithmetisches Mittel", "Median"))
-    if isinstance(kategorial, dict):
-        strategien.append("Häufigster Wert (Modus)")
-    strategie = fachliche_auswahl("Ersatz", strategien)
-    if strategie is None:
-        st.info("Wählen Sie eine Ersatzstrategie aus.")
-        return None
-    freier_wert: object = ""
-    if strategie == "Frei definierter Wert":
+                unten = numerisches_profil.get("untere_ausreissergrenze")
+                oben = numerisches_profil.get("obere_ausreissergrenze")
+                if unten is None or oben is None:
+                    optionen = []
+                else:
+                    zahlen = pd.Series(pd.to_numeric(serie, errors="coerce"), index=serie.index)
+                    maske = (zahlen < unten) | (zahlen > oben)
+                    optionen = list(serie.loc[maske].drop_duplicates())
+        gesuchte_werte = st.multiselect("Suchwerte", optionen)
+        numerisch = spaltenprofil.get("numerisch")
+        kategorial = spaltenprofil.get("kategorial")
+        strategien = ["Frei definierter Wert"]
         if isinstance(numerisch, dict):
-            freier_wert = st.number_input("Frei definierter Ersatzwert")
-        elif spaltenprofil.get("technischer_datentyp") == "Boolean":
-            boolescher_wert = fachliche_auswahl("Frei definierter Ersatzwert", (True, False))
-            if boolescher_wert is None:
-                st.info("Wählen Sie einen booleschen Ersatzwert aus.")
-                return None
-            freier_wert = boolescher_wert
-        else:
-            freier_wert = st.text_input("Frei definierter Ersatzwert")
-    ersatz = ermittle_ersatzwert_aus_profil(spaltenprofil, strategie, freier_wert)
-    anzahl = int(serie.isin(gesuchte_werte).to_numpy().sum())
-    serialisierbare_werte = [_jsonfaehiger_wert(wert) for wert in gesuchte_werte]
-    ersatz = _jsonfaehiger_wert(ersatz)
-    st.info(f"Betroffen: {anzahl} Beobachtungen · Ersatzwert: {ersatz!s}")
+            strategien.extend(("Minimum", "Maximum", "Arithmetisches Mittel", "Median"))
+        if isinstance(kategorial, dict):
+            strategien.append("Häufigster Wert (Modus)")
+        strategie = fachliche_auswahl("Ersatz", strategien)
+        if strategie is None:
+            st.info("Wählen Sie eine Ersatzstrategie aus.")
+            return None
+        freier_wert: object = ""
+        if strategie == "Frei definierter Wert":
+            if isinstance(numerisch, dict):
+                freier_wert = st.number_input("Frei definierter Ersatzwert")
+            elif spaltenprofil.get("technischer_datentyp") == "Boolean":
+                boolescher_wert = fachliche_auswahl("Frei definierter Ersatzwert", (True, False))
+                if boolescher_wert is None:
+                    st.info("Wählen Sie einen booleschen Ersatzwert aus.")
+                    return None
+                freier_wert = boolescher_wert
+            else:
+                freier_wert = st.text_input("Frei definierter Ersatzwert")
+        ersatz = _jsonfaehiger_wert(
+            ermittle_ersatzwert_aus_profil(spaltenprofil, strategie, freier_wert)
+        )
+        serialisierbare_werte = [_jsonfaehiger_wert(wert) for wert in gesuchte_werte]
+        parameter.update(
+            {
+                "auswahlart": auswahlart,
+                "gesuchte_werte": serialisierbare_werte,
+                "ersatzstrategie": strategie,
+                "ersatzwert": ersatz,
+            }
+        )
+        suchanzeige = ", ".join(str(wert) for wert in serialisierbare_werte) or "–"
+    else:
+        suchwert = st.text_input("Suchwert / Muster")
+        ersatz = st.text_input("Ersatzwert")
+        if not suchwert:
+            st.info("Geben Sie einen nichtleeren Suchwert beziehungsweise ein Muster ein.")
+            return None
+        parameter.update({"suchwert": suchwert, "ersatzwert": ersatz})
+        suchanzeige = suchwert
+
+    zielmodus = fachliche_auswahl(
+        "Ziel",
+        ("Bestehende Spalte überschreiben", "Neue Spalte erstellen"),
+    )
+    if zielmodus is None:
+        st.info(
+            "Wählen Sie aus, ob die Quellspalte überschrieben oder eine neue Spalte "
+            "erstellt wird."
+        )
+        return None
+    parameter["zielmodus"] = zielmodus
+    zielspalte = spalte
+    if zielmodus == "Neue Spalte erstellen":
+        zielspalte = st.text_input("Name der Zielspalte").strip()
+        if not zielspalte:
+            st.info("Geben Sie einen Namen für die neue Zielspalte an.")
+            return None
+        if zielspalte in {str(name) for name in daten.columns}:
+            st.error(f"Die Zielspalte {zielspalte} ist bereits vorhanden.")
+            return None
+        parameter["zielspalte"] = zielspalte
+
+    try:
+        treffermaske = ermittle_wertersetzungsmaske(serie, parameter)
+    except Domaenenfehler as fehler:
+        st.error(str(fehler))
+        return None
+    anzahl = int(treffermaske.sum())
+    parameter["betroffene_beobachtungen"] = anzahl
+    st.info(
+        f"Quellspalte: {spalte} · Vergleichsart: {vergleichsart.value} · "
+        f"Suchwert/Muster: {suchanzeige} · Ersatzwert: {ersatz!s} · "
+        f"Zielspalte: {zielspalte} · Betroffene Zeilen: {anzahl}"
+    )
+    if anzahl == 0:
+        st.warning("Keine Treffer: Die Transformation kann so nicht angewendet werden.")
+        return None
+
+    vorher = serie.loc[treffermaske].head(5).reset_index(drop=True)
+    nachher = pd.Series([ersatz] * len(vorher), dtype="object")
+    st.write("**Beispielhafte Änderungen (vorher → nachher)**")
+    st.dataframe(
+        pd.DataFrame({"Vorher": vorher, "Nachher": nachher}),
+        hide_index=True,
+        width="stretch",
+    )
     return (
         (spalte,),
-        {
-            "auswahlart": auswahlart,
-            "gesuchte_werte": serialisierbare_werte,
-            "ersatzstrategie": strategie,
-            "ersatzwert": ersatz,
-            "betroffene_beobachtungen": anzahl,
-        },
-        f"{anzahl} Werte in {spalte} ersetzen",
+        parameter,
+        f"{anzahl} Werte in {spalte} nach {vergleichsart.value} ersetzen ({zielspalte})",
     )
 
 

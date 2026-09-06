@@ -21,6 +21,7 @@ from framework_mvp.domain.models import (
     Transformationsschritt,
     Trennzeichenwahl,
     Untersuchungsauftrag,
+    Wertevergleichsart,
 )
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
 from framework_mvp.infrastructure.persistence.sqlite_datenquelle_repository import (
@@ -159,6 +160,44 @@ def test_arbeitsstand_bleibt_ueber_neue_serviceinstanz_vollstaendig(tmp_path: Pa
         check_dtype=False,
     )
     assert len(service.transformationshistorie(neu_geladener_plan)) == 1
+
+
+def test_regelbasierte_wertersetzung_wird_persistiert_und_identisch_neu_berechnet(
+    tmp_path: Path,
+) -> None:
+    service, plan = _vorbereiten(tmp_path)
+    schritt = Transformationsschritt.neu(
+        typ=Transformationsart.WERTE_ERSETZEN,
+        betroffene_spalten=("status",),
+        parameter={
+            "vergleichsart": Wertevergleichsart.BEGINNT_MIT.value,
+            "suchwert": "al",
+            "ersatzwert": "ALT",
+            "zielmodus": "Neue Spalte erstellen",
+            "zielspalte": "status_gruppe",
+        },
+        reihenfolge=1,
+        beschreibung="Statusgruppe regelbasiert ableiten",
+    )
+
+    plan, angewendet, datensatz = service.transformation_anwenden(plan, schritt, uuid4())
+    geladen = service.plan_laden(plan.transformationsplan_id)
+
+    assert geladen == plan
+    assert geladen is not None
+    assert geladen.schritte[0].parameter == schritt.parameter
+    neu_berechnet = service.vorschau(geladen)
+    pd.testing.assert_frame_equal(neu_berechnet.daten, angewendet.daten)
+    assert neu_berechnet.daten.to_dict("records") == [
+        {"id": 1, "status": "alt", "status_gruppe": "ALT"},
+        {"id": 2, "status": "alt", "status_gruppe": "ALT"},
+        {"id": 3, "status": "bleibt", "status_gruppe": "bleibt"},
+    ]
+    lineage = json.loads(
+        service._artefakte.lesen(datensatz.relativer_transformation_pfad)  # noqa: SLF001
+    )
+    parameter_json = lineage["transformationsplan"]["schritte"][0]["parameter_json"]
+    assert json.loads(parameter_json) == schritt.parameter
 
 
 def test_neuer_schritt_ergaenzt_auch_einen_legacy_gesamtstand_in_der_historie(

@@ -139,11 +139,12 @@ def _anmeldekontext() -> tuple[Zugriffskontext | None, bool]:
     return None, False
 
 
-try:
-    erstelle_bereinigungs_service(datenbankpfad, workspace).opportunistisch(limit=10)
-except Exception:
-    # Die App bleibt bei einem vorübergehenden Bereinigungsfehler benutzbar.
-    pass
+if not st.session_state.get("projektimport_startseite", False):
+    try:
+        erstelle_bereinigungs_service(datenbankpfad, workspace).opportunistisch(limit=10)
+    except Exception:
+        # Die App bleibt bei einem vorübergehenden Bereinigungsfehler benutzbar.
+        pass
 
 try:
     kontext, ist_angemeldet = _anmeldekontext()
@@ -269,18 +270,6 @@ def _projektimport_auf_startseite() -> None:
         importzustand = None
         st.session_state.pop(PROJEKTIMPORT_ZUSTAND, None)
     with st.container(key="projektimport_bereich"):
-        st.html(
-            """
-            <style>
-            .st-key-projektimport_bereich
-            [data-testid="stFileUploaderDropzoneInstructions"] small,
-            .st-key-projektimport_bereich
-            [data-testid="stFileUploaderDropzoneInstructions"] span:last-child {
-                display: none;
-            }
-            </style>
-            """
-        )
         if importzustand is None:
             upload = st.file_uploader(
                 "ZIP-Projektarchiv auswählen",

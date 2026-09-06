@@ -1,6 +1,7 @@
 # pyright: reportArgumentType=false, reportAttributeAccessIssue=false, reportCallIssue=false, reportOperatorIssue=false
 """Reine Ausführung expliziter Transformationsschritte auf Arbeitskopien."""
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,6 +14,7 @@ from framework_mvp.domain.models import (
     Transformationshistorie,
     Transformationsplan,
     Transformationsschritt,
+    Wertevergleichsart,
 )
 
 MAXIMALE_VORSCHAUZEILEN = 200
@@ -42,6 +44,52 @@ def ermittle_ersatzwert_aus_profil(
     if strategie == "Häufigster Wert (Modus)" and isinstance(kategorial, dict):
         return kategorial.get("haeufigster_wert")
     raise Domaenenfehler("Die Ersatzstrategie passt nicht zum Datentyp der Spalte.")
+
+
+def ermittle_wertersetzungsmaske(
+    spalte: pd.Series, parameter: dict[str, Any]
+) -> pd.Series:
+    """Validiert eine Wertersetzungsregel und liefert ihre Treffermaske.
+
+    Parameter älterer Pläne ohne ``vergleichsart`` bleiben exakte Vergleiche. Die
+    textuellen Vergleichsarten prüfen ausschließlich tatsächliche Textwerte, sodass
+    Zahlen und Fehlwerte in gemischt typisierten Spalten nicht implizit zu Text werden.
+    """
+    try:
+        vergleichsart = Wertevergleichsart(
+            parameter.get("vergleichsart", Wertevergleichsart.EXAKTER_WERT)
+        )
+    except ValueError as fehler:
+        raise Domaenenfehler("Die Vergleichsart der Wertersetzung ist unbekannt.") from fehler
+
+    if vergleichsart is Wertevergleichsart.EXAKTER_WERT:
+        gesuchte_werte = parameter.get("gesuchte_werte")
+        if not isinstance(gesuchte_werte, list):
+            gesuchte_werte = [parameter.get("gesuchter_wert")]
+        return spalte.isin(gesuchte_werte).fillna(False).astype(bool)
+
+    suchwert = parameter.get("suchwert", parameter.get("gesuchter_wert"))
+    if not isinstance(suchwert, str) or not suchwert:
+        raise Domaenenfehler("Der Suchwert beziehungsweise das Muster darf nicht leer sein.")
+
+    regex: re.Pattern[str] | None = None
+    if vergleichsart is Wertevergleichsart.REGULAERER_AUSDRUCK:
+        try:
+            regex = re.compile(suchwert)
+        except re.error as fehler:
+            raise Domaenenfehler(f"Der reguläre Ausdruck ist ungültig: {fehler}") from fehler
+
+    def passt(wert: object) -> bool:
+        if not isinstance(wert, str):
+            return False
+        if vergleichsart is Wertevergleichsart.BEGINNT_MIT:
+            return wert.startswith(suchwert)
+        if vergleichsart is Wertevergleichsart.ENTHAELT:
+            return suchwert in wert
+        assert regex is not None
+        return regex.search(wert) is not None
+
+    return spalte.map(passt).fillna(False).astype(bool)
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,15 +463,43 @@ def _wende_schritt_an(
             raise Domaenenfehler("Technische Zielnamen müssen eindeutig und nicht leer sein.")
         return daten.rename(columns=mapping).copy(), f"{len(mapping)} Spalten umbenannt"
     if schritt.typ is Transformationsart.WERTE_ERSETZEN:
-        gesuchte_werte = parameter.get("gesuchte_werte")
-        if not isinstance(gesuchte_werte, list):
-            gesuchte_werte = [parameter.get("gesuchter_wert")]
         ersatz = parameter.get("ersatzwert")
+        zielmodus = str(parameter.get("zielmodus", "Bestehende Spalte überschreiben"))
+        if zielmodus not in {
+            "Bestehende Spalte überschreiben",
+            "Neue Spalte erstellen",
+        }:
+            raise Domaenenfehler("Das Ziel der Wertersetzung ist unbekannt.")
+        if not schritt.betroffene_spalten:
+            raise Domaenenfehler("Für die Wertersetzung muss eine Quellspalte gewählt werden.")
+        fehlende_spalten = [
+            name for name in schritt.betroffene_spalten if name not in daten.columns
+        ]
+        if fehlende_spalten:
+            raise Domaenenfehler(
+                "Die Quellspalten sind nicht vorhanden: " + ", ".join(fehlende_spalten)
+            )
         anzahl = 0
+        if zielmodus == "Neue Spalte erstellen":
+            if len(schritt.betroffene_spalten) != 1:
+                raise Domaenenfehler(
+                    "Eine neue Zielspalte benötigt genau eine ausgewählte Quellspalte."
+                )
+            name = schritt.betroffene_spalten[0]
+            zielspalte = str(parameter.get("zielspalte", "")).strip()
+            if not zielspalte:
+                raise Domaenenfehler("Der Name der neuen Zielspalte darf nicht leer sein.")
+            if zielspalte in daten.columns:
+                raise Domaenenfehler(f"Die Zielspalte {zielspalte} ist bereits vorhanden.")
+            daten[zielspalte] = daten[name].copy(deep=True)
+            maske = ermittle_wertersetzungsmaske(daten[name], parameter)
+            anzahl = int(maske.sum())
+            daten.loc[maske, zielspalte] = ersatz
+            return daten, f"{anzahl} Werte ersetzt; Zielspalte {zielspalte} erstellt"
         for name in schritt.betroffene_spalten:
-            maske = daten[name].isin(gesuchte_werte)
+            maske = ermittle_wertersetzungsmaske(daten[name], parameter)
             anzahl += int(maske.sum())
-            daten.loc[maske.fillna(False), name] = ersatz
+            daten.loc[maske, name] = ersatz
         return daten, f"{anzahl} Werte ersetzt"
     if schritt.typ is Transformationsart.DATENTYP_KONVERTIEREN:
         fehler = 0
@@ -528,6 +604,8 @@ def fuehre_transformationsplan_aus(
         )
         if "nicht konvertierbare" in ergebnis and not ergebnis.startswith("0 "):
             warnungen.append(ergebnis)
+        if schritt.typ is Transformationsart.WERTE_ERSETZEN and ergebnis.startswith("0 Werte"):
+            warnungen.append("Die Wertersetzung hatte im aktuellen Datenstand keine Treffer.")
     return Transformationsergebnis(
         daten=daten,
         vorschau=daten.head(MAXIMALE_VORSCHAUZEILEN).copy(deep=True),
