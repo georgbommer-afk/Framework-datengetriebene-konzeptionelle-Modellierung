@@ -77,6 +77,23 @@ def _normalisieren(wert: Any) -> Any:
         return [_normalisieren(inhalt) for inhalt in wert]
     return wert
 
+REPORT_LIST_LIMIT = 20
+
+def _reportwert_begrenzen(wert: Any) -> Any:
+    """Begrenzt große Listen ausschließlich für die Reportdarstellung."""
+    if isinstance(wert, Mapping):
+        return {
+            str(name): _reportwert_begrenzen(inhalt)
+            for name, inhalt in wert.items()
+        }
+
+    if isinstance(wert, (list, tuple, set, frozenset)):
+        return [
+            _reportwert_begrenzen(inhalt)
+            for inhalt in list(wert)[:REPORT_LIST_LIMIT]
+        ]
+
+    return _normalisieren(wert)
 
 def _anzeigetext(wert: Any) -> str:
     """Liefert nur für ausdrücklich bekannte Codes eine lesbare Bezeichnung."""
@@ -471,7 +488,7 @@ def _vollstaendige_modellbestandteile(
         ergebnis.append(
             {
                 **_abschnitt_metadaten(k_stern, bestandteil),
-                "informationen": _normalisieren(_informationen(bestandteil)),
+                "informationen": _reportwert_begrenzen(_informationen(bestandteil)),
                 "menschliche_eintraege": _normalisieren(
                     bestandteil.get("menschliche_eintraege", [])
                 ),
@@ -770,7 +787,7 @@ def build_report_data(
             **_abschnitt_metadaten(k_stern, aktivitaeten),
             "sichtbare_aktivitaeten": _listenwert(
                 _info_wert(aktivitaeten, "sichtbare_aktivitaeten")
-            ),
+            )[:REPORT_LIST_LIMIT],
             "optionale_artefakte": _normalisieren(optionale_artefakte),
         },
         "warteschlangen": {
@@ -797,22 +814,36 @@ def build_report_data(
         "ressourcen": {
             **_abschnitt_metadaten(k_stern, ressourcen),
             "systemressourcen": _normalisieren(systemressourcen),
-            "event_log_ressourcen": _normalisieren(
-                zugeordnete_ressourcen or event_log_ressourcen.get("eindeutige_werte", [])
-            ),
+
+            "event_log_ressourcen": _listenwert(
+                zugeordnete_ressourcen
+                or event_log_ressourcen.get("eindeutige_werte", [])
+            )[:REPORT_LIST_LIMIT],
+
             "ressourcenattribut": _normalisieren(
-                ressourcenanalyse.get("quellspalte") or event_log_ressourcen.get("attribut")
+                ressourcenanalyse.get("quellspalte")
+                or event_log_ressourcen.get("attribut")
             ),
-            "aktivitaet_ressourcen": _normalisieren(
+
+            "aktivitaet_ressourcen": _listenwert(
                 ressourcenanalyse.get(
                     "zuordnungen",
                     event_log_ressourcen.get("aktivitaet_ressourcen", []),
                 )
+            )[:REPORT_LIST_LIMIT],
+
+            "zuordnungsmodus": _normalisieren(
+                ressourcenanalyse.get("modus")
             ),
-            "zuordnungsmodus": _normalisieren(ressourcenanalyse.get("modus")),
-            "zuordnungsherkunft": _normalisieren(ressourcenanalyse.get("herkunft")),
-            "zuordnungsbegruendung": _normalisieren(ressourcenanalyse.get("begruendung")),
-            "manuelle_aktivitaet_ressourcen": _manuelle_ressourcenzuordnungen(ressourcen),
+            "zuordnungsherkunft": _normalisieren(
+                ressourcenanalyse.get("herkunft")
+            ),
+            "zuordnungsbegruendung": _normalisieren(
+                ressourcenanalyse.get("begruendung")
+            ),
+            "manuelle_aktivitaet_ressourcen": _manuelle_ressourcenzuordnungen(
+                ressourcen
+            ),
             "ressourcenbezogene_kpis": [
                 _kpi_aufbereiten(wert)
                 for wert in _listenwert(
