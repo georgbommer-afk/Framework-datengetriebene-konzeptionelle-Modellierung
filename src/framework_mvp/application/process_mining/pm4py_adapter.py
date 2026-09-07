@@ -87,7 +87,7 @@ class Pm4pyAdapter:
     def arbeitskopie(self, daten: pd.DataFrame) -> pd.DataFrame:
         """Erzeugt eine PM4Py-kompatible Kopie und bewahrt Zusatzattribute."""
         erforderlich = {"case_id", "activity", "timestamp"}
-        fehlend = erforderlich - set(daten)
+        fehlend = {spalte for spalte in erforderlich if spalte not in daten.columns}
         if fehlend:
             raise Domaenenfehler(
                 "Dem Event Log fehlen Pflichtspalten: " + ", ".join(sorted(fehlend))
