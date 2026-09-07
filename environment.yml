@@ -1,0 +1,12 @@
+name: framework-mvp
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.14
+  - pip
+  - pango
+  - graphviz
+  - pip:
+      - -e .
