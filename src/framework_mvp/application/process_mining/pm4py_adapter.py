@@ -193,7 +193,11 @@ class Pm4pyAdapter:
                 modell_bytes = modell_pfad.read_bytes()
             else:
                 modell_pfad = basis / "modell.bpmn"
-                pm4py.write_bpmn(prozessmodell, str(modell_pfad))
+                pm4py.write_bpmn(
+                    prozessmodell,
+                    str(modell_pfad),
+                    auto_layout=False,
+                )
                 modell_bytes = modell_pfad.read_bytes()
         return Pm4pyDiscoveryErgebnis(
             DiscoveryErgebnisse(
