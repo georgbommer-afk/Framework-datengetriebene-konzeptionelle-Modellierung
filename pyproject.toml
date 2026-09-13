@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "framework-mvp"
-version = "1.2"
+version = "1.0.0"
 description = "Softwaretechnische Instanziierung eines Frameworks zur datengetriebenen Ableitung konzeptioneller Modelle."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"

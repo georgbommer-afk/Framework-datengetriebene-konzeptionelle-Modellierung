@@ -1627,6 +1627,13 @@
     <div class="technical-metadata">
 
         {{ kv(
+            "Softwareversion",
+            ("V" ~ dokument.get("softwareversion"))
+            if dokument.get("softwareversion")
+            else None
+        ) }}
+
+        {{ kv(
             "Projekt-ID",
             projekt.projekt_id
         ) }}

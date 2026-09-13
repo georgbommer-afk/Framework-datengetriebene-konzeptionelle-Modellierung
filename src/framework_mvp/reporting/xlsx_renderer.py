@@ -1208,7 +1208,10 @@ def _lineage(ws: Worksheet, report: Mapping[str, Any]) -> None:
             ("Eingabefingerabdruck", lineage.get("eingabefingerabdruck")),
             ("Entscheidungsfingerabdruck", lineage.get("entscheidungsfingerabdruck")),
             ("Gesamtprüfsumme", lineage.get("gesamtpruefsumme")),
-            ("Framework-Version", dokument.get("softwareversion")),
+            (
+                "Softwareversion",
+                f"V{dokument['softwareversion']}" if dokument.get("softwareversion") else None,
+            ),
         ),
     )
     zeile += 1

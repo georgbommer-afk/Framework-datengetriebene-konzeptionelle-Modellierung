@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 
 import framework_mvp.application.modellausgabe_service as ausgabe_modul
 import framework_mvp.reporting.xlsx_renderer as xlsx_modul
+from framework_mvp import __version__
 from framework_mvp.application.modellausgabe_service import ModellausgabeService
 from framework_mvp.application.modellvalidierung_service import ModellvalidierungService
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
@@ -516,7 +517,7 @@ def test_build_report_data_projiziert_neue_felder_ohne_k_stern_mutation() -> Non
 
 
 def test_reportgliederung_folgt_den_acht_fachlichen_abschnitten() -> None:
-    html = render_report_html(build_report_data(_k_stern()))
+    html = render_report_html(build_report_data(_k_stern(), softwareversion=__version__))
 
     for nummer, titel in (
         ("1", "Problemstellung"),
@@ -542,6 +543,8 @@ def test_reportgliederung_folgt_den_acht_fachlichen_abschnitten() -> None:
     assert "0.9975345167" not in html
     assert "12.08.2026 08:00:00 +00:00" not in html
     assert "12.08.2026 08:00:00" in html
+    assert "Softwareversion" in html
+    assert f"V{__version__}" in html
 
 
 @pytest.mark.parametrize(
@@ -764,6 +767,11 @@ def test_xlsx_renderer_erzeugt_zehn_geordnete_lesbare_arbeitsblaetter() -> None:
     assert arbeitsmappe.sheetnames == list(SHEET_NAMES)
     assert all(not blatt.sheet_view.showGridLines for blatt in arbeitsmappe.worksheets)
     assert arbeitsmappe["Übersicht"]["B6"].value == "Fördertechnik Süd"
+    nachvollziehbarkeit = arbeitsmappe["Nachvollziehbarkeit"]
+    softwareversion_zeile = next(
+        zeile for zeile in nachvollziehbarkeit.iter_rows() if zeile[0].value == "Softwareversion"
+    )
+    assert softwareversion_zeile[1].value == "V0.1.0-test"
     assert any(
         zelle.value == "Geprüft"
         for zeile in arbeitsmappe["Validierung"].iter_rows()
@@ -1052,7 +1060,7 @@ def test_service_uebergibt_identische_gemeinsame_reportdaten_an_alle_renderer(
         assert wert is k_stern
         assert metadaten == {
             "projektbezeichnung": "Fördertechnik Süd / ÄÖÜ",
-            "softwareversion": "1.2",
+            "softwareversion": __version__,
         }
         aufrufe["build"] += 1
         return {"report_data_version": REPORT_DATA_VERSION}
