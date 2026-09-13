@@ -689,6 +689,21 @@ strong {
     background: #fbfcfd;
 }
 
+.resource-assignment-table {
+    width: 100%;
+    table-layout: fixed;
+}
+
+.resource-assignment-table th:first-child,
+.resource-assignment-table td:first-child {
+    width: 32%;
+}
+
+.resource-assignment-values {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
 .technical-value {
     color: var(--text-muted);
 

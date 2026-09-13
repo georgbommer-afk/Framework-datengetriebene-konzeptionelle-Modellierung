@@ -1,7 +1,7 @@
 """Fachliche Unit-Tests der festen Zuordnung aus Tabelle 3.15."""
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -170,6 +170,19 @@ def _basis(tmp_path: Path):  # type: ignore[no-untyped-def]
     )
     strukturiert = {
         "ergebnisversion": 1,
+        "datenaufbereitung": {
+            "ausgang": "ursprüngliche Datenquelle D",
+            "transformationshistorie": [
+                {
+                    "reihenfolge": 1,
+                    "transformationsart": "Werte ersetzen",
+                    "betroffene_spalten": ["wert"],
+                    "regel": {"gesuchte_werte": [3]},
+                    "ersatz_oder_abstraktionswert": 4,
+                    "ergebnis": "aktiver Zwischendatensatz T",
+                }
+            ],
+        },
         "ressourcen": _json_dict(analysiere_ressourcen(event_log)),
         "warteschlangen_und_wartezeiten": _json_dict(analysiere_warteschlangen(event_log)),
         "zeitbezogene_datenauswahl": _json_dict(
@@ -328,6 +341,71 @@ def test_ableitung_bleibt_belegt_offen_und_schliesst_p_soll_aus(tmp_path: Path) 
     assert any(wert.bestandteil_id is ModellbestandteilId.EINGABEN for wert in offen)
 
 
+def test_tatsaechliche_schritt_7_ergebnisse_werden_ohne_zieltext_keywords_uebernommen(
+    tmp_path: Path,
+) -> None:
+    basis = _basis(tmp_path)
+    basis.projekt = replace(
+        basis.projekt,
+        untersuchungsauftrag=replace(
+            basis.projekt.untersuchungsauftrag,
+            individuelles_ziel="Bestände verstehen",
+            untersuchungszwecke=("Bestände verstehen",),
+        ),
+    )
+    basis.a_g["kpi_ergebnisse"][0] = {
+        "kpi_id": "tatsaechliche_wartezeit_aqt",
+        "bezeichnung": "Tatsächliche Wartezeit AQT",
+        "status": "fuer_spaetere_manuelle_berechnung_vorgesehen",
+        "formel": "Auftragsausführung − Belegung − Transport − Verzögerung",
+        "einheit": "s",
+        "ergebnis": None,
+    }
+    basis.a_g["conformance_checking"] = {
+        "durchgefuehrt": True,
+        "ergebnis": {"fitness": 0.95, "produzierte_tokens": 10},
+    }
+    basis.a_g["strukturierte_ergebnisse"]["performance_und_engpassanalyse"] = {
+        "dt_db_ergebnis": {
+            "dt_statistik": {"anzahl": 2, "mittelwert_sekunden": 30.0},
+            "db_statistik": None,
+        },
+        "busy_ratio_ergebnis": {
+            "ressourcenstatistiken": [{"ressource": "M1", "mittelwert_busy_ratio": 0.8}]
+        },
+    }
+
+    bestandteile, _ = leite_modellbestandteile_ab(basis)
+    ausgaben = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.AUSGABEN
+    )
+    referenzen = {wert.strukturreferenz for wert in ausgaben.informationen}
+
+    assert "kpi_ergebnisse[0]" in referenzen
+    assert "conformance_checking" in referenzen
+    assert "strukturierte_ergebnisse.performance_und_engpassanalyse" in referenzen
+
+
+def test_nicht_erzeugte_optionale_analyse_wird_nicht_als_ausgabe_erfunden(tmp_path: Path) -> None:
+    basis = _basis(tmp_path)
+    basis.a_g["conformance_checking"] = {"durchgefuehrt": False}
+    basis.a_g["strukturierte_ergebnisse"]["performance_und_engpassanalyse"] = {
+        "dt_db_konfiguration": {"fertigstellungsabweichung_aktiv": True},
+        "dt_db_ergebnis": None,
+        "busy_ratio_konfiguration": {"ressourcenspalte": "resource"},
+        "busy_ratio_ergebnis": None,
+    }
+
+    bestandteile, _ = leite_modellbestandteile_ab(basis)
+    ausgaben = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.AUSGABEN
+    )
+    referenzen = {wert.strukturreferenz for wert in ausgaben.informationen}
+
+    assert "conformance_checking" not in referenzen
+    assert "strukturierte_ergebnisse.performance_und_engpassanalyse" not in referenzen
+
+
 def test_etl_abstraktion_wird_aus_a_g_als_vereinfachung_uebernommen(tmp_path: Path) -> None:
     basis = _basis(tmp_path)
     abstraktion = {
@@ -340,28 +418,85 @@ def test_etl_abstraktion_wird_aus_a_g_als_vereinfachung_uebernommen(tmp_path: Pa
         "betroffene_beobachtungen": 185,
         "originalwerte_erhalten": True,
     }
-    basis.a_g["strukturierte_ergebnisse"]["vereinfachungen"] = {
-        "etl_abstraktionen": [abstraktion]
-    }
+    basis.a_g["strukturierte_ergebnisse"]["vereinfachungen"] = {"etl_abstraktionen": [abstraktion]}
 
     bestandteile, _ = leite_modellbestandteile_ab(basis)
 
     vereinfachungen = next(
-        wert
-        for wert in bestandteile
-        if wert.bestandteil_id is ModellbestandteilId.VEREINFACHUNGEN
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.VEREINFACHUNGEN
     )
     etl = next(
         wert
         for wert in vereinfachungen.informationen
-        if wert.strukturreferenz
-        == "strukturierte_ergebnisse.vereinfachungen.etl_abstraktionen"
+        if wert.strukturreferenz == "strukturierte_ergebnisse.vereinfachungen.etl_abstraktionen"
     )
     assert etl.herkunftsartefakt is Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G
     assert etl.wert == [abstraktion]
     assert any(
         wert.strukturreferenz == "discovery_ergebnisse_a_d.schwellwert_k.auswirkung"
         for wert in vereinfachungen.informationen
+    )
+
+
+def test_bestaetigte_start_zu_start_zeitspanne_geht_in_datenauswahl_und_vereinfachung(
+    tmp_path: Path,
+) -> None:
+    basis = _basis(tmp_path)
+    zeitdaten = basis.a_g["strukturierte_ergebnisse"]["zeitbezogene_datenauswahl"]
+    zeitdaten["vereinfachte_zeitspannen_bestaetigt"] = True
+    zeitdaten["vereinfachungsentscheidung"] = "Start-zu-Start gemeinsam übernehmen"
+    zeitdaten["vereinfachte_zeitspannen"] = [
+        {
+            "von_aktivitaet": "A",
+            "zu_aktivitaet": "B",
+            "statistik": {
+                "anzahl": 2,
+                "mittelwert_sekunden": 600.0,
+                "median_sekunden": 600.0,
+            },
+        }
+    ]
+
+    bestandteile, _ = leite_modellbestandteile_ab(basis)
+    datenauswahl = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.DATENAUSWAHL
+    )
+    datenauswahl_info = next(
+        wert.wert
+        for wert in datenauswahl.informationen
+        if wert.strukturreferenz == "strukturierte_ergebnisse.zeitbezogene_datenauswahl"
+    )
+    vereinfachungen = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.VEREINFACHUNGEN
+    )
+
+    assert datenauswahl_info["vereinfachte_zeitspannen"][0]["statistik"]["anzahl"] == 2
+    assert any(
+        wert.strukturreferenz.endswith("vereinfachte_zeitspannen")
+        for wert in vereinfachungen.informationen
+    )
+
+
+def test_transformationshistorie_wird_datenauswahl_und_nicht_eingaben_zugeordnet(
+    tmp_path: Path,
+) -> None:
+    bestandteile, _ = leite_modellbestandteile_ab(_basis(tmp_path))
+    datenauswahl = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.DATENAUSWAHL
+    )
+    eingaben = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.EINGABEN
+    )
+
+    eintrag = next(
+        wert
+        for wert in datenauswahl.informationen
+        if wert.strukturreferenz == "strukturierte_ergebnisse.datenaufbereitung"
+    )
+    assert eintrag.wert["transformationshistorie"][0]["ergebnis"] == ("aktiver Zwischendatensatz T")
+    assert not any(
+        wert.strukturreferenz == "strukturierte_ergebnisse.datenaufbereitung"
+        for wert in eingaben.informationen
     )
 
 
@@ -373,13 +508,11 @@ def test_menschliche_entscheidungen_steuern_k_und_o(tmp_path: Path) -> None:
             wert.bestandteil_id,
             (
                 FachlicheEntscheidungsart.OFFEN_UNSICHER
-                if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
-                or not wert.informationen
+                if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN or not wert.informationen
                 else FachlicheEntscheidungsart.UEBERNEHMEN
             ),
             "Aktivitäten müssen fachlich geprüft werden."
-            if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
-            or not wert.informationen
+            if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN or not wert.informationen
             else "",
             jetzt,
         )
@@ -632,7 +765,7 @@ def test_potenzielle_wartezeiten_werden_aus_a_g_uebernommen_ohne_neuberechnung(
     )
 
 
-def test_nullwartezeit_bleibt_gueltig_negative_und_fehlende_werden_ausgeschlossen(
+def test_nur_positive_wartezeit_bleibt_gueltig_null_negative_und_fehlende_entfallen(
     tmp_path: Path,
 ) -> None:
     basis = _basis(tmp_path)
@@ -683,7 +816,10 @@ def test_nullwartezeit_bleibt_gueltig_negative_und_fehlende_werden_ausgeschlosse
         for wert in datenauswahl.informationen
         if wert.strukturreferenz == "strukturierte_ergebnisse.zeitbezogene_datenauswahl"
     )
-    assert analyse["potenzielle_wartezeiten"][0]["statistik"]["median_sekunden"] == 0.0
+    assert analyse["potenzielle_wartezeiten"] == []
+    struktur = basis.a_g["strukturierte_ergebnisse"]["warteschlangen_und_wartezeiten"]
+    assert struktur["anzahl_ueberlappungen"] == 1
+    assert struktur["ausgeschlossene_nicht_auswertbare_werte"] == 2
     assert any(
         wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
         and "keine explizit bestätigte Warteschlange" in wert.begruendung

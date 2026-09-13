@@ -11,7 +11,7 @@ import streamlit as st
 
 from framework_mvp.application.ergebnisaggregation import KPI_DEFINITIONEN
 from framework_mvp.application.loesch_service import LoeschService
-from framework_mvp.application.projekt_service import ProjektService
+from framework_mvp.application.projekt_service import ProjektService, ist_reine_kpi_aenderung
 from framework_mvp.application.transformations_service import TransformationsService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.kataloge import (
@@ -44,10 +44,12 @@ from framework_mvp.infrastructure.exceptions import NichtUnterstuetzteSchemavers
 from framework_mvp.ui.fortschritt import unterschritte_fuer
 from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import (
+    framework_bereich_oeffnen,
     schritt_abschliessen_und_weiter,
     zeige_unterschritt_navigation,
 )
 from framework_mvp.ui.session_cleanup import (
+    ergebnisaggregation_zustand_invalidieren,
     projekt_zustand_bereinigen,
     zwischendatensatz_zustand_bereinigen,
 )
@@ -711,7 +713,7 @@ def _schritt_auswertungen(daten: dict[str, Any]) -> None:
         "Die Auswahl beschreibt den Analysebedarf. Ob eine Kennzahl berechnet werden "
         "kann, wird später anhand der verfügbaren Ereignisdaten geprüft."
     )
-    kandidaten = leite_kpi_kandidaten_ab(tuple(daten["zielgroessen"]))
+    kandidaten = leite_kpi_kandidaten_ab(tuple(daten["zielgroessen"]), daten["systemtyp"])
     gueltige_ids = {kandidat.kpi_id for kandidat in kandidaten}
     gewaehlt = set(daten["kpis"]) & gueltige_ids
     kopf = st.columns((3, 3, 3, 1))
@@ -856,7 +858,10 @@ def _schritt_auftrag(daten: dict[str, Any]) -> None:
     ]
     if individuelle_zwecke:
         st.markdown("**Individueller Untersuchungszweck:** " + ", ".join(individuelle_zwecke))
-    kandidaten = {k.zielgroesse: k for k in leite_kpi_kandidaten_ab(tuple(daten["zielgroessen"]))}
+    kandidaten = {
+        k.zielgroesse: k
+        for k in leite_kpi_kandidaten_ab(tuple(daten["zielgroessen"]), daten["systemtyp"])
+    }
     ausgewaehlte_kpis = set(daten["kpis"])
     if daten["zielgroessen"]:
         st.markdown("**Ausgewählte logistische Zielgrößen und KPI-Kandidaten:**")
@@ -924,7 +929,7 @@ def _speichern(
     service: ProjektService,
     projekt: Projekt | None,
     daten: dict[str, Any],
-) -> Projekt | None:
+) -> tuple[Projekt, bool] | None:
     try:
         fehlende_pflichtangaben = [
             label
@@ -948,6 +953,11 @@ def _speichern(
                 "Problemstellung, Systemgrenze und mindestens ein "
                 "Untersuchungszweck müssen ausgefüllt sein."
             )
+        kpi_neukonfiguration = bool(
+            projekt is not None
+            and ist_reine_kpi_aenderung(projekt.untersuchungsauftrag, auftrag)
+            and st.session_state.get("aktuelle_analyse_id")
+        )
         if projekt is None:
             gespeichert = service.projekt_anlegen(
                 bezeichnung=daten["bezeichnung"],
@@ -976,7 +986,9 @@ def _speichern(
     st.session_state.wizard_entwurf = _entwurf_aus_projekt(gespeichert)
     st.session_state.wizard_entwurf_projekt_id = str(gespeichert.projekt_id)
     st.session_state.aktuelles_projekt_id = str(gespeichert.projekt_id)
-    return gespeichert
+    if kpi_neukonfiguration:
+        ergebnisaggregation_zustand_invalidieren(cast("MutableMapping[str, Any]", st.session_state))
+    return gespeichert, kpi_neukonfiguration
 
 
 def _navigation(
@@ -997,9 +1009,15 @@ def _navigation(
         if schritt < len(SCHRITTE):
             st.session_state.wizard_schritt = schritt + 1
             return
-        gespeichert = _speichern(service, projekt, daten)
-        if gespeichert is not None:
-            schritt_abschliessen_und_weiter(aktueller_schritt=1, projekt_id=gespeichert.projekt_id)
+        speicherergebnis = _speichern(service, projekt, daten)
+        if speicherergebnis is not None:
+            gespeichert, kpi_neukonfiguration = speicherergebnis
+            if kpi_neukonfiguration:
+                framework_bereich_oeffnen(schritt=7, projekt_id=gespeichert.projekt_id)
+            else:
+                schritt_abschliessen_und_weiter(
+                    aktueller_schritt=1, projekt_id=gespeichert.projekt_id
+                )
 
     zeige_unterschritt_navigation(
         aktueller_unterschritt=schritt,

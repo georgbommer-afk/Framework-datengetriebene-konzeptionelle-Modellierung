@@ -141,7 +141,7 @@ class QualityGateStatus(StrEnum):
     AUTOMATISCHER_MANGEL = "automatisch festgestellter Mangel"
     FACHLICHE_BESTAETIGUNG_ERFORDERLICH = "fachliche Bestätigung erforderlich"
     FACHLICH_ALS_MANGEL_BEWERTET = "fachlich als Mangel bewertet"
-    FACHLICH_BEGRUENDET_KEIN_MANGEL = "fachlich begründet kein Mangel"
+    FACHLICH_BEGRUENDET_KEIN_MANGEL = "fachlich bestätigt: kein Änderungsbedarf"
     NICHT_ANWENDBAR = "nicht anwendbar"
 
 
@@ -161,7 +161,7 @@ class Freigabestatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class FachlicheEntscheidung:
-    """Begründete menschliche Bewertung genau eines Quality-Gate-Kriteriums."""
+    """Menschliche Bewertung mit optionaler Anmerkung zu einem Gate-Kriterium."""
 
     kriterium_id: str
     ist_mangel: bool
@@ -171,12 +171,15 @@ class FachlicheEntscheidung:
     def __post_init__(self) -> None:
         object.__setattr__(self, "kriterium_id", self.kriterium_id.strip())
         object.__setattr__(self, "begruendung", self.begruendung.strip())
-        if not self.kriterium_id or not self.begruendung:
-            raise Domaenenfehler(
-                "Eine fachliche Bewertung benötigt Kriterium und kurze Begründung."
-            )
+        if not self.kriterium_id:
+            raise Domaenenfehler("Eine fachliche Bewertung benötigt ein Kriterium.")
         if self.ruecksprung_schritt is not None and not 1 <= self.ruecksprung_schritt <= 4:
             raise Domaenenfehler("Eine fachliche Bewertung kann nur zu Schritt 1 bis 4 führen.")
+
+    @property
+    def anmerkung(self) -> str:
+        """Bietet den bisherigen Persistenzwert fachlich als optionale Anmerkung an."""
+        return self.begruendung
 
 
 @dataclass(frozen=True, slots=True)

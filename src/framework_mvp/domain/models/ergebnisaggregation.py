@@ -20,6 +20,14 @@ class KpiStatus(StrEnum):
 
     BERECHNET = "berechnet"
     NICHT_BERECHENBAR = "nicht_berechenbar"
+    FUER_SPAETERE_MANUELLE_BERECHNUNG = "fuer_spaetere_manuelle_berechnung_vorgesehen"
+
+
+class KpiBehandlungsart(StrEnum):
+    """Bewusste Entscheidung zur Behandlung einer in U gewählten Kennzahl."""
+
+    AUTOMATISCH_BERECHNEN = "automatisch_berechnen"
+    SPAETER_MANUELL_BERECHNEN = "spaeter_manuell_berechnen"
 
 
 class StrukturiertesErgebnisStatus(StrEnum):
@@ -69,6 +77,7 @@ class Operandentyp(StrEnum):
     MITTELWERT = "mittelwert"
     MESSWERTE = "messwerte"
     ZEITDIFFERENZ_SUMME = "zeitdifferenz_summe"
+    EINDEUTIGER_WERT = "eindeutiger_wert"
 
 
 class Profilkennzahltyp(StrEnum):
@@ -180,7 +189,7 @@ class ProfilkennzahlReferenz:
             Profilkennzahltyp.ARITHMETISCHES_MITTEL: "Arithmetisches Mittel",
             Profilkennzahltyp.SUMME: "Summe",
             Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR: (
-                "Absolute Häufigkeit eines Indikators"
+                "Summe der Indikatorfunktion (absolute Häufigkeit)"
             ),
             Profilkennzahltyp.ZEITDIFFERENZ_SUMME: "Summe von Zeitdifferenzen",
         }[self.kennzahltyp]
@@ -236,12 +245,20 @@ class KpiKonfiguration:
     bezugsmenge: str = ""
     direkte_profilreferenz: str = ""
     direkte_profilkennzahl: ProfilkennzahlReferenz | None = None
+    behandlungsart: KpiBehandlungsart = KpiBehandlungsart.AUTOMATISCH_BERECHNEN
 
     def __post_init__(self) -> None:
         if self.direkte_profilreferenz and self.direkte_profilkennzahl is not None:
             raise Domaenenfehler(
                 "Eine KPI darf nicht gleichzeitig eine alte und eine strukturierte direkte "
                 "Profilreferenz verwenden."
+            )
+        if self.behandlungsart is KpiBehandlungsart.SPAETER_MANUELL_BERECHNEN and (
+            self.zuordnungen or self.direkte_profilreferenz or self.direkte_profilkennzahl
+        ):
+            raise Domaenenfehler(
+                "Eine für später vorgesehene KPI darf keine automatische Operandenzuordnung "
+                "enthalten."
             )
 
 
@@ -264,6 +281,7 @@ class KpiErgebnis:
     ergebnis: float | None
     fehlende_voraussetzungen: tuple[str, ...] = ()
     definitionsversion: int = 1
+    behandlungsart: KpiBehandlungsart = KpiBehandlungsart.AUTOMATISCH_BERECHNEN
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,6 +378,15 @@ class PotenzielleWartezeit:
 
 
 @dataclass(frozen=True, slots=True)
+class VereinfachteZeitspanne:
+    """Bestätigte Start-zu-Start-Spanne ohne fachliche Zerlegung in Teilzeiten."""
+
+    von_aktivitaet: str
+    zu_aktivitaet: str
+    statistik: RobusteZeitstatistik
+
+
+@dataclass(frozen=True, slots=True)
 class Aktivitaetsbearbeitungszeit:
     """Bearbeitungszeit einer Aktivität aus kanonischem Start und Ende."""
 
@@ -445,6 +472,8 @@ class ZwischenankunftszeitErgebnis:
     ausschlussgruende: dict[str, int]
     lineage: dict[str, Any]
     berechnungsregel: str
+    begruendung: str = ""
+    anzahl_entitaeten: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -465,6 +494,10 @@ class ZeitbezogeneDatenauswahlErgebnis:
     ausgeschlossene_nicht_auswertbare_bearbeitungszeiten: int
     begruendung: str = ""
     ergebnisversion: int = 2
+    system_zwischenankunftszeit: ZwischenankunftszeitErgebnis | None = None
+    vereinfachte_zeitspannen: tuple[VereinfachteZeitspanne, ...] = ()
+    vereinfachte_zeitspannen_bestaetigt: bool = False
+    vereinfachungsentscheidung: str = ""
 
     @property
     def uebergangswartezeiten(self) -> tuple[PotenzielleWartezeit, ...]:
@@ -474,6 +507,8 @@ class ZeitbezogeneDatenauswahlErgebnis:
     @property
     def zwischenankunftszeit(self) -> RobusteZeitstatistik | None:
         """Kompatibler Lesezugriff nur bei genau einem definierten Strom."""
+        if self.system_zwischenankunftszeit is not None:
+            return self.system_zwischenankunftszeit.statistik
         if len(self.zwischenankunftszeiten) != 1:
             return None
         return self.zwischenankunftszeiten[0].statistik
@@ -481,6 +516,8 @@ class ZeitbezogeneDatenauswahlErgebnis:
     @property
     def ankunftsregel(self) -> str:
         """Kompatibler Lesezugriff; neue Artefakte speichern Regeln je Strom."""
+        if self.system_zwischenankunftszeit is not None:
+            return self.system_zwischenankunftszeit.berechnungsregel
         if len(self.zwischenankunftszeiten) != 1:
             return "Kein eindeutig einzelner Ankunftsstrom bestätigt."
         return self.zwischenankunftszeiten[0].berechnungsregel

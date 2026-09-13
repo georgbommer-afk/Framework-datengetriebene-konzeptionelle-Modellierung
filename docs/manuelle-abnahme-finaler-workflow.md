@@ -16,12 +16,15 @@ python -m streamlit run streamlit_app.py
 1. Ein Projekt anlegen und Schritt 1 abschließen. In Schritt 2 eine CSV- oder XLSX-Datei
    importieren und als Ausgangsdaten verwenden.
 2. `Zeilen löschen` wählen. Vor dem Anwenden müssen Trefferzahl, Beispielzeilen und erwartete
-   Restzeilenzahl sichtbar sein. `Transformation anwenden` muss Plan, Ergebnis, Profil und
-   Vorschau in einem Durchgang aktualisieren.
+   Restzeilenzahl sichtbar sein. `Transformation anwenden` muss Plan, Profil und Vorschau in einem
+   Durchgang aktualisieren, darf aber noch kein T-Artefakt erzeugen. Einen von drei angelegten
+   Schritten entfernen und prüfen, dass die verbleibenden Schritte neu nummeriert werden.
 3. Eine zweite Transformation anwenden, zu einem späteren Schritt navigieren und anschließend in
    Schritt 2 zurückkehren. Beide Transformationen müssen chronologisch sichtbar sein; die zweite
-   Transformation muss auf dem ersten Zwischenstand aufbauen. Folgeartefakte müssen als neu zu
-   erzeugen gelten und der Fortschritt muss auf Schritt 2 zurückgesetzt sein.
+   Transformation muss gemeinsam mit dem gesamten Plan aus Raw neu berechnet werden. Vor dem
+   erneuten Abschluss müssen das aktive T und die Folgeartefakte gültig bleiben. Ein wirkungsloser
+   Planentwurf muss beim Abschluss das bestehende T wiederverwenden; erst ein inhaltlich geändertes
+   Ergebnis darf T ersetzen, Folgeartefakte invalidieren und den Fortschritt zurücksetzen.
 4. Die Schritte 3 bis 10 mit den fachlich erforderlichen Eingaben durchlaufen. In Schritt 6 muss
    `DFG und Prozessmodell berechnen`, im Ergebnis-Unterschritt prüfen und erst mit
    `Weiter zu Schritt 7: Ergebnisse aggregieren` in Schritt 7

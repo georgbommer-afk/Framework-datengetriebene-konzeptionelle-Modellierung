@@ -10,6 +10,7 @@ from framework_mvp.domain.kataloge import (
     ERZEUGNISSTRUKTURTYP_BEZEICHNUNGEN,
     GESTALT_DER_GUETER_BEZEICHNUNGEN,
     INTRALOGISTIKSPEZIFISCHE_MERKMALE,
+    KPI_MATRIX,
     MATERIALFLUSSKONTINUITAET_BEZEICHNUNGEN,
     PRODUKTIONSSPEZIFISCHE_MERKMALE,
     SYSTEMTYP_BEZEICHNUNGEN,
@@ -58,12 +59,16 @@ def test_zielgroessen_und_ids_sind_stabil_und_mehrfach_waehlbar() -> None:
 
 def test_kpis_werden_abgeleitet_und_kontrolliert_bereinigt() -> None:
     """Entfernte Zielgrößen entfernen nicht mehr passende KPI-IDs."""
-    kandidaten = leite_kpi_kandidaten_ab((LogistischeZielgroesse.DURCHLAUFZEIT,))
+    kandidaten = leite_kpi_kandidaten_ab(
+        (LogistischeZielgroesse.DURCHLAUFZEIT,), Systemtyp.INTRALOGISTIK
+    )
     assert [(k.kpi_id, k.bezeichnung) for k in kandidaten] == [
         ("mittlere_dlz_wareneingang", "Mittlere DLZ Wareneingang")
     ]
     assert bereinige_kpi_auswahl(
-        (LogistischeZielgroesse.DURCHLAUFZEIT,), ("gesamtdurchlaufzeit",)
+        (LogistischeZielgroesse.DURCHLAUFZEIT,),
+        ("gesamtdurchlaufzeit",),
+        Systemtyp.INTRALOGISTIK,
     ) == ("mittlere_dlz_wareneingang",)
 
 
@@ -278,26 +283,84 @@ def test_vier_zielgruppen_enthalten_je_vier_korrekte_zielgroessen() -> None:
     assert len(ZIELGROESSEN_BEZEICHNUNGEN) == 16
 
 
-def test_16_zielgroessen_haben_je_genau_einen_kpi_kandidaten() -> None:
-    """A.7 bis A.10 bilden eine vollständige Eins-zu-eins-Zuordnung."""
-    kandidaten = leite_kpi_kandidaten_ab(tuple(LogistischeZielgroesse))
+@pytest.mark.parametrize(
+    ("systemtyp", "erwartete_bezeichnungen"),
+    (
+        (
+            Systemtyp.PRODUKTION,
+            (
+                "Einhaltung Lagerbandbreite",
+                "Verfügbarkeit zum Planstarttermin",
+                "Liefertreue",
+                "Mittlere Durchführungszeit",
+                "Mittlerer Durchführungszeitanteil",
+                "Tatsächliche (tats.) Wartezeit (AQT)",
+                "Tatsächliche (tats.) Transportzeit (ATT)",
+                "Mittlere Reaktionszeit",
+                "Standardabweichung der Bearbeitungszeit",
+                "Anteil regulär abgeschlossener Fälle",
+                "First Time Quality (FTQ)",
+                "Nacharbeitsquote (RR)",
+                "Nutzungseffizienz (UE)",
+                "Rüstzeitanteil",
+                "Bewertete Umschlagshäufigkeit",
+                "Mittlere Kosten der Produktionslogistik pro Produktionsauftrag",
+            ),
+        ),
+        (
+            Systemtyp.INTRALOGISTIK,
+            (
+                "Servicegrad",
+                "Bestätigungsquote Kundenwunschtermin",
+                "Liefertreue",
+                "Mittlere DLZ Warenausgang",
+                "Mittlere DLZ Wareneingang",
+                "Mittlere Wartezeit je Fördereinheit",
+                "Mittlere Transportzeit je Warensendung",
+                "Mittlere Reaktionszeit",
+                "Standardabweichung DLZ Warenausgang",
+                "Anteil regulär abgeschlossener Fälle",
+                "Lieferqualitätstreue",
+                "Reklamationsquote",
+                "Kommissionierauftragspositionen pro Mitarbeiterstunde",
+                "Setupzeit je Kommissionierliste",
+                "Bewertete Umschlagshäufigkeit",
+                "Mittlere Kosten Distributionstätigkeiten je Kommissionierauftragsposition",
+            ),
+        ),
+    ),
+)
+def test_16_zielgroessen_haben_systemspezifisch_genau_einen_kpi_kandidaten(
+    systemtyp: Systemtyp, erwartete_bezeichnungen: tuple[str, ...]
+) -> None:
+    """A.7 bis A.10 bilden je Systemtyp die vollständige Eins-zu-eins-Zuordnung."""
+    kandidaten = leite_kpi_kandidaten_ab(tuple(LogistischeZielgroesse), systemtyp)
     assert len(kandidaten) == 16
     assert len({k.zielgroesse for k in kandidaten}) == 16
-    assert [k.bezeichnung for k in kandidaten] == [
-        "Servicegrad",
-        "Verfügbarkeit zum Planstarttermin",
-        "Liefertreue",
-        "Mittlere DLZ Warenausgang",
-        "Mittlere DLZ Wareneingang",
-        "Tatsächliche (tats.) Wartezeit (AQT)",
-        "Mittlere Transportzeit je Warensendung",
-        "Mittlere Reaktionszeit",
-        "Standardabweichung DLZ Warenausgang",
-        "Anteil regulär abgeschlossener Fälle",
-        "Lieferqualitätstreue",
-        "Nacharbeitsquote (RR)",
-        "Nutzungseffizienz (UE)",
-        "Rüstzeitanteil",
-        "Bewertete Umschlagshäufigkeit",
-        "Mittlere Kosten der Produktionslogistik pro Produktionsauftrag",
-    ]
+    assert tuple(k.bezeichnung for k in kandidaten) == erwartete_bezeichnungen
+    assert tuple(k.kpi_id for k in kandidaten) == tuple(
+        KPI_MATRIX[systemtyp][ziel][0] for ziel in LogistischeZielgroesse
+    )
+
+
+def test_gemeinsame_kpis_sind_nicht_systemspezifisch_dupliziert() -> None:
+    gemeinsame_ziele = (
+        LogistischeZielgroesse.REAKTIONSZEIT,
+        LogistischeZielgroesse.PROZESSSICHERHEIT,
+        LogistischeZielgroesse.BESTAENDE,
+    )
+    for ziel in gemeinsame_ziele:
+        assert KPI_MATRIX[Systemtyp.PRODUKTION][ziel] == KPI_MATRIX[Systemtyp.INTRALOGISTIK][ziel]
+
+
+def test_historische_kpi_id_wird_auf_systemspezifische_definition_migriert() -> None:
+    assert bereinige_kpi_auswahl(
+        (LogistischeZielgroesse.DURCHLAUFZEIT,),
+        ("mittlere_dlz_wareneingang",),
+        Systemtyp.PRODUKTION,
+    ) == ("mittlerer_durchfuehrungszeitanteil",)
+    assert bereinige_kpi_auswahl(
+        (LogistischeZielgroesse.LIEFERBEREITSCHAFT,),
+        ("verfuegbarkeit_planstarttermin",),
+        Systemtyp.INTRALOGISTIK,
+    ) == ("bestaetigungsquote_kundenwunschtermin",)

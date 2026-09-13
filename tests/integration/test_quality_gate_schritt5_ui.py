@@ -76,6 +76,8 @@ def ergebnis(entscheidungen=()):
     ]
     for kriterium_id, bereich, ruecksprung in (
         ("q_nachvollziehbar", QualityGateBereich.DATENQUELLENKATALOG, 1),
+        ("t_verwendbar", QualityGateBereich.ZWISCHENDATENSATZ, 2),
+        ("m_verstaendlich", QualityGateBereich.MAPPINGTABELLE, 3),
         ("e_interpretierbar", QualityGateBereich.EVENT_LOG, 4),
     ):
         entscheidung = nach_id.get(kriterium_id)
@@ -133,6 +135,8 @@ class Qualitaet:
         assert freigabe_id == F
         return (
             FachlicheEntscheidung("q_nachvollziehbar", False, "Q ist nachvollziehbar."),
+            FachlicheEntscheidung("t_verwendbar", False, ""),
+            FachlicheEntscheidung("m_verstaendlich", False, ""),
             FachlicheEntscheidung("e_interpretierbar", False, "E ist interpretierbar."),
         )
 
@@ -153,8 +157,10 @@ def _app(*, schritt: int = 1, block: int | None = None) -> AppTest:
             "event_log_id": str(event),
             "freigabe_id": UUID("55555555-5555-5555-5555-555555555555"),
             "entscheidungen": (
-                FachlicheEntscheidung("q_nachvollziehbar", False, "Q ist nachvollziehbar."),
-                FachlicheEntscheidung("e_interpretierbar", False, "E ist interpretierbar."),
+                FachlicheEntscheidung("q_nachvollziehbar", False, ""),
+                FachlicheEntscheidung("t_verwendbar", False, ""),
+                FachlicheEntscheidung("m_verstaendlich", False, ""),
+                FachlicheEntscheidung("e_interpretierbar", False, ""),
             ),
         }
     }
@@ -175,18 +181,25 @@ def test_schritt_fuenf_uebernimmt_projekt_und_aktives_e_ohne_lokale_auswahl() ->
     assert any("Event Log (E)" in wert.value for wert in app.markdown)
 
 
-def test_nicht_eindeutige_e_ursache_wird_fachlich_einem_vorherigen_schritt_zugeordnet() -> None:
+@pytest.mark.parametrize(
+    ("index", "artefakt", "schritt", "bereich"),
+    (
+        (0, "Q", 1, "1 Projektrahmen definieren"),
+        (1, "T", 2, "2 ETL durchführen"),
+        (2, "M", 3, "3 Semantisches Mapping"),
+        (3, "E", 4, "4 Event Log aufbauen"),
+    ),
+)
+def test_fachlicher_aenderungsbedarf_bietet_gezielten_optionalen_ruecksprung(
+    index: int, artefakt: str, schritt: int, bereich: str
+) -> None:
     app = _app(schritt=3)
-    bewertungen = [wert for wert in app.radio if wert.label == "Fachliche Entscheidung"]
-    bewertungen[-1].set_value("Als Mangel bewertet").run()
-    ursache = next(
-        wert for wert in app.selectbox if wert.label == "Ursächlicher vorheriger Schritt"
-    )
-    assert ursache.options == [
-        "Schritt 2 – Ursache in T",
-        "Schritt 3 – Ursache in M",
-        "Schritt 4 – Konfiguration oder Erzeugung von E",
-    ]
+    bewertungen = [wert for wert in app.radio if wert.label == "Fachliche Beurteilung"]
+    assert len(bewertungen) == 4
+    bewertungen[index].set_value("Änderungsbedarf festgestellt").run()
+    _button(app, f"{artefakt} in Schritt {schritt} korrigieren").click().run()
+    assert app.session_state["aktuelles_projekt_id"] == ("11111111-1111-1111-1111-111111111111")
+    assert app.session_state["naechster_framework_bereich"] == bereich
 
 
 @pytest.mark.parametrize(
@@ -224,15 +237,20 @@ def test_erfolgreiche_freigabe_setzt_e_stern_kontext_und_erlaubt_schritt_sechs()
     zustand = app.session_state["quality_gate_zustaende"]["11111111-1111-1111-1111-111111111111"]
     assert zustand["schritt"] == 3
     assert str(zustand["freigabe_id"]) == "55555555-5555-5555-5555-555555555555"
-    assert len(zustand["entscheidungen"]) == 2
+    assert len(zustand["entscheidungen"]) == 4
 
 
 def test_automatische_pruefung_verwendet_die_fachliche_ueberschrift() -> None:
     app = _app(schritt=2)
-    assert any(
-        "Qualitätsprüfung der erzeugten Artefakte" in wert.value for wert in app.markdown
-    )
+    assert any("Qualitätsprüfung der erzeugten Artefakte" in wert.value for wert in app.markdown)
     assert not any("Verbindliche Kriterien aus Tabelle 3.14" in wert.value for wert in app.markdown)
+    assert [wert.value for wert in app.success] == [
+        "Q: automatische Prüfung bestanden",
+        "T: automatische Prüfung bestanden",
+        "M: automatische Prüfung bestanden – fachlich kann kein zusätzliches Mapping "
+        "erforderlich sein.",
+        "E: automatische Prüfung bestanden",
+    ]
     assert list(app.dataframe[0].value.columns) == [
         "Artefakt",
         "Qualitätsdimension",
@@ -240,12 +258,32 @@ def test_automatische_pruefung_verwendet_die_fachliche_ueberschrift() -> None:
         "Automatische Prüfung",
         "Fachliche Bewertung",
         "Gesamtergebnis",
-        "Begründung/Feststellung",
+        "Anmerkung/Feststellung",
         "Konsequenz",
     ]
 
 
-def test_persistierte_freigabe_rehydriert_entscheidungen_und_begruendungen() -> None:
+def test_anmerkung_ist_standardmaessig_verborgen_und_wird_explizit_eingeblendet() -> None:
+    app = _app(schritt=3)
+
+    assert not app.text_area
+    assert len([wert for wert in app.button if wert.label == "Anmerkung hinzufügen"]) == 4
+
+    _button(app, "Anmerkung hinzufügen").click().run()
+
+    assert len(app.text_area) == 1
+    assert app.text_area[0].label == "Optionale Anmerkung"
+    app.text_area[0].set_value("Q wurde mit dem Fachbereich geprüft.").run()
+    zustand = app.session_state["quality_gate_zustaende"]["11111111-1111-1111-1111-111111111111"]
+    assert (
+        next(
+            wert for wert in zustand["entscheidungen"] if wert.kriterium_id == "q_nachvollziehbar"
+        ).anmerkung
+        == "Q wurde mit dem Fachbereich geprüft."
+    )
+
+
+def test_persistierte_freigabe_rehydriert_entscheidungen_und_anmerkungen() -> None:
     app = AppTest.from_string(APP)
     app.session_state["aktuelles_projekt_id"] = "11111111-1111-1111-1111-111111111111"
     app.session_state["aktuelles_event_log_id"] = "22222222-2222-2222-2222-222222222222"
@@ -254,10 +292,21 @@ def test_persistierte_freigabe_rehydriert_entscheidungen_und_begruendungen() -> 
 
     zustand = app.session_state["quality_gate_zustaende"]["11111111-1111-1111-1111-111111111111"]
     assert zustand["schritt"] == 4
-    assert len(zustand["entscheidungen"]) == 2
+    assert len(zustand["entscheidungen"]) == 4
     _button(app, "Zurück").click().run()
-    bewertungen = [wert for wert in app.radio if wert.label == "Fachliche Entscheidung"]
-    assert {wert.value for wert in bewertungen} == {"Begründet kein Mangel"}
-    begruendungen = [wert.value for wert in app.text_area]
-    assert "Q ist nachvollziehbar." in begruendungen
-    assert "E ist interpretierbar." in begruendungen
+    bewertungen = [wert for wert in app.radio if wert.label == "Fachliche Beurteilung"]
+    assert {wert.value for wert in bewertungen} == {"Fachlich ausreichend"}
+    anmerkungen = [wert.value for wert in app.text_area]
+    assert anmerkungen == ["Q ist nachvollziehbar.", "E ist interpretierbar."]
+
+    app.text_area[0].set_value("Q wurde erneut fachlich geprüft.").run()
+
+    zustand = app.session_state["quality_gate_zustaende"]["11111111-1111-1111-1111-111111111111"]
+    assert "freigabe" not in zustand
+    assert str(zustand["freigabe_id"]) != "55555555-5555-5555-5555-555555555555"
+    assert (
+        next(
+            wert for wert in zustand["entscheidungen"] if wert.kriterium_id == "q_nachvollziehbar"
+        ).anmerkung
+        == "Q wurde erneut fachlich geprüft."
+    )

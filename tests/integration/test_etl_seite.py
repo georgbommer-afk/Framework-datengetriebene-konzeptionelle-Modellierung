@@ -35,6 +35,75 @@ zeige_transformationseditor(
 )
 """
 
+MEHRSPALTEN_TRANSFORMATIONS_APP = r"""
+from uuid import UUID
+
+import pandas as pd
+
+from framework_mvp.domain.models import Transformationsplan
+from framework_mvp.ui.components.transformation import zeige_transformationseditor
+
+plan = Transformationsplan.neu(
+    UUID("11111111-1111-1111-1111-111111111111"),
+    (UUID("22222222-2222-2222-2222-222222222222"),),
+)
+zeige_transformationseditor(
+    object(),
+    plan,
+    pd.DataFrame(
+        {
+            "Von": ["HRL-04-A", "bleibt"],
+            "Zu": ["HRL-04-X", "HRL-04-Y"],
+        }
+    ),
+    {"spaltenprofile": []},
+)
+"""
+
+TRANSFORMATION_ENTFERNEN_APP = r"""
+from dataclasses import replace
+from types import SimpleNamespace
+from uuid import UUID
+
+import pandas as pd
+import streamlit as st
+
+from framework_mvp.domain.models import (
+    Transformationsart,
+    Transformationsplan,
+    Transformationsschritt,
+)
+from framework_mvp.ui.components.transformation import zeige_transformationseditor
+
+if "testplan" not in st.session_state:
+    plan = Transformationsplan.neu(
+        UUID("11111111-1111-1111-1111-111111111111"),
+        (UUID("22222222-2222-2222-2222-222222222222"),),
+    )
+    schritt = Transformationsschritt.neu(
+        typ=Transformationsart.WERTE_ERSETZEN,
+        betroffene_spalten=("Status",),
+        parameter={"gesuchte_werte": ["alt"], "ersatzwert": "neu"},
+        reihenfolge=1,
+        beschreibung="Status alt durch neu ersetzen",
+    )
+    st.session_state.testplan = replace(plan, schritte=(schritt,))
+
+class Service:
+    def schritt_entfernen_und_vorschau(self, plan, schritt_id):
+        neuer_plan = replace(plan, schritte=())
+        st.session_state.testplan = neuer_plan
+        return neuer_plan, SimpleNamespace(daten=pd.DataFrame())
+
+plan = st.session_state.testplan
+zeige_transformationseditor(
+    Service(),
+    plan,
+    pd.DataFrame({"Status": ["alt", "bleibt"]}),
+    {"spaltenprofile": []},
+)
+"""
+
 ETL_NAVIGATION_APP = r"""
 import streamlit as st
 
@@ -169,6 +238,19 @@ def test_transformation_startet_ohne_vorbelegten_typ() -> None:
     assert not any(e.label == "Transformationsvorschau berechnen" for e in anwendung.button)
 
 
+def test_transformationsschritt_kann_im_editor_entfernt_werden() -> None:
+    anwendung = AppTest.from_string(TRANSFORMATION_ENTFERNEN_APP).run()
+    entfernen = next(e for e in anwendung.button if e.label == "Entfernen")
+    assert any("Status alt durch neu ersetzen" in e.value for e in anwendung.caption)
+
+    entfernen.click().run()
+
+    assert not anwendung.exception
+    assert not any(e.label == "Entfernen" for e in anwendung.button)
+    assert any("derzeit keine Schritte" in e.value for e in anwendung.info)
+    assert anwendung.session_state["testplan"].schritte == ()
+
+
 def test_werte_ersetzen_bleibt_auf_konkrete_werte_und_ersatzstrategien_begrenzt() -> None:
     anwendung = AppTest.from_string(TRANSFORMATIONS_APP).run()
     next(e for e in anwendung.selectbox if e.label == "Transformationsart").set_value(
@@ -258,7 +340,7 @@ def test_regelbasierte_abstraktion_wird_separat_angeboten_und_vorbereitet() -> N
     next(e for e in anwendung.selectbox if e.label == "Transformationsart").set_value(
         "Werte regelbasiert abstrahieren"
     ).run()
-    next(e for e in anwendung.selectbox if e.label == "Quellspalte").set_value("Text").run()
+    next(e for e in anwendung.multiselect if e.label == "Quellspalten").set_value(["Text"]).run()
     next(e for e in anwendung.selectbox if e.label == "Vergleichsart").set_value(
         "Beginnt mit"
     ).run()
@@ -273,18 +355,51 @@ def test_regelbasierte_abstraktion_wird_separat_angeboten_und_vorbereitet() -> N
 
     assert not anwendung.exception
     zusammenfassung = "\n".join(wert.value for wert in anwendung.info)
-    assert "Quellspalte: Text" in zusammenfassung
+    assert "Quellspalten: Text" in zusammenfassung
     assert "Vergleichsart: Beginnt mit" in zusammenfassung
     assert "Suchwert/Muster: RS " in zusammenfassung
     assert "Abstraktionswert: RS" in zusammenfassung
-    assert "Zielspalte: Text_aggregiert" in zusammenfassung
-    assert "Betroffene Zeilen: 1" in zusammenfassung
+    assert "Ziel: Text_aggregiert" in zusammenfassung
+    assert "Treffer gesamt: 1" in zusammenfassung
     vorschau = next(
-        wert for wert in anwendung.dataframe if list(wert.value.columns) == ["Vorher", "Nachher"]
+        wert
+        for wert in anwendung.dataframe
+        if list(wert.value.columns) == ["Spalte", "Vorher", "Nachher"]
     ).value
     assert vorschau.to_dict(orient="records") == [
-        {"Vorher": "RS TX (abc)", "Nachher": "RS"}
+        {"Spalte": "Text", "Vorher": "RS TX (abc)", "Nachher": "RS"}
     ]
+    assert not next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
+
+
+def test_regelbasierte_abstraktion_zeigt_mehrspaltenauswahl_und_treffer_je_spalte() -> None:
+    anwendung = AppTest.from_string(MEHRSPALTEN_TRANSFORMATIONS_APP).run()
+    next(e for e in anwendung.selectbox if e.label == "Transformationsart").set_value(
+        "Werte regelbasiert abstrahieren"
+    ).run()
+    next(e for e in anwendung.multiselect if e.label == "Quellspalten").set_value(
+        ["Von", "Zu"]
+    ).run()
+    next(e for e in anwendung.selectbox if e.label == "Vergleichsart").set_value(
+        "Beginnt mit"
+    ).run()
+    next(e for e in anwendung.text_input if e.label == "Suchwert / Muster").set_value("HRL-04-")
+    next(e for e in anwendung.text_input if e.label == "Abstraktionswert").set_value("HRL-04").run()
+    next(e for e in anwendung.selectbox if e.label == "Ziel").set_value(
+        "Bestehende Spalte überschreiben"
+    ).run()
+
+    assert not anwendung.exception
+    treffer = next(
+        wert
+        for wert in anwendung.dataframe
+        if list(wert.value.columns) == ["Quellspalte", "Treffer"]
+    ).value
+    assert treffer.to_dict(orient="records") == [
+        {"Quellspalte": "Von", "Treffer": 1},
+        {"Quellspalte": "Zu", "Treffer": 2},
+    ]
+    assert any("Treffer gesamt: 3" in wert.value for wert in anwendung.info)
     assert not next(e for e in anwendung.button if e.label == "Transformation anwenden").disabled
 
 
@@ -293,7 +408,7 @@ def test_regelbasierte_abstraktion_meldet_ungueltigen_regex_und_keine_treffer() 
     next(e for e in anwendung.selectbox if e.label == "Transformationsart").set_value(
         "Werte regelbasiert abstrahieren"
     ).run()
-    next(e for e in anwendung.selectbox if e.label == "Quellspalte").set_value("Text").run()
+    next(e for e in anwendung.multiselect if e.label == "Quellspalten").set_value(["Text"]).run()
     next(e for e in anwendung.selectbox if e.label == "Vergleichsart").set_value(
         "Regulärer Ausdruck"
     ).run()

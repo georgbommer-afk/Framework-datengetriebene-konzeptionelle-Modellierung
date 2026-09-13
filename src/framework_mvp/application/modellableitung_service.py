@@ -179,9 +179,7 @@ class ModellableitungService:
             raise Importintegritaetsfehler(
                 "Die erneut validierten A_G-Repräsentationen weichen ab."
             )
-        gespeicherte_grundlage = getattr(
-            self._aggregationen, "grundlage_fuer_aggregation", None
-        )
+        gespeicherte_grundlage = getattr(self._aggregationen, "grundlage_fuer_aggregation", None)
         basis = (
             gespeicherte_grundlage(aggregations_id)
             if gespeicherte_grundlage is not None

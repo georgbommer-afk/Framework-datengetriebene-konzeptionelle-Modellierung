@@ -7,6 +7,7 @@ from framework_mvp.application.ergebnisaggregation.kpi import (
     berechne_kpi_formel,
     kompatible_tabellenspalten,
     kpi_definition,
+    kpi_erlaubt_direkten_profilmittelwert,
     profilkennzahlen_fuer_operand,
     zulaessige_quellen_fuer_operand,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "busy_ratio_berechnen",
     "kompatible_tabellenspalten",
     "kpi_definition",
+    "kpi_erlaubt_direkten_profilmittelwert",
     "performance_zeitvergleich_berechnen",
     "profilkennzahlen_fuer_operand",
     "zulaessige_quellen_fuer_operand",

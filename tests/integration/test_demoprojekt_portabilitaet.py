@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -55,6 +56,14 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     demo_service = erstelle_demoprojekt_service(quell_db, quell_ws)
     demo = demo_service.erstellen(quell_kontext)
     projekt_id = demo.projekt.projekt_id
+    with sqlite3.connect(quell_db) as verbindung:
+        assert (
+            verbindung.execute(
+                "SELECT COUNT(*) FROM zwischendatensaetze WHERE projekt_id=?",
+                (str(projekt_id),),
+            ).fetchone()[0]
+            == 1
+        )
     wiederholt = demo_service.erstellen(quell_kontext)
     assert wiederholt.projekt.projekt_id == projekt_id
     assert wiederholt.report_html == demo.report_html
@@ -80,6 +89,10 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
 
     projekt = erstelle_projekt_service(quell_db).projekt_laden(projekt_id)
     assert projekt is not None
+    assert projekt.untersuchungsauftrag.ausgewaehlte_kpi_ids == (
+        "first_time_quality_ftq",
+        "liefertreue",
+    )
     produktion = projekt.untersuchungsauftrag.systemklassifikation.produktion
     assert produktion is not None
     assert produktion.auftragsabwicklungsstrategie == "Make-to-Order (MTO)"
@@ -113,6 +126,8 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     ).entscheidungen_der_freigabe(freigabe_id)
     assert {wert.kriterium_id for wert in entscheidungen} == {
         "q_nachvollziehbar",
+        "t_verwendbar",
+        "m_verstaendlich",
         "e_interpretierbar",
     }
     assert all(not wert.ist_mangel and wert.begruendung for wert in entscheidungen)
@@ -129,6 +144,9 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     aggregations_id = UUID(quell_rehydriert.referenzen["aktuelle_aggregations_id"])
     _, a_g = erstelle_ergebnisaggregation_service(quell_db, quell_ws).laden(aggregations_id)
     assert a_g["kpi_konfigurationen"]
+    kpi_ergebnisse = {wert["kpi_id"]: wert for wert in a_g["kpi_ergebnisse"]}
+    assert kpi_ergebnisse["first_time_quality_ftq"]["status"] == "berechnet"
+    assert kpi_ergebnisse["liefertreue"]["status"] == "nicht_berechenbar"
     assert a_g["conformance_checking"]["durchgefuehrt"] is True
     assert a_g["strukturierte_ergebnisse"]["ressourcen"]
 
@@ -167,6 +185,7 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     archiv = erstelle_projektarchiv_service(quell_db, quell_ws).exportieren(
         quell_kontext, projekt_id
     )
+    assert quell_kontext.gast_geheimnis is not None
     assert quell_kontext.gast_geheimnis.encode() not in archiv
 
     ziel_db = tmp_path / "ziel.sqlite"
@@ -201,6 +220,13 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     assert importierte_ausgabe.report_xlsx == demo.report_xlsx
 
     with sqlite3.connect(ziel_db) as verbindung:
+        assert (
+            verbindung.execute(
+                "SELECT COUNT(*) FROM zwischendatensaetze WHERE projekt_id=?",
+                (str(projekt_id),),
+            ).fetchone()[0]
+            == 1
+        )
         for tabelle in (
             "datenquellen",
             "importvorgaenge",
@@ -220,6 +246,107 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
                 f"SELECT COUNT(*) FROM {tabelle} WHERE projekt_id=?",  # noqa: S608
                 (str(projekt_id),),
             ).fetchone()[0]
+
+    alte_aggregation = UUID(ziel_rehydriert.referenzen["aktuelle_aggregations_id"])
+    with sqlite3.connect(ziel_db) as verbindung:
+        historische_anzahlen = {
+            tabelle: verbindung.execute(
+                f"SELECT COUNT(*) FROM {tabelle} WHERE projekt_id=?",  # noqa: S608
+                (str(projekt_id),),
+            ).fetchone()[0]
+            for tabelle in (
+                "ergebnisaggregationen",
+                "modellableitungen",
+                "modellvalidierungen",
+            )
+        }
+    ziel_projekte = erstelle_projekt_service(ziel_db)
+    importiertes_projekt = ziel_projekte.projekt_laden(projekt_id)
+    assert importiertes_projekt is not None
+    ziel_projekte.projekt_aktualisieren(
+        projekt_id,
+        bezeichnung=importiertes_projekt.bezeichnung,
+        untersuchungsauftrag=replace(
+            importiertes_projekt.untersuchungsauftrag,
+            ausgewaehlte_kpi_ids=("first_time_quality_ftq",),
+        ),
+        status=importiertes_projekt.status,
+        beteiligte_personen=importiertes_projekt.beteiligte_personen,
+    )
+
+    nach_kpi_aenderung = erstelle_projektkontext_service(ziel_db, ziel_ws).wiederherstellen(
+        projekt_id
+    )
+    assert nach_kpi_aenderung.framework_schritt == 7
+    assert "aktuelle_aggregations_id" not in nach_kpi_aenderung.referenzen
+    assert "aktuelle_modellableitungs_id" not in nach_kpi_aenderung.referenzen
+    assert "aktuelle_validierungslauf_id" not in nach_kpi_aenderung.referenzen
+    ziel_aggregation = erstelle_ergebnisaggregation_service(ziel_db, ziel_ws)
+    assert (
+        ziel_aggregation.historisch_laden(alte_aggregation)[0].aggregations_id == alte_aggregation
+    )
+    vorlage = ziel_aggregation.kompatible_konfigurationsvorlage_laden(
+        projekt_id,
+        UUID(nach_kpi_aenderung.referenzen["aktuelle_freigabe_id"]),
+        UUID(nach_kpi_aenderung.referenzen["aktuelle_analyse_id"]),
+    )
+    assert vorlage is not None
+    assert [wert.kpi_id for wert in vorlage.kpi_konfigurationen] == ["first_time_quality_ftq"]
+    nach_neustart = erstelle_fortschritt_service(ziel_db).laden(ziel_kontext, projekt_id)
+    assert nach_neustart.schritt == 7
+    assert nach_neustart.abgeschlossene_unterschritte[6:] == (0, 0, 0, 0)
+    with sqlite3.connect(ziel_db) as verbindung:
+        assert {
+            tabelle: verbindung.execute(
+                f"SELECT COUNT(*) FROM {tabelle} WHERE projekt_id=?",  # noqa: S608
+                (str(projekt_id),),
+            ).fetchone()[0]
+            for tabelle in historische_anzahlen
+        } == historische_anzahlen
+
+    neue_vorschau = ziel_aggregation.vorschau(
+        projekt_id=projekt_id,
+        freigabe_id=UUID(nach_kpi_aenderung.referenzen["aktuelle_freigabe_id"]),
+        analyse_id=UUID(nach_kpi_aenderung.referenzen["aktuelle_analyse_id"]),
+        kpi_konfigurationen=vorlage.kpi_konfigurationen,
+        sollmodell=vorlage.sollmodell,
+        aktivitaetsmapping=vorlage.aktivitaetsmapping,
+        conformance_ausfuehren=vorlage.conformance_ausfuehren,
+        ressourcenanalyse=vorlage.ressourcenanalyse,
+        ressourcenattributzuordnungen=vorlage.ressourcenattributzuordnungen,
+        entitaetsattributzuordnungen=vorlage.entitaetsattributzuordnungen,
+        entitaetstyp=vorlage.entitaetstyp,
+        bestaetigte_warteschlangen=vorlage.bestaetigte_warteschlangen,
+        ankunftsstroeme=vorlage.ankunftsstroeme,
+        performance_zeitvergleich_konfiguration=(vorlage.performance_zeitvergleich_konfiguration),
+        performance_zeitvergleich_ausfuehren=vorlage.performance_zeitvergleich_ausfuehren,
+        busy_ratio_konfiguration=vorlage.busy_ratio_konfiguration,
+        busy_ratio_ausfuehren=vorlage.busy_ratio_ausfuehren,
+    )
+    neue_aggregation = ziel_aggregation.speichern(
+        uuid4(), neue_vorschau, menschlich_bestaetigt=True
+    )
+    neuer_kontext = erstelle_projektkontext_service(ziel_db, ziel_ws).wiederherstellen(projekt_id)
+    assert neuer_kontext.framework_schritt == 8
+    assert neuer_kontext.referenzen["aktuelle_aggregations_id"] == str(
+        neue_aggregation.aggregations_id
+    )
+    with sqlite3.connect(ziel_db) as verbindung:
+        assert (
+            verbindung.execute(
+                "SELECT COUNT(*) FROM ergebnisaggregationen WHERE projekt_id=?",
+                (str(projekt_id),),
+            ).fetchone()[0]
+            == historische_anzahlen["ergebnisaggregationen"] + 1
+        )
+        for tabelle in ("modellableitungen", "modellvalidierungen"):
+            assert (
+                verbindung.execute(
+                    f"SELECT COUNT(*) FROM {tabelle} WHERE projekt_id=?",  # noqa: S608
+                    (str(projekt_id),),
+                ).fetchone()[0]
+                == historische_anzahlen[tabelle]
+            )
 
 
 def test_vollstaendiges_demo_wird_auf_gleicher_db_gestagt_an_neuen_gast_gebunden(

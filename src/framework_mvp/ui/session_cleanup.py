@@ -38,6 +38,31 @@ ABHAENGIGE_ZUSTANDSSAMMLUNGEN = (
     "process_mining_zustaende",
 )
 
+AG_ABHAENGIGE_ID_SCHLUESSEL = (
+    "aktuelle_aggregations_id",
+    "aktuelle_modellableitungs_id",
+    "aktuelle_k_id",
+    "aktuelle_o_id",
+    "aktuelle_validierungslauf_id",
+    "aktuelle_k_stern_id",
+    "schritt9_arbeitsfassung_signatur",
+    "schritt9_arbeitsfassung",
+    "modellableitung_vorschau",
+    "schritt10_ausgabe",
+    "schritt10_ausgabe_signatur",
+)
+
+
+def ergebnisaggregation_zustand_invalidieren(
+    zustand: MutableMapping[str, Any],
+) -> None:
+    """Entfernt nur flüchtige A_G- und Folgebezüge; P/A_D bleiben aktiv."""
+    for schluessel in AG_ABHAENGIGE_ID_SCHLUESSEL:
+        zustand.pop(schluessel, None)
+    for schluessel in tuple(zustand):
+        if str(schluessel).startswith(("ag_", "schritt8_", "schritt9_", "schritt10_")):
+            zustand.pop(schluessel, None)
+
 
 def folgeartefakte_zustand_invalidieren(
     zustand: MutableMapping[str, Any], projekt_id: UUID, neuer_zwischendatensatz_id: UUID

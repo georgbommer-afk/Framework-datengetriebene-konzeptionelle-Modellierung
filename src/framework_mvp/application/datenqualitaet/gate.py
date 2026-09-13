@@ -93,7 +93,7 @@ def _fachlicher_befund(
     elif entscheidung.ist_mangel:
         status = QualityGateStatus.FACHLICH_ALS_MANGEL_BEWERTET
         begruendung = entscheidung.begruendung
-        ziel = entscheidung.ruecksprung_schritt or ruecksprung
+        ziel = ruecksprung
     else:
         status = QualityGateStatus.FACHLICH_BEGRUENDET_KEIN_MANGEL
         begruendung = entscheidung.begruendung
@@ -407,7 +407,7 @@ def _t_pruefen(
                     beispiele_json=_beispiele(daten, ungueltig, [spalte]),
                 )
             )
-    if not any(wert.bereich is QualityGateBereich.ZWISCHENDATENSATZ for wert in befunde):
+    if not any(wert.status is QualityGateStatus.AUTOMATISCHER_MANGEL for wert in befunde):
         befunde.append(
             QualityGateBefund(
                 "t_vollstaendig",
@@ -418,6 +418,18 @@ def _t_pruefen(
                 False,
             )
         )
+    befunde.append(
+        _fachlicher_befund(
+            "t_verwendbar",
+            QualityGateBereich.ZWISCHENDATENSATZ,
+            "Erforderliche Daten vollständig vorhanden",
+            "Die anwendende Person beurteilt die fachliche Verwendbarkeit der in T "
+            "bereitgestellten Daten.",
+            2,
+            entscheidungen,
+            technische_quellen=tuple(_t_verwendungen(kontext)),
+        )
+    )
     return befunde, pruefungen
 
 
@@ -463,8 +475,17 @@ def _m_pruefen(
                         "Technische Bezeichnungen eindeutig und fachlich verständlich zugeordnet",
                         "E dokumentiert eine Mappingverwendung, obwohl kein zugehöriges M "
                         "integritätsgeprüft geladen wurde.",
-                        4,
-                    )
+                        3,
+                    ),
+                    _fachlicher_befund(
+                        "m_verstaendlich",
+                        QualityGateBereich.MAPPINGTABELLE,
+                        "Technische Bezeichnungen eindeutig und fachlich verständlich zugeordnet",
+                        "Die anwendende Person beurteilt, ob die Semantik ohne zusätzliches M "
+                        "ausreichend verständlich ist.",
+                        3,
+                        entscheidungen,
+                    ),
                 ],
                 Mappingzustand.NICHT_VORHANDEN,
             )
@@ -478,7 +499,16 @@ def _m_pruefen(
                     "Kein semantisches Mapping erforderlich; Schritt 4 verwendete technische "
                     "Bezeichnungen direkt.",
                     False,
-                )
+                ),
+                _fachlicher_befund(
+                    "m_verstaendlich",
+                    QualityGateBereich.MAPPINGTABELLE,
+                    "Technische Bezeichnungen eindeutig und fachlich verständlich zugeordnet",
+                    "Die anwendende Person bestätigt, dass kein zusätzliches Mapping "
+                    "erforderlich ist.",
+                    3,
+                    entscheidungen,
+                ),
             ],
             Mappingzustand.NICHT_VORHANDEN,
         )
@@ -502,7 +532,17 @@ def _m_pruefen(
                         "prüfsummengesichert mit T, Konfiguration und E verknüpft.",
                         3,
                         technische_quellen=(str(mapping.mapping_id),),
-                    )
+                    ),
+                    _fachlicher_befund(
+                        "m_verstaendlich",
+                        QualityGateBereich.MAPPINGTABELLE,
+                        "Technische Bezeichnungen eindeutig und fachlich verständlich zugeordnet",
+                        "Die anwendende Person beurteilt, ob das bestätigte leere M fachlich "
+                        "ausreichend ist.",
+                        3,
+                        entscheidungen,
+                        technische_quellen=(str(mapping.mapping_id),),
+                    ),
                 ],
                 Mappingzustand.BESTAETIGT_LEER,
             )
@@ -516,7 +556,17 @@ def _m_pruefen(
                     "Leeres Mapping wurde in Schritt 3 ausdrücklich bestätigt und ist intakt.",
                     False,
                     technische_quellen=(str(mapping.mapping_id),),
-                )
+                ),
+                _fachlicher_befund(
+                    "m_verstaendlich",
+                    QualityGateBereich.MAPPINGTABELLE,
+                    "Technische Bezeichnungen eindeutig und fachlich verständlich zugeordnet",
+                    "Die anwendende Person bestätigt, dass kein zusätzliches Mapping "
+                    "erforderlich ist.",
+                    3,
+                    entscheidungen,
+                    technische_quellen=(str(mapping.mapping_id),),
+                ),
             ],
             Mappingzustand.BESTAETIGT_LEER,
         )
@@ -637,7 +687,7 @@ def _e_pruefen(
                     QualityGateBereich.EVENT_LOG,
                     "Mindestbestandteile vollständig und interpretierbar vorhanden",
                     f"{int(maske.sum())} Ereignisse besitzen keine {bezeichnung}.",
-                    2,
+                    4,
                     ereignisse=daten,
                     maske=maske,
                     technische_quellen=(
@@ -670,7 +720,7 @@ def _e_pruefen(
                     QualityGateBereich.EVENT_LOG,
                     "Mindestbestandteile vollständig und interpretierbar vorhanden",
                     f"{int(fehlend.sum())} Ereignisse besitzen keinen Zeitstempel.",
-                    2,
+                    4,
                     ereignisse=daten,
                     maske=fehlend,
                     technische_quellen=(raw_name or "timestamp",),
@@ -686,7 +736,7 @@ def _e_pruefen(
                     QualityGateBereich.EVENT_LOG,
                     "Mindestbestandteile vollständig und interpretierbar vorhanden",
                     f"{int(ungueltig.sum())} vorhandene Rohzeitstempel sind nicht interpretierbar.",
-                    2,
+                    4,
                     ereignisse=daten,
                     maske=ungueltig,
                     technische_quellen=(raw_name or "timestamp",),

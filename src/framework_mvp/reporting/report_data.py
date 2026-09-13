@@ -8,6 +8,8 @@ from enum import Enum
 from typing import Any, cast
 from uuid import UUID
 
+from framework_mvp.formatierung import formatiere_messwert, formatiere_zeitstempel
+
 REPORT_DATA_VERSION = 1
 
 ERWARTETE_BESTANDTEIL_IDS = (
@@ -51,6 +53,9 @@ _ANZEIGETEXTE = {
     "offen": "Offen",
     "nicht_berechenbar": "Nicht berechenbar",
     "berechnet": "Berechnet",
+    "fuer_spaetere_manuelle_berechnung_vorgesehen": ("Für spätere manuelle Berechnung vorgesehen"),
+    "automatisch_berechnen": "Aus den Daten berechnen",
+    "spaeter_manuell_berechnen": "Später manuell berechnen",
     "qualitaet_erhoehen": "Qualität erhöhen",
     "petrinetz": "Petrinetz",
     "prozessbaum": "Prozessbaum",
@@ -67,7 +72,11 @@ class ReportDataFehler(ValueError):
 
 def _normalisieren(wert: Any) -> Any:
     """Überführt Werte in ausschließlich Jinja-/JSON-freundliche Python-Typen."""
-    if isinstance(wert, (UUID, datetime, date, Enum)):
+    if isinstance(wert, datetime | date):
+        return formatiere_zeitstempel(wert)
+    if isinstance(wert, str):
+        return formatiere_zeitstempel(wert)
+    if isinstance(wert, (UUID, Enum)):
         return str(wert.value if isinstance(wert, Enum) else wert)
     if is_dataclass(wert):
         return _normalisieren(asdict(cast(Any, wert)))
@@ -77,23 +86,21 @@ def _normalisieren(wert: Any) -> Any:
         return [_normalisieren(inhalt) for inhalt in wert]
     return wert
 
+
 REPORT_LIST_LIMIT = 20
+REPORT_RESSOURCEN_JE_AKTIVITAET_LIMIT = 10
+
 
 def _reportwert_begrenzen(wert: Any) -> Any:
     """Begrenzt große Listen ausschließlich für die Reportdarstellung."""
     if isinstance(wert, Mapping):
-        return {
-            str(name): _reportwert_begrenzen(inhalt)
-            for name, inhalt in wert.items()
-        }
+        return {str(name): _reportwert_begrenzen(inhalt) for name, inhalt in wert.items()}
 
     if isinstance(wert, (list, tuple, set, frozenset)):
-        return [
-            _reportwert_begrenzen(inhalt)
-            for inhalt in list(wert)[:REPORT_LIST_LIMIT]
-        ]
+        return [_reportwert_begrenzen(inhalt) for inhalt in list(wert)[:REPORT_LIST_LIMIT]]
 
     return _normalisieren(wert)
+
 
 def _anzeigetext(wert: Any) -> str:
     """Liefert nur für ausdrücklich bekannte Codes eine lesbare Bezeichnung."""
@@ -327,6 +334,23 @@ def _manuelle_ressourcenzuordnungen(
     return ergebnis
 
 
+def _ressourcenzuordnungen_fuer_anzeige(wert: Any) -> list[dict[str, Any]]:
+    """Verdichtet nur die Reportdarstellung, ohne die A_G-Zuordnung zu verändern."""
+    ergebnis: list[dict[str, Any]] = []
+    for zuordnung in _listenwert(wert):
+        if not isinstance(zuordnung, Mapping):
+            continue
+        normalisiert = cast(dict[str, Any], _normalisieren(zuordnung))
+        ressourcen = _listenwert(zuordnung.get("ressourcen", []))
+        normalisiert["ressourcen"] = ressourcen[:REPORT_RESSOURCEN_JE_AKTIVITAET_LIMIT]
+        normalisiert["weitere_ressourcen"] = max(
+            len(ressourcen) - REPORT_RESSOURCEN_JE_AKTIVITAET_LIMIT,
+            0,
+        )
+        ergebnis.append(normalisiert)
+    return ergebnis
+
+
 def _abschnitt_metadaten(
     k_stern: Mapping[str, Any],
     bestandteil: Mapping[str, Any],
@@ -369,9 +393,7 @@ def _kpi_aufbereiten(wert: Any) -> dict[str, Any]:
     if ergebnis is None:
         ergebnis_anzeige = _anzeigetext(status)
     else:
-        ergebnis_anzeige = str(ergebnis)
-        if einheit:
-            ergebnis_anzeige = f"{ergebnis_anzeige} {einheit}"
+        ergebnis_anzeige = formatiere_messwert(ergebnis, einheit)
 
     return {
         "kpi_id": str(wert.get("kpi_id", "")),
@@ -390,6 +412,9 @@ def _kpi_aufbereiten(wert: Any) -> dict[str, Any]:
         "zwischensummen": _normalisieren(wert.get("zwischensummen", {})),
         "ausgeschlossene_werte": _normalisieren(wert.get("ausgeschlossene_werte")),
         "quellenreferenzen": _normalisieren(wert.get("quellenreferenzen", [])),
+        "definitionsversion": _normalisieren(wert.get("definitionsversion")),
+        "behandlungsart": _normalisieren(wert.get("behandlungsart")),
+        "behandlungsart_anzeige": _anzeigetext(wert.get("behandlungsart")),
     }
 
 
@@ -662,6 +687,41 @@ def build_report_data(
     )
     if not isinstance(zeitbezogene_datenauswahl, Mapping):
         zeitbezogene_datenauswahl = {}
+    conformance_ausgabe = _info_wert(ausgaben_eingaben, "conformance_checking", {})
+    if not isinstance(conformance_ausgabe, Mapping):
+        conformance_ausgabe = {}
+    performance_ausgabe = _info_wert(
+        ausgaben_eingaben,
+        "strukturierte_ergebnisse.performance_und_engpassanalyse",
+        {},
+    )
+    if not isinstance(performance_ausgabe, Mapping):
+        performance_ausgabe = {}
+    vereinfachte_zeitspannen = _listenwert(
+        zeitbezogene_datenauswahl.get("vereinfachte_zeitspannen")
+    )
+    zeitvereinfachung: dict[str, Any] = {}
+    if (
+        zeitbezogene_datenauswahl.get("vereinfachte_zeitspannen_bestaetigt")
+        or vereinfachte_zeitspannen
+    ):
+        zeitvereinfachung = {
+            "status": "Menschlich bestätigt",
+            "entscheidung": zeitbezogene_datenauswahl.get("vereinfachungsentscheidung"),
+            "betroffene_uebergaenge": len(vereinfachte_zeitspannen),
+            "fachliche_grenze": (
+                "Gemeinsame Zeitspanne aus Bearbeitung, Transport, Warten und sonstigen "
+                "Zwischenzeiten; keine zusätzliche Bearbeitungs- oder Wartezeit für "
+                "denselben Abschnitt."
+            ),
+        }
+    datenaufbereitung = _info_wert(
+        daten,
+        "strukturierte_ergebnisse.datenaufbereitung",
+        {},
+    )
+    if not isinstance(datenaufbereitung, Mapping):
+        datenaufbereitung = {}
     if not wartestellenhinweise:
         # Potenzielle Wartezeiten sind auch dann berichtsfähige Messwerte, wenn sie
         # fachlich noch keine explizit bestätigte Warteschlange in K* begründen.
@@ -680,6 +740,13 @@ def build_report_data(
         gesamtvalidierung = {}
 
     status = gesamtvalidierung.get("status")
+    aktivitaet_ressourcen = _listenwert(
+        ressourcenanalyse.get(
+            "zuordnungen",
+            event_log_ressourcen.get("aktivitaet_ressourcen", []),
+        )
+    )[:REPORT_LIST_LIMIT]
+    manuelle_aktivitaet_ressourcen = _manuelle_ressourcenzuordnungen(ressourcen)
 
     return {
         "report_data_version": REPORT_DATA_VERSION,
@@ -697,7 +764,7 @@ def build_report_data(
             "validierungslauf_id": _normalisieren(k_stern.get("validierungslauf_id")),
             "artefaktart": _normalisieren(k_stern.get("artefaktart")),
             "artefaktversion": _normalisieren(k_stern.get("artefaktversion")),
-            "erstellt_am": _normalisieren(k_stern.get("erstellt_am")),
+            "erstellt_am": formatiere_zeitstempel(k_stern.get("erstellt_am")),
         },
         "validierung": {
             "status": _normalisieren(status),
@@ -753,6 +820,8 @@ def build_report_data(
                     "kpi_ergebnisse[",
                 )
             ],
+            "conformance_checking": _normalisieren(conformance_ausgabe),
+            "performance_und_engpassanalyse": _normalisieren(performance_ausgabe),
         },
         "modellumfang": {
             **_abschnitt_metadaten(k_stern, umfang),
@@ -814,35 +883,22 @@ def build_report_data(
         "ressourcen": {
             **_abschnitt_metadaten(k_stern, ressourcen),
             "systemressourcen": _normalisieren(systemressourcen),
-
             "event_log_ressourcen": _listenwert(
-                zugeordnete_ressourcen
-                or event_log_ressourcen.get("eindeutige_werte", [])
+                zugeordnete_ressourcen or event_log_ressourcen.get("eindeutige_werte", [])
             )[:REPORT_LIST_LIMIT],
-
             "ressourcenattribut": _normalisieren(
-                ressourcenanalyse.get("quellspalte")
-                or event_log_ressourcen.get("attribut")
+                ressourcenanalyse.get("quellspalte") or event_log_ressourcen.get("attribut")
             ),
-
-            "aktivitaet_ressourcen": _listenwert(
-                ressourcenanalyse.get(
-                    "zuordnungen",
-                    event_log_ressourcen.get("aktivitaet_ressourcen", []),
-                )
-            )[:REPORT_LIST_LIMIT],
-
-            "zuordnungsmodus": _normalisieren(
-                ressourcenanalyse.get("modus")
+            "aktivitaet_ressourcen": aktivitaet_ressourcen,
+            "aktivitaet_ressourcen_anzeige": _ressourcenzuordnungen_fuer_anzeige(
+                aktivitaet_ressourcen
             ),
-            "zuordnungsherkunft": _normalisieren(
-                ressourcenanalyse.get("herkunft")
-            ),
-            "zuordnungsbegruendung": _normalisieren(
-                ressourcenanalyse.get("begruendung")
-            ),
-            "manuelle_aktivitaet_ressourcen": _manuelle_ressourcenzuordnungen(
-                ressourcen
+            "zuordnungsmodus": _normalisieren(ressourcenanalyse.get("modus")),
+            "zuordnungsherkunft": _normalisieren(ressourcenanalyse.get("herkunft")),
+            "zuordnungsbegruendung": _normalisieren(ressourcenanalyse.get("begruendung")),
+            "manuelle_aktivitaet_ressourcen": manuelle_aktivitaet_ressourcen,
+            "manuelle_aktivitaet_ressourcen_anzeige": (
+                _ressourcenzuordnungen_fuer_anzeige(manuelle_aktivitaet_ressourcen)
             ),
             "ressourcenbezogene_kpis": [
                 _kpi_aufbereiten(wert)
@@ -867,6 +923,7 @@ def build_report_data(
         },
         "vereinfachungen": {
             "etl_abstraktionen": etl_abstraktionen,
+            "vereinfachte_zeitspannen": _normalisieren(zeitvereinfachung),
         },
         "daten": {
             **_abschnitt_metadaten(k_stern, daten),
@@ -875,6 +932,7 @@ def build_report_data(
             "zwischendatensatz": _normalisieren(zwischendatensatz),
             "event_log": _normalisieren(event_log),
             "zeitbezogene_datenauswahl": _normalisieren(zeitbezogene_datenauswahl),
+            "datenaufbereitung": _normalisieren(datenaufbereitung),
         },
         "prozessdarstellung": {
             **_abschnitt_metadaten(k_stern, darstellung),

@@ -65,11 +65,14 @@ Event-Log-Konfiguration und E. Maßgeblich sind die vier Kriterien aus Tabelle 3
 - E enthält seine Mindestbestandteile vollständig und interpretierbar.
 
 Strukturelle Bindungen, Prüfsummen, technische Referenzen und die benötigten Spalten und Werte
-werden automatisch geprüft. Die Nachvollziehbarkeit von Q, die Verständlichkeit eines befüllten
-M und die Interpretierbarkeit von E erfordern zusätzlich begründete menschliche Bestätigungen.
-Fachlich erklärbare Abwesenheiten in breiten Zeitstempelspalten oder zusätzlichen Attributen
-werden transparent ausgewiesen und begründet bewertet. Es gibt weder deaktivierbare
-Prüfbereiche noch einen numerischen Qualitätsscore.
+werden automatisch geprüft und für Q, T, M und E jeweils auch bei Erfolg sichtbar ausgewiesen.
+Alle vier Artefakte erhalten zusätzlich eine getrennte menschliche Beurteilung. Eine optionale
+Anmerkung wird nur auf ausdrückliche Aktion eingeblendet und ist keine Freigabevoraussetzung.
+Ein fehlendes oder ausdrücklich leer bestätigtes M kann fachlich ausreichend sein, wenn die
+vorhandenen technischen Bezeichnungen bereits verständlich sind. Fachlich erklärbare
+Abwesenheiten in breiten Zeitstempelspalten oder zusätzlichen Attributen werden transparent
+ausgewiesen und bewertet. Es gibt weder deaktivierbare Prüfbereiche noch einen numerischen
+Qualitätsscore.
 
 Schritt 5 besitzt keine Korrektur- oder Maßnahmenlogik. Er verändert Q, T, M und E nicht, schließt
 keine Ereignisse oder Fälle aus und erzeugt keine Qualitäts-CSV. Nicht behobene Mängel blockieren
@@ -78,9 +81,11 @@ Schritt 2, M zu Schritt 3 sowie Konfiguration oder Erzeugung von E zu Schritt 4.
 
 Bei bestandenem Gate gilt `E* ← E`: E* ist eine Freigabereferenz auf exakt dasselbe E, keine
 Datenkopie. Ein projektbezogener JSON-Bericht speichert Artefakt- und Softwareversion, die
-vollständige Kettenbindung und ihre Prüfsummen, Befunde, Entscheidungen und Begründungen. Beim
-erneuten Laden werden Bericht und aktuelle Artefaktkette vollständig geprüft. Änderungen an Q,
-T, M, Konfiguration oder E entwerten die Freigabe.
+vollständige Kettenbindung und ihre Prüfsummen, Befunde, Entscheidungen und optionale
+Anmerkungen. Beim erneuten Laden werden Bericht und aktuelle Artefaktkette vollständig geprüft.
+Änderungen an Q, T, M, Konfiguration oder E entwerten die Freigabe. Berichte der Version 2
+bleiben lesbar; die dort noch nicht getrennt gespeicherten T-/M-Beurteilungen erhalten beim
+Laden sichere Freigabe-Defaults ohne Datenbankmigration.
 
 Vorhandene regelbasierte Qualitätsberichte, Maßnahmenpläne und veränderte Arbeitskopien bleiben
 über die Legacy-Schnittstelle kontrolliert lesbar. Sie werden nicht als E* interpretiert und

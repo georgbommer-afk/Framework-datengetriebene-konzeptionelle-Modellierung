@@ -3,6 +3,7 @@
 """Streamlit-Seite für Schritt 7: Ergebnisse aggregieren."""
 
 import hashlib
+from contextlib import nullcontext
 from dataclasses import asdict
 from datetime import UTC, date, datetime, time
 from uuid import UUID, uuid5
@@ -15,6 +16,7 @@ from framework_mvp.application.ergebnisaggregation import (
     berechne_ausgewaehlte_kpis,
     kompatible_tabellenspalten,
     kpi_definition,
+    kpi_erlaubt_direkten_profilmittelwert,
     profilkennzahlen_fuer_operand,
     zulaessige_quellen_fuer_operand,
 )
@@ -27,22 +29,25 @@ from framework_mvp.application.ergebnisaggregation.sollprozess import (
 )
 from framework_mvp.application.ergebnisaggregation.strukturierte_ergebnisse import (
     analysiere_ressourcen,
+    vereinfachte_zeitspannen_sind_ableitbar,
 )
 from framework_mvp.application.ergebnisaggregation.zeitvergleich import (
     lese_externe_sollzeitdaten,
 )
 from framework_mvp.application.ergebnisaggregation_service import (
+    Aggregationskonfigurationsvorlage,
     Aggregationsvorschau,
     ErgebnisaggregationService,
 )
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
-    AnkunftsstromDefinition,
+    AktivitaetRessourcenZuordnung,
     Attributzuordnung,
     BestaetigteWarteschlangeninformation,
     BusyRatioKonfiguration,
     Datenartefakt,
+    KpiBehandlungsart,
     KpiKonfiguration,
     KpiStatus,
     Operandentyp,
@@ -55,6 +60,7 @@ from framework_mvp.domain.models import (
     SollmodellEntscheidung,
     Vorkommensregel,
 )
+from framework_mvp.formatierung import formatiere_messwert
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.ui.components.mathematische_formeln import (
     zeige_performance_formeln,
@@ -65,12 +71,17 @@ from framework_mvp.ui.navigation import (
     framework_bereich_oeffnen,
     schritt_abschliessen_und_weiter,
 )
+from framework_mvp.ui.session_cleanup import ergebnisaggregation_zustand_invalidieren
 
 WOPED_NEXT_URL = "https://taminofischer.github.io/woped-next/"
 PETRI_GRUNDLAGEN_URL = "https://doi.org/10.1007/978-94-009-0649-5_6"
 WOPED_DESKTOP_URL = "https://woped.dhbw-karlsruhe.de/"
 PNML_TOOLS_URL = "https://www.pnml.org/tools.php"
 _PLATZHALTER = "— bitte ausdrücklich wählen —"
+_KPI_AUTOMATISCH_TEXT = "Aus den Daten berechnen"
+_KPI_MANUELL_TEXT = (
+    "Kennzahl später manuell berechnen – Formel in das konzeptionelle Modell übernehmen"
+)
 
 
 def _uuid_aus_session(name: str) -> UUID:
@@ -131,6 +142,170 @@ def _profilkennzahl_auswahl(
     return nach_id.get(auswahl)
 
 
+def _widget_standard(key: str, wert: object) -> None:
+    if key not in st.session_state:
+        st.session_state[key] = wert
+
+
+def _konfigurationsvorlage_initialisieren(
+    vorlage: Aggregationskonfigurationsvorlage,
+) -> None:
+    """Überführt persistierte Entscheidungen einmalig in die editierbaren Widgets."""
+    for konfiguration in vorlage.kpi_konfigurationen:
+        kpi_id = konfiguration.kpi_id
+        _widget_standard(
+            f"ag_{kpi_id}_behandlungsart",
+            _KPI_MANUELL_TEXT
+            if konfiguration.behandlungsart is KpiBehandlungsart.SPAETER_MANUELL_BERECHNEN
+            else _KPI_AUTOMATISCH_TEXT,
+        )
+        direkt = konfiguration.direkte_profilkennzahl
+        _widget_standard(f"ag_{kpi_id}_direkt_r", direkt is not None)
+        if direkt is not None:
+            _widget_standard(f"ag_{kpi_id}_direkt_r_referenz", direkt.referenz_id)
+        _widget_standard(f"ag_{kpi_id}_einheit", konfiguration.einheit)
+        _widget_standard(f"ag_{kpi_id}_bezugsmenge", konfiguration.bezugsmenge)
+        for zuordnung in konfiguration.zuordnungen:
+            praefix = f"ag_{kpi_id}_{zuordnung.operand_id}"
+            _widget_standard(f"{praefix}_quelle", zuordnung.quelle.value)
+            if zuordnung.profilkennzahl is not None:
+                _widget_standard(f"{praefix}_profil", zuordnung.profilkennzahl.referenz_id)
+            if zuordnung.startaktivitaet and zuordnung.endaktivitaet:
+                _widget_standard(f"{praefix}_zeitmodus", "Start- und Endaktivität in E*")
+                _widget_standard(f"{praefix}_start", zuordnung.startaktivitaet)
+                _widget_standard(f"{praefix}_ende", zuordnung.endaktivitaet)
+                _widget_standard(f"{praefix}_regel", zuordnung.vorkommensregel.value)
+            elif zuordnung.zweite_spalte:
+                _widget_standard(
+                    f"{praefix}_zeitmodus", "zwei ausdrücklich gewählte Zeitstempelspalten"
+                )
+                _widget_standard(f"{praefix}_spalte1", zuordnung.spalte)
+                _widget_standard(f"{praefix}_spalte2", zuordnung.zweite_spalte)
+            else:
+                _widget_standard(f"{praefix}_spalte", zuordnung.spalte)
+            _widget_standard(f"{praefix}_bedingt", bool(zuordnung.bedingungsoperator))
+            if zuordnung.bedingungsoperator:
+                _widget_standard(f"{praefix}_operator", zuordnung.bedingungsoperator)
+                _widget_standard(f"{praefix}_wert", zuordnung.bedingungswert)
+
+    sollmodell = vorlage.sollmodell
+    if sollmodell is None:
+        _widget_standard("ag_sollmodell_entscheidung", SollmodellEntscheidung.KEIN_SOLLMODELL.value)
+    else:
+        entscheidung = (
+            SollmodellEntscheidung.LINEARER_ASSISTENT
+            if sollmodell.metadaten.erstellungsart.value == "linearer_assistent"
+            else SollmodellEntscheidung.KOMPLEXES_PNML
+        )
+        _widget_standard("ag_sollmodell_entscheidung", entscheidung.value)
+        st.session_state.ag_sollmodell = sollmodell
+        praefix = (
+            "ag_linear" if entscheidung is SollmodellEntscheidung.LINEARER_ASSISTENT else "ag_pnml"
+        )
+        _widget_standard(f"{praefix}_name", sollmodell.metadaten.bezeichnung)
+        _widget_standard(f"{praefix}_grundlage", sollmodell.metadaten.fachliche_grundlage)
+        _widget_standard(f"{praefix}_version", sollmodell.metadaten.version)
+        _widget_standard(
+            f"{praefix}_person", sollmodell.metadaten.erstellende_oder_pruefende_person
+        )
+        _widget_standard(f"{praefix}_freigabe", sollmodell.metadaten.freigabedatum)
+        if entscheidung is SollmodellEntscheidung.LINEARER_ASSISTENT:
+            _widget_standard("ag_lineare_reihenfolge", list(sollmodell.sichtbare_transitionen))
+    if vorlage.aktivitaetsmapping is not None:
+        st.session_state.ag_aktivitaetsmapping = vorlage.aktivitaetsmapping
+        _widget_standard("ag_mapping_bestaetigt", True)
+        for quelle, ziel in vorlage.aktivitaetsmapping.manuelle_zuordnungen:
+            _widget_standard(f"ag_mapping_{quelle}", ziel)
+    _widget_standard("ag_conformance_aktiv", vorlage.conformance_ausfuehren)
+
+    for art, zuordnungen in (
+        ("Ressourcenattribute", vorlage.ressourcenattributzuordnungen),
+        ("Entitätsattribute", vorlage.entitaetsattributzuordnungen),
+    ):
+        for quelle, key in (
+            (Datenartefakt.EVENT_LOG_E_STERN, "e"),
+            (Datenartefakt.ZWISCHENDATENSATZ_T, "t"),
+        ):
+            gruppe = [wert for wert in zuordnungen if wert.quelle is quelle]
+            _widget_standard(f"ag_{art}_{key}_aktiv", bool(gruppe))
+            if gruppe:
+                _widget_standard(f"ag_{art}_{key}_id", gruppe[0].schluesselspalte)
+                _widget_standard(
+                    f"ag_{art}_{key}_attribute", [wert.attributspalte for wert in gruppe]
+                )
+                _widget_standard(
+                    f"ag_{art}_{key}_zeit",
+                    gruppe[0].zeitspalte or "— kein Zeitbezug —",
+                )
+    _widget_standard("ag_entitaetstyp", vorlage.entitaetstyp)
+
+    warteschlange = (
+        vorlage.bestaetigte_warteschlangen[0] if vorlage.bestaetigte_warteschlangen else None
+    )
+    _widget_standard("ag_queue_aktiv", warteschlange is not None)
+    if warteschlange is not None:
+        _widget_standard("ag_queue_quelle", warteschlange.quelle.value)
+        _widget_standard("ag_queue_name", warteschlange.bezeichnung)
+        _widget_standard("ag_queue_von", warteschlange.von_aktivitaet)
+        _widget_standard("ag_queue_zu", warteschlange.zu_aktivitaet)
+        _widget_standard("ag_queue_spalte", warteschlange.informationsspalte)
+        _widget_standard("ag_queue_filter", warteschlange.filterwert)
+
+    _widget_standard(
+        "ag_vereinfachte_zeitspannen_bestaetigt",
+        vorlage.vereinfachte_zeitspannen_bestaetigt,
+    )
+
+    performance = vorlage.performance_zeitvergleich_konfiguration
+    _widget_standard(
+        "ag_performance_dt",
+        bool(performance and performance.fertigstellungsabweichung_aktiv),
+    )
+    _widget_standard(
+        "ag_performance_db",
+        bool(performance and performance.bearbeitungszeitabweichung_aktiv),
+    )
+    if performance is not None:
+        _widget_standard("ag_performance_regel_kanonisch", performance.vorkommensregel.value)
+        _widget_standard("ag_performance_regel", performance.vorkommensregel.value)
+        _widget_standard(
+            "ag_performance_quelle",
+            "Externe CSV-/XLSX-Datei"
+            if performance.sollquelle == "extern"
+            else performance.sollquelle,
+        )
+        for key, wert in (
+            ("ag_performance_soll_case", performance.soll_case_id_spalte),
+            ("ag_performance_soll_activity", performance.soll_activity_spalte),
+            ("ag_performance_plan_ende", performance.plan_ende_spalte),
+            ("ag_performance_ist_case", performance.ist_case_id_spalte),
+            ("ag_performance_ist_activity", performance.ist_activity_spalte),
+            ("ag_performance_ist_ende", performance.ist_ende_spalte),
+            ("ag_performance_plan_start", performance.plan_start_spalte),
+            ("ag_performance_ist_start", performance.ist_start_spalte),
+            ("ag_performance_vorkommen", performance.soll_auftretensnummer_spalte),
+        ):
+            if wert:
+                _widget_standard(key, wert)
+    if vorlage.sollzeitdaten is not None and vorlage.sollzeit_tabelle is not None:
+        st.session_state.ag_sollzeitdaten = vorlage.sollzeitdaten
+        st.session_state.ag_sollzeit_tabelle = vorlage.sollzeit_tabelle.copy(deep=True)
+        st.session_state.ag_performance_upload_sha = vorlage.sollzeitdaten.sha256
+
+    busy = vorlage.busy_ratio_konfiguration
+    _widget_standard("ag_performance_busy", vorlage.busy_ratio_ausfuehren)
+    if busy is not None:
+        _widget_standard("ag_busy_resource", busy.ressourcenspalte)
+        _widget_standard("ag_busy_start", busy.startspalte)
+        _widget_standard("ag_busy_ende", busy.endspalte)
+        if busy.zeitraum_von is not None:
+            _widget_standard("ag_busy_von", busy.zeitraum_von.date())
+            _widget_standard("ag_busy_von_kanonisch", busy.zeitraum_von.date())
+        if busy.zeitraum_bis is not None:
+            _widget_standard("ag_busy_bis", busy.zeitraum_bis.date())
+            _widget_standard("ag_busy_bis_kanonisch", busy.zeitraum_bis.date())
+
+
 def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
     st.subheader("2. Ausgewählte Kennzahlen")
     kpi_ids = basis.projekt.untersuchungsauftrag.ausgewaehlte_kpi_ids
@@ -160,6 +335,41 @@ def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
                 f"Bezugsmenge: {definition.bezugsmenge} · Ergebnis: {definition.einheit} · "
                 f"Definitionsversion {definition.definitionsversion}"
             )
+            behandlung = str(
+                st.radio(
+                    "Behandlung dieser Kennzahl",
+                    [_KPI_AUTOMATISCH_TEXT, _KPI_MANUELL_TEXT],
+                    key=f"ag_{kpi_id}_behandlungsart",
+                )
+            )
+            einheit_key = f"ag_{kpi_id}_einheit"
+            _widget_standard(einheit_key, definition.einheit)
+            einheit = (
+                st.text_input("Fachlich bestätigte Einheit", key=einheit_key)
+                if definition.einheiteneingabe_erforderlich
+                else definition.einheit
+            )
+            bezugsmenge_key = f"ag_{kpi_id}_bezugsmenge"
+            _widget_standard(bezugsmenge_key, definition.bezugsmenge)
+            bezugsmenge = st.text_input(
+                "Bestätigte Bezugsmenge",
+                key=bezugsmenge_key,
+            )
+            if behandlung == _KPI_MANUELL_TEXT:
+                konfiguration = KpiKonfiguration(
+                    kpi_id=kpi_id,
+                    zuordnungen=(),
+                    einheit=einheit,
+                    bezugsmenge=bezugsmenge,
+                    behandlungsart=KpiBehandlungsart.SPAETER_MANUELL_BERECHNEN,
+                )
+                konfigurationen.append(konfiguration)
+                st.info(
+                    f"{definition.bezeichnung}: Für spätere manuelle Berechnung vorgesehen. "
+                    "Die Formel wird ohne erfundenen Zahlenwert in das konzeptionelle Modell "
+                    "übernommen."
+                )
+                continue
             direktes_profil = ""
             direkte_profilkennzahl = None
             mittelwerte = tuple(
@@ -168,14 +378,7 @@ def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
                 if wert.kennzahltyp is Profilkennzahltyp.ARITHMETISCHES_MITTEL
             )
             if (
-                kpi_id
-                in {
-                    "mittlere_dlz_warenausgang",
-                    "mittlere_dlz_wareneingang",
-                    "mittlere_transportzeit_je_warensendung",
-                    "mittlere_reaktionszeit",
-                    "mittlere_kosten_produktionslogistik_pro_produktionsauftrag",
-                }
+                kpi_erlaubt_direkten_profilmittelwert(kpi_id)
                 and mittelwerte
                 and st.checkbox(
                     "Diese KPI entspricht exakt einem in R gespeicherten arithmetischen Mittelwert",
@@ -197,7 +400,8 @@ def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
             for operand in definition.operanden:
                 if direkte_profilkennzahl is not None:
                     break
-                st.write(f"**{operand.bezeichnung}** ({operand.operandentyp.value})")
+                st.write(f"**Erforderliche Eingangsgröße: {operand.bezeichnung}**")
+                st.caption(f"Erwarteter Datentyp: {operand.erwarteter_datentyp}")
                 quellen = [
                     wert.value for wert in zulaessige_quellen_fuer_operand(operand, kpi_basis)
                 ]
@@ -326,16 +530,6 @@ def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
                             bedingungswert=bedingungswert,
                         )
                     )
-            einheit = (
-                st.text_input("Fachlich bestätigte Einheit", key=f"ag_{kpi_id}_einheit")
-                if definition.einheiteneingabe_erforderlich
-                else definition.einheit
-            )
-            bezugsmenge = st.text_input(
-                "Bestätigte Bezugsmenge",
-                value=definition.bezugsmenge,
-                key=f"ag_{kpi_id}_bezugsmenge",
-            )
             konfiguration = KpiKonfiguration(
                 kpi_id,
                 tuple(zuordnungen),
@@ -343,6 +537,7 @@ def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
                 bezugsmenge,
                 direktes_profil,
                 direkte_profilkennzahl,
+                KpiBehandlungsart.AUTOMATISCH_BERECHNEN,
             )
             konfigurationen.append(konfiguration)
             (vorschau,) = berechne_ausgewaehlte_kpis((kpi_id,), (konfiguration,), kpi_basis)
@@ -350,27 +545,36 @@ def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
                 for operand in vorschau.zugeordnete_operanden:
                     st.caption(
                         f"Rechengröße {operand.get('bezeichnung', '')}: verwendeter Wert "
-                        f"{operand.get('ermittelter_wert', '—')}"
+                        f"{formatiere_messwert(operand.get('ermittelter_wert', '—'))}"
                     )
-                st.success(f"Vorschau des KPI-Ergebnisses: {vorschau.ergebnis} {vorschau.einheit}")
-            else:
-                st.caption(
-                    "Noch nicht berechenbar: " + "; ".join(vorschau.fehlende_voraussetzungen)
+                st.success(
+                    f"{definition.bezeichnung} · Ergebnis: "
+                    + formatiere_messwert(vorschau.ergebnis, vorschau.einheit)
                 )
+            else:
+                st.warning("Mit der aktuellen Datenbasis nicht automatisch berechenbar.")
+                st.info(
+                    "Wählen Sie oben „Kennzahl später manuell berechnen“, um die Formel ohne "
+                    "Zahlenwert als geplante Ausgabe zu übernehmen."
+                )
+                if vorschau.fehlende_voraussetzungen:
+                    st.caption(
+                        "Fehlende Voraussetzungen: " + "; ".join(vorschau.fehlende_voraussetzungen)
+                    )
     return tuple(konfigurationen)
 
 
 def _sollmodell_metadaten(praefix: str) -> dict[str, object]:
+    _widget_standard(f"{praefix}_version", "1.0")
+    _widget_standard(f"{praefix}_freigabe", date.today())
     return {
         "bezeichnung": st.text_input("Bezeichnung des Sollmodells", key=f"{praefix}_name"),
         "fachliche_grundlage": st.text_area(
             "Fachliche Grundlage beziehungsweise Quelle", key=f"{praefix}_grundlage"
         ),
-        "modellversion": st.text_input("Version", value="1.0", key=f"{praefix}_version"),
+        "modellversion": st.text_input("Version", key=f"{praefix}_version"),
         "person": st.text_input("Erstellende oder prüfende Person", key=f"{praefix}_person"),
-        "freigabedatum": st.date_input(
-            "Freigabedatum", value=date.today(), key=f"{praefix}_freigabe"
-        ),
+        "freigabedatum": st.date_input("Freigabedatum", key=f"{praefix}_freigabe"),
     }
 
 
@@ -658,7 +862,10 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
     return sollmodell, mapping, conformance
 
 
-def _ressourcenzuordnung(basis: object) -> RessourcenanalyseErgebnis | None:
+def _ressourcenzuordnung(
+    basis: object,
+    vorlage: Aggregationskonfigurationsvorlage | None = None,
+) -> RessourcenanalyseErgebnis | None:
     st.markdown("#### A. Ressourcen")
     automatisch = analysiere_ressourcen(basis.event_log.copy(deep=True))
     if automatisch.modus is Ressourcenzuordnungsmodus.AUTOMATISCH:
@@ -703,12 +910,32 @@ def _ressourcenzuordnung(basis: object) -> RessourcenanalyseErgebnis | None:
             width="stretch",
         )
     luecken = [wert for wert in automatisch.zuordnungen if wert.offen]
+    vorlage_nach_aktivitaet = {
+        wert.aktivitaet: wert
+        for wert in (
+            vorlage.ressourcenanalyse.zuordnungen if vorlage and vorlage.ressourcenanalyse else ()
+        )
+    }
     tabelle = st.data_editor(
         pd.DataFrame(
             {
                 "Aktivität": [wert.aktivitaet for wert in luecken],
-                "Manuelle Ressourcen (kommagetrennt)": ["" for _ in luecken],
-                "Offen / nicht bekannt": [True for _ in luecken],
+                "Manuelle Ressourcen (kommagetrennt)": [
+                    ", ".join(
+                        vorlage_nach_aktivitaet.get(
+                            wert.aktivitaet,
+                            AktivitaetRessourcenZuordnung(wert.aktivitaet, ()),
+                        ).manuell_bestaetigte_ressourcen
+                    )
+                    for wert in luecken
+                ],
+                "Offen / nicht bekannt": [
+                    vorlage_nach_aktivitaet.get(
+                        wert.aktivitaet,
+                        AktivitaetRessourcenZuordnung(wert.aktivitaet, (), offen=True),
+                    ).offen
+                    for wert in luecken
+                ],
             }
         ),
         hide_index=True,
@@ -827,85 +1054,68 @@ def _warteschlangeninformation(basis: object) -> tuple[BestaetigteWarteschlangen
     )
 
 
-def _ankunftsstroeme(basis: object) -> tuple[AnkunftsstromDefinition, ...]:
-    st.markdown("#### E. Zwischenankunftszeiten (IAT)")
+def _zeitgroessen_datenauswahl(basis: object) -> bool:
+    """Zeigt Algorithmus 7 als einfachen Standardpfad mit genau einer Fallback-Entscheidung."""
+    st.markdown("#### D. Zeitgrößen für die Datenauswahl")
+    st.markdown("##### Bearbeitungszeiten")
+    spalten = set(basis.event_log.columns)
+    hat_start_und_ende = {"start_timestamp", "end_timestamp"} <= spalten
+    if hat_start_und_ende:
+        start = pd.to_datetime(basis.event_log["start_timestamp"], errors="coerce", utc=True)
+        ende = pd.to_datetime(basis.event_log["end_timestamp"], errors="coerce", utc=True)
+        if (start.notna() & ende.notna() & (ende >= start)).any():
+            st.success(
+                "✓ Ist-Start und Ist-Ende vorhanden. Bearbeitungszeiten nach Gleichung 3.3 "
+                "werden automatisch bestimmt."
+            )
+        else:
+            st.info(
+                "Bearbeitungszeiten nach Gleichung 3.3 sind für die vorhandenen Zeitwerte "
+                "nicht getrennt bestimmbar."
+            )
+    else:
+        st.info(
+            "Bearbeitungszeiten nach Gleichung 3.3 sind ohne kanonischen Ist-Start und "
+            "Ist-Ende nicht getrennt bestimmbar."
+        )
+
+    fallback_moeglich = vereinfachte_zeitspannen_sind_ableitbar(basis.event_log)
+    if fallback_moeglich:
+        st.caption(
+            "Für Ausführungen ohne separaten Endzeitpunkt kann Start(B) − Start(A) nur als "
+            "gemeinsame vereinfachte Zeitspanne übernommen werden. Sie kann Bearbeitung, "
+            "Transport, Warten und sonstige Zwischenzeiten enthalten und ist weder eine "
+            "Bearbeitungszeit nach Gleichung 3.3 noch eine separate Wartezeit."
+        )
+        bestaetigt = bool(
+            st.checkbox(
+                "Mangels separatem Endzeitpunkt als vereinfachte Zeitspanne für die "
+                "Modellierung übernehmen.",
+                key="ag_vereinfachte_zeitspannen_bestaetigt",
+            )
+        )
+    else:
+        bestaetigt = False
+        _widget_standard("ag_vereinfachte_zeitspannen_bestaetigt", False)
+
+    st.markdown("##### Potenzielle Wartestellen")
     st.caption(
-        "Ohne explizit definierten Ankunftsstrom q wird keine IAT berechnet. Auch der erste "
-        "Zeitstempel je Fall gilt nur nach ausdrücklicher Bestätigung als Systemeintritt."
+        "Positive Lücken Start(B) − Ende(A) werden nach Gleichung 3.15 automatisch als "
+        "potenzielle Wartestellenhinweise ausgewertet. Nullwerte und Überlappungen sind keine "
+        "Wartezeiten; eine fachlich bestätigte Warteschlange wird daraus nicht behauptet."
     )
-    anzahl = int(
-        st.number_input("Anzahl bestätigter Ankunftsströme q", 0, 10, 0, key="ag_iat_anzahl")
-    )
-    ergebnisse: list[AnkunftsstromDefinition] = []
-    for index in range(anzahl):
-        with st.expander(f"Ankunftsstrom q{index + 1}", expanded=True):
-            name = st.text_input("Fachliche Bezeichnung q", key=f"ag_iat_{index}_name")
-            quelle = Datenartefakt(st.radio("Quelle", ["E*", "T"], key=f"ag_iat_{index}_quelle"))
-            tabelle = (
-                basis.event_log
-                if quelle is Datenartefakt.EVENT_LOG_E_STERN
-                else basis.zwischendaten
-            )
-            spalten = [str(wert) for wert in tabelle.columns]
-            entitaet = (
-                "case_id"
-                if quelle is Datenartefakt.EVENT_LOG_E_STERN
-                else str(st.selectbox("Entitäts-ID-Spalte", spalten, key=f"ag_iat_{index}_id"))
-            )
-            zeit = str(
-                st.selectbox("Bestätigte Ankunftszeitspalte", spalten, key=f"ag_iat_{index}_zeit")
-            )
-            aktivitaet = ""
-            if quelle is Datenartefakt.EVENT_LOG_E_STERN:
-                aktivitaet = str(
-                    st.selectbox(
-                        "Ankunftsaktivität (optional)",
-                        [
-                            "— keine —",
-                            *sorted(
-                                str(wert) for wert in basis.event_log["activity"].dropna().unique()
-                            ),
-                        ],
-                        key=f"ag_iat_{index}_aktivitaet",
-                    )
-                )
-                if aktivitaet == "— keine —":
-                    aktivitaet = ""
-            filterspalte = ""
-            filterwert = ""
-            if st.checkbox("Exakten zusätzlichen Filter verwenden", key=f"ag_iat_{index}_filter"):
-                filterspalte = str(
-                    st.selectbox("Filterspalte", spalten, key=f"ag_iat_{index}_filterspalte")
-                )
-                filterwert = st.text_input("Exakter Filterwert", key=f"ag_iat_{index}_filterwert")
-            regel_roh = str(
-                st.selectbox(
-                    "Vorkommensregel",
-                    [
-                        "— keine; Mehrdeutige ausschließen —",
-                        Vorkommensregel.ERSTES.value,
-                        Vorkommensregel.LETZTES.value,
-                    ],
-                    key=f"ag_iat_{index}_regel",
-                )
-            )
-            regel = None if regel_roh.startswith("—") else Vorkommensregel(regel_roh)
-            if name.strip():
-                ergebnisse.append(
-                    AnkunftsstromDefinition(
-                        name.strip(),
-                        quelle,
-                        entitaet,
-                        zeit,
-                        aktivitaet=aktivitaet,
-                        filterspalte=filterspalte,
-                        filterwert=filterwert,
-                        vorkommensregel=regel,
-                    )
-                )
-            else:
-                st.warning(f"Ankunftsstrom q{index + 1} benötigt eine fachliche Bezeichnung.")
-    return tuple(ergebnisse)
+    st.markdown("##### Zwischenankunftszeit am Systemeintritt")
+    if {"case_id", "start_timestamp"} <= spalten:
+        st.success(
+            "Der früheste gültige Ist-Start je Case wird genau einmal als Eintritt in den durch "
+            "E* repräsentierten Systemausschnitt verwendet (Gleichung 3.16)."
+        )
+    else:
+        st.info(
+            "Die System-IAT ist nicht eindeutig bestimmbar, weil case_id oder der kanonische "
+            "Ist-Start fehlt. Schritt 7 bleibt dennoch abschließbar."
+        )
+    return bestaetigt
 
 
 def _performance_und_engpassanalyse(
@@ -1244,7 +1454,13 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
     st.write("**Status der ausgewählten KPIs**")
     for wert in vorschau.kpi_ergebnisse:
         if wert.status is KpiStatus.BERECHNET:
-            st.success(f"{wert.bezeichnung}: {wert.ergebnis} {wert.einheit}")
+            st.success(f"{wert.bezeichnung}: {formatiere_messwert(wert.ergebnis, wert.einheit)}")
+        elif wert.status is KpiStatus.FUER_SPAETERE_MANUELLE_BERECHNUNG:
+            st.info(f"{wert.bezeichnung}: Für spätere manuelle Berechnung vorgesehen")
+            st.caption(
+                f"Formel: {wert.formel} · Einheit: {wert.einheit or '—'} · "
+                f"Bezugsmenge: {wert.bezugsmenge or '—'}"
+            )
         else:
             st.warning(
                 f"{wert.bezeichnung}: nicht berechenbar – "
@@ -1289,7 +1505,10 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
         fall_spalten[1].metric("Konforme Fälle", conformance.konforme_faelle)
         fall_spalten[2].metric("Abweichende Fälle", conformance.abweichende_faelle)
         if conformance.fitness_plausibilisierung_pm4py is not None:
-            st.caption(f"PM4Py-Plausibilisierung: {conformance.fitness_plausibilisierung_pm4py}")
+            st.caption(
+                "PM4Py-Plausibilisierung: "
+                + formatiere_messwert(conformance.fitness_plausibilisierung_pm4py)
+            )
             if (
                 conformance.fitness is not None
                 and abs(conformance.fitness - conformance.fitness_plausibilisierung_pm4py) > 0.01
@@ -1335,7 +1554,8 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
                 "**dT · Fertigstellungsabweichung (Gl. 3.1):** "
                 f"n={wert.anzahl}, verspätet={wert.verspaetet}, "
                 f"planmäßig={wert.planmaessig}, vorzeitig={wert.vorzeitig}, "
-                f"Mittelwert={wert.mittelwert_sekunden} s, Median={wert.median_sekunden} s"
+                f"Mittelwert={formatiere_messwert(wert.mittelwert_sekunden, 's')}, "
+                f"Median={formatiere_messwert(wert.median_sekunden, 's')}"
             )
         if performance.db_statistik is not None:
             wert = performance.db_statistik
@@ -1343,7 +1563,8 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
                 "**dB · Bearbeitungszeitabweichung (Gl. 3.2):** "
                 f"n={wert.anzahl}, länger={wert.laenger_als_geplant}, "
                 f"gleich={wert.gleich_geplant}, kürzer={wert.kuerzer_als_geplant}, "
-                f"Mittelwert={wert.mittelwert_sekunden} s, Median={wert.median_sekunden} s"
+                f"Mittelwert={formatiere_messwert(wert.mittelwert_sekunden, 's')}, "
+                f"Median={formatiere_messwert(wert.median_sekunden, 's')}"
             )
         with st.expander("Einzelwerte dT und dB"):
             st.dataframe(
@@ -1420,22 +1641,11 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
             f"**Entitätsinstanzen:** {len(entitaeten.instanzen)} aus E*.case_id · "
             f"{len(entitaeten.attribute)} bestätigte Attributauswertungen"
         )
-    warteschlangenanalyse = getattr(vorschau, "warteschlangenanalyse", None)
-    if warteschlangenanalyse is not None:
-        st.write(
-            "**Potenzielle Wartezeiten:** "
-            f"{warteschlangenanalyse.status.value} · "
-            f"{len(warteschlangenanalyse.potenzielle_wartezeiten)} Übergänge · "
-            f"{len(warteschlangenanalyse.bestaetigte_warteschlangen)} ausdrücklich "
-            "bestätigte Warteschlangeninformationen"
-        )
     datenauswahl = getattr(vorschau, "zeitbezogene_datenauswahl", None)
     if datenauswahl is not None:
-        st.write(
-            "**Zeitbezogene Datenauswahl:** "
-            + datenauswahl.status.value
-            + f" · {len(datenauswahl.zwischenankunftszeiten)} Ankunftsströme q"
-        )
+        st.markdown("#### Zeitbezogene Datenauswahl")
+        st.write(f"**Fachlicher Status:** {datenauswahl.status.value}")
+        st.markdown("##### Bearbeitungszeiten nach Gleichung 3.3")
         if datenauswahl.bearbeitungszeiten:
             st.dataframe(
                 pd.DataFrame(
@@ -1444,8 +1654,10 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
                             "Aktivität": wert.aktivitaet,
                             "Ressource": wert.ressource or "kein Ressourcenbezug",
                             "n": wert.statistik.anzahl,
-                            "Mittelwert (s)": wert.statistik.mittelwert_sekunden,
-                            "Median (s)": wert.statistik.median_sekunden,
+                            "Mittelwert": formatiere_messwert(
+                                wert.statistik.mittelwert_sekunden, "s"
+                            ),
+                            "Median": formatiere_messwert(wert.statistik.median_sekunden, "s"),
                         }
                         for wert in datenauswahl.bearbeitungszeiten
                     ]
@@ -1453,25 +1665,80 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
                 hide_index=True,
                 width="stretch",
             )
-        if datenauswahl.zwischenankunftszeiten:
+        else:
+            st.info(
+                "Aus Ist-Start und Ist-Ende waren keine getrennten Bearbeitungszeiten "
+                "nach Gleichung 3.3 bestimmbar."
+            )
+        if datenauswahl.vereinfachte_zeitspannen:
+            st.markdown("##### Vereinfachte Start-zu-Start-Zeitspannen")
+            st.warning(
+                "Bestätigte Vereinfachung: Start(B) − Start(A). Diese gemeinsame Zeitspanne "
+                "wird nicht als Bearbeitungs- oder Wartezeit fachlich zerlegt."
+            )
             st.dataframe(
                 pd.DataFrame(
                     [
                         {
-                            "Ankunftsstrom q": wert.definition.bezeichnung,
-                            "Quelle": wert.definition.quelle.value,
-                            "Status": wert.status.value,
-                            "n": wert.statistik.anzahl if wert.statistik else 0,
-                            "Ausgeschlossene Entitätsinstanzen": (
-                                wert.ausgeschlossene_entitaetsinstanzen
+                            "Übergang": f"{wert.von_aktivitaet} → {wert.zu_aktivitaet}",
+                            "n": wert.statistik.anzahl,
+                            "Mittelwert": formatiere_messwert(
+                                wert.statistik.mittelwert_sekunden, "s"
                             ),
+                            "Median": formatiere_messwert(wert.statistik.median_sekunden, "s"),
                         }
-                        for wert in datenauswahl.zwischenankunftszeiten
+                        for wert in datenauswahl.vereinfachte_zeitspannen
                     ]
                 ),
                 hide_index=True,
                 width="stretch",
             )
+        elif datenauswahl.vereinfachte_zeitspannen_bestaetigt:
+            st.info(
+                "Die Vereinfachung wurde bestätigt, es verblieb jedoch keine positive "
+                "auswertbare Start-zu-Start-Zeitspanne."
+            )
+        st.markdown("##### Potenzielle Wartestellen nach Gleichung 3.15")
+        if datenauswahl.potenzielle_wartezeiten:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Übergang": f"{wert.von_aktivitaet} → {wert.zu_aktivitaet}",
+                            "n": wert.statistik.anzahl,
+                            "Mittelwert": formatiere_messwert(
+                                wert.statistik.mittelwert_sekunden, "s"
+                            ),
+                            "Median": formatiere_messwert(wert.statistik.median_sekunden, "s"),
+                            "Status": "potenzielle Wartestelle",
+                        }
+                        for wert in datenauswahl.potenzielle_wartezeiten
+                    ]
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+            st.caption(
+                "Ein positiver Zeitabstand ist ein Hinweis, aber kein Beweis für eine reale "
+                "Warteschlange."
+            )
+        else:
+            st.info("Keine positive auswertbare Lücke als potenzielle Wartestelle erkannt.")
+        st.markdown("##### Zwischenankunftszeit am Systemeintritt · Gleichung 3.16")
+        system_iat = datenauswahl.system_zwischenankunftszeit
+        if system_iat is not None and system_iat.statistik is not None:
+            spalten = st.columns(4)
+            spalten[0].metric("Entitäten", system_iat.anzahl_entitaeten)
+            spalten[1].metric("IAT-Werte", system_iat.statistik.anzahl)
+            spalten[2].metric(
+                "Mittelwert", formatiere_messwert(system_iat.statistik.mittelwert_sekunden, "s")
+            )
+            spalten[3].metric(
+                "Median", formatiere_messwert(system_iat.statistik.median_sekunden, "s")
+            )
+            st.caption(system_iat.berechnungsregel)
+        elif system_iat is not None:
+            st.info(system_iat.begruendung or "System-IAT nicht eindeutig bestimmbar.")
     if vorschau.warnungen:
         for warnung in vorschau.warnungen:
             if warnung.startswith("Conformance Checking wurde nicht berechnet"):
@@ -1598,35 +1865,173 @@ def _gespeicherte_performance_anzeigen(details: object) -> None:
             )
 
 
+def _gespeicherte_zeitgroessen_anzeigen(wert: object) -> None:
+    datenauswahl = wert if isinstance(wert, dict) else {}
+    if not datenauswahl:
+        return
+    st.markdown("#### Zeitbezogene Datenauswahl")
+    bearbeitungszeiten = datenauswahl.get("bearbeitungszeiten", [])
+    if isinstance(bearbeitungszeiten, list) and bearbeitungszeiten:
+        st.write("**Bearbeitungszeiten nach Gleichung 3.3**")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Aktivität": eintrag.get("aktivitaet", "—"),
+                        "Ressource": eintrag.get("ressource") or "kein Ressourcenbezug",
+                        "n": eintrag.get("statistik", {}).get("anzahl", 0),
+                        "Mittelwert": formatiere_messwert(
+                            eintrag.get("statistik", {}).get("mittelwert_sekunden"), "s"
+                        ),
+                        "Median": formatiere_messwert(
+                            eintrag.get("statistik", {}).get("median_sekunden"), "s"
+                        ),
+                    }
+                    for eintrag in bearbeitungszeiten
+                    if isinstance(eintrag, dict) and isinstance(eintrag.get("statistik"), dict)
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+    vereinfachte = datenauswahl.get("vereinfachte_zeitspannen", [])
+    if isinstance(vereinfachte, list) and vereinfachte:
+        st.write("**Vereinfachte Start-zu-Start-Zeitspannen**")
+        st.warning(
+            "Bestätigte Vereinfachung: Start(B) − Start(A); keine Zerlegung in Bearbeitungs- "
+            "und Wartezeit."
+        )
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Übergang": (
+                            f"{eintrag.get('von_aktivitaet', '—')} → "
+                            f"{eintrag.get('zu_aktivitaet', '—')}"
+                        ),
+                        "n": eintrag.get("statistik", {}).get("anzahl", 0),
+                        "Mittelwert": formatiere_messwert(
+                            eintrag.get("statistik", {}).get("mittelwert_sekunden"), "s"
+                        ),
+                        "Median": formatiere_messwert(
+                            eintrag.get("statistik", {}).get("median_sekunden"), "s"
+                        ),
+                    }
+                    for eintrag in vereinfachte
+                    if isinstance(eintrag, dict) and isinstance(eintrag.get("statistik"), dict)
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+    warten = datenauswahl.get("potenzielle_wartezeiten", [])
+    if isinstance(warten, list) and warten:
+        st.write("**Potenzielle Wartestellen nach Gleichung 3.15**")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Übergang": (
+                            f"{eintrag.get('von_aktivitaet', '—')} → "
+                            f"{eintrag.get('zu_aktivitaet', '—')}"
+                        ),
+                        "n": eintrag.get("statistik", {}).get("anzahl", 0),
+                        "Mittelwert": formatiere_messwert(
+                            eintrag.get("statistik", {}).get("mittelwert_sekunden"), "s"
+                        ),
+                        "Median": formatiere_messwert(
+                            eintrag.get("statistik", {}).get("median_sekunden"), "s"
+                        ),
+                        "Status": "potenzielle Wartestelle",
+                    }
+                    for eintrag in warten
+                    if isinstance(eintrag, dict) and isinstance(eintrag.get("statistik"), dict)
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+    system_iat = datenauswahl.get("system_zwischenankunftszeit")
+    if isinstance(system_iat, dict):
+        st.write("**Zwischenankunftszeit am Systemeintritt · Gleichung 3.16**")
+        statistik = system_iat.get("statistik")
+        if isinstance(statistik, dict):
+            spalten = st.columns(4)
+            spalten[0].metric("Entitäten", system_iat.get("anzahl_entitaeten", 0))
+            spalten[1].metric("IAT-Werte", statistik.get("anzahl", 0))
+            spalten[2].metric(
+                "Mittelwert", formatiere_messwert(statistik.get("mittelwert_sekunden"), "s")
+            )
+            spalten[3].metric("Median", formatiere_messwert(statistik.get("median_sekunden"), "s"))
+        else:
+            st.info(str(system_iat.get("begruendung") or "System-IAT nicht eindeutig bestimmbar."))
+
+
 def _gespeichertes_a_g_anzeigen(
     a_g: dict[str, object], details: dict[str, object] | None = None
 ) -> None:
     """Zeigt die persistierten Entscheidungen und Ergebnisse ohne Neuberechnung."""
-    st.subheader("Gespeicherte Konfiguration und Ergebnisse A_G")
-    st.write(
-        "**Ausgewählte KPI:** "
-        + ", ".join(str(wert) for wert in a_g.get("ausgewaehlte_kpi_ids", []))
-    )
-    kpi_konfigurationen = a_g.get("kpi_konfigurationen", [])
-    if isinstance(kpi_konfigurationen, list) and kpi_konfigurationen:
-        st.write("**Persistierte KPI-Operanden und Datenquellen**")
-        st.json(kpi_konfigurationen, expanded=False)
-    st.write("**Conformance Checking**")
-    st.json(a_g.get("conformance_checking", {}), expanded=False)
+    st.subheader("Ergebnisübersicht A_G")
+    st.markdown("#### Kennzahlen")
+    kpi_ergebnisse = a_g.get("kpi_ergebnisse", [])
+    if isinstance(kpi_ergebnisse, list) and kpi_ergebnisse:
+        for wert in kpi_ergebnisse:
+            if not isinstance(wert, dict):
+                continue
+            bezeichnung = str(wert.get("bezeichnung") or "Kennzahl")
+            status = str(wert.get("status", ""))
+            if status == KpiStatus.BERECHNET.value:
+                st.success(
+                    f"{bezeichnung}: "
+                    + formatiere_messwert(wert.get("ergebnis"), str(wert.get("einheit", "")))
+                )
+            elif status == KpiStatus.FUER_SPAETERE_MANUELLE_BERECHNUNG.value:
+                st.info(f"{bezeichnung}: Für spätere manuelle Berechnung vorgesehen")
+                st.caption(
+                    f"Formel: {wert.get('formel', '—')} · Einheit: "
+                    f"{wert.get('einheit') or '—'} · Bezugsmenge: "
+                    f"{wert.get('bezugsmenge') or '—'}"
+                )
+            else:
+                st.warning(f"{bezeichnung}: Mit der gespeicherten Datenbasis nicht berechenbar.")
+    else:
+        st.info("In U wurden keine Kennzahlen ausgewählt.")
+
     details = details or {}
-    _gespeicherte_conformance_anzeigen(details.get("conformance"))
+    conformance_details = details.get("conformance")
+    if conformance_details is None:
+        conformance = a_g.get("conformance_checking")
+        if isinstance(conformance, dict) and isinstance(conformance.get("ergebnis"), dict):
+            conformance_details = {"ergebnis": conformance["ergebnis"]}
+    _gespeicherte_conformance_anzeigen(conformance_details)
     _gespeicherte_performance_anzeigen(details.get("performance"))
     strukturierte = a_g.get("strukturierte_ergebnisse", {})
     if isinstance(strukturierte, dict):
-        for titel, schluessel in (
-            ("Ressourcenentscheidungen", "ressourcen"),
-            ("Entitätsinformationen", "entitaetsinstanzen_und_attribute"),
-            ("Warteschlangen und Wartezeiten", "warteschlangen_und_wartezeiten"),
-            ("Zeit- und Ankunftsauswahl", "zeitbezogene_datenauswahl"),
-            ("Soll-/Ist-Performance und Busy Ratio", "performance_und_engpassanalyse"),
-        ):
-            with st.expander(titel, expanded=False):
-                st.json(strukturierte.get(schluessel, {}), expanded=True)
+        _gespeicherte_zeitgroessen_anzeigen(strukturierte.get("zeitbezogene_datenauswahl"))
+        st.markdown("#### Weitere aggregierte Informationen")
+        ressourcen = strukturierte.get("ressourcen")
+        if isinstance(ressourcen, dict):
+            st.write(
+                "**Ressourcen:** "
+                f"{len(ressourcen.get('zuordnungen', []))} Aktivitätszuordnungen · "
+                f"Status {ressourcen.get('modus', '—')}"
+            )
+        entitaeten = strukturierte.get("entitaetsinstanzen_und_attribute")
+        if isinstance(entitaeten, dict):
+            st.write(
+                "**Entitäten:** "
+                f"{len(entitaeten.get('instanzen', []))} Instanzen"
+                + (
+                    f" · Typ {entitaeten.get('entitaetstyp')}"
+                    if entitaeten.get("entitaetstyp")
+                    else ""
+                )
+            )
+    with st.expander("Technische Details", expanded=False):
+        st.caption(
+            "Interne IDs, Prüfsummen, Operandenzuordnungen und vollständige persistierte Struktur"
+        )
+        st.json(a_g, expanded=True)
 
 
 def zeige_ergebnisaggregation_seite(
@@ -1687,6 +2092,14 @@ def zeige_ergebnisaggregation_seite(
                 schritt_abschliessen_und_weiter(aktueller_schritt=7, projekt_id=projekt_id)
             return
         except (Domaenenfehler, Importintegritaetsfehler, ValueError) as fehler:
+
+            def rekonfiguration_vorbereiten() -> None:
+                vorbereiten = getattr(service, "rekonfiguration_vorbereiten", None)
+                if callable(vorbereiten):
+                    vorbereiten(projekt_id, freigabe_id, analyse_id)
+                ergebnisaggregation_zustand_invalidieren(st.session_state)
+                st.session_state[bearbeitung_key] = True
+
             zeige_voraussetzungshinweis(
                 grund=(
                     "Die Ergebnisaggregation kann für die aktuelle fachliche Grundlage "
@@ -1700,6 +2113,7 @@ def zeige_ergebnisaggregation_seite(
                 aktionslabel="Ergebnisaggregation neu konfigurieren",
                 projekt_id=projekt_id,
                 technische_details={"ursache": str(fehler)},
+                aktion_vor_navigation=rekonfiguration_vorbereiten,
             )
             return
     try:
@@ -1714,11 +2128,26 @@ def zeige_ergebnisaggregation_seite(
             technische_details={"ursache": str(fehler)},
         )
         return
+    vorlage = None
+    vorlage_laden = getattr(service, "kompatible_konfigurationsvorlage_laden", None)
+    if callable(vorlage_laden):
+        try:
+            vorlage = vorlage_laden(projekt_id, freigabe_id, analyse_id)
+        except (Domaenenfehler, Importintegritaetsfehler, ValueError):
+            vorlage = None
+    vorlage_key = f"ag_vorlage_initialisiert_{projekt_id}_{basis.untersuchungsauftrag_sha256}"
+    if vorlage is not None and not st.session_state.get(vorlage_key, False):
+        _konfigurationsvorlage_initialisieren(vorlage)
+        st.session_state[vorlage_key] = True
+        st.info(
+            "Die kompatiblen manuellen Entscheidungen des bisherigen A_G wurden als "
+            "Vorlage geladen. Neue KPI bleiben unkonfiguriert."
+        )
     _eingangsartefakte(basis)
     kpi_konfigurationen = _kpi_konfigurationen(basis)
     sollmodell, mapping, conformance = _sollmodell_und_mapping(basis)
     st.subheader("4. Ressourcen, Entitäten, Warteschlangen und Zeitgrößen")
-    ressourcenanalyse = _ressourcenzuordnung(basis)
+    ressourcenanalyse = _ressourcenzuordnung(basis, vorlage)
     ressourcenattribute = _attributzuordnungen(basis, art="Ressourcenattribute")
     st.markdown("#### B. Entitätsinformationen")
     st.write(
@@ -1730,13 +2159,8 @@ def zeige_ergebnisaggregation_seite(
         "Bestätigter fachlicher Entitätstyp (optional)", key="ag_entitaetstyp"
     )
     warteschlangen = _warteschlangeninformation(basis)
-    st.markdown("#### D. Bearbeitungszeiten")
-    st.caption(
-        "Bearbeitungszeit = end_timestamp − start_timestamp derselben Ausführung. Bei "
-        "vorhandener Ressource erfolgt die Statistik je Aktivität + Ressource; sonst nur je "
-        "Aktivität ohne Ressourcenbezug."
-    )
-    ankunftsstroeme = _ankunftsstroeme(basis)
+    vereinfachte_zeitspannen_bestaetigt = _zeitgroessen_datenauswahl(basis)
+    ankunftsstroeme = ()
     (
         sollzeitdaten,
         sollzeit_tabelle,
@@ -1763,6 +2187,7 @@ def zeige_ergebnisaggregation_seite(
         performance_zeitvergleich_ausfuehren=performance_aktiv,
         busy_ratio_konfiguration=busy_konfiguration,
         busy_ratio_ausfuehren=busy_aktiv,
+        vereinfachte_zeitspannen_bestaetigt=vereinfachte_zeitspannen_bestaetigt,
     )
     vorschau = st.session_state.get("ag_vorschau")
     if vorschau is not None and (
@@ -1785,29 +2210,36 @@ def zeige_ergebnisaggregation_seite(
         disabled=ressourcenanalyse is None,
     ):
         try:
-            vorschau = service.vorschau(
-                projekt_id=projekt_id,
-                freigabe_id=freigabe_id,
-                analyse_id=analyse_id,
-                kpi_konfigurationen=kpi_konfigurationen,
-                sollmodell=sollmodell,
-                aktivitaetsmapping=mapping,
-                conformance_ausfuehren=conformance,
-                sollzeitdaten=sollzeitdaten,
-                sollzeit_tabelle=sollzeit_tabelle,
-                zeitvergleich_konfiguration=None,
-                zeitvergleich_ausfuehren=False,
-                ressourcenanalyse=ressourcenanalyse,
-                ressourcenattributzuordnungen=ressourcenattribute,
-                entitaetsattributzuordnungen=entitaetsattribute,
-                entitaetstyp=entitaetstyp,
-                bestaetigte_warteschlangen=warteschlangen,
-                ankunftsstroeme=ankunftsstroeme,
-                performance_zeitvergleich_konfiguration=performance_konfiguration,
-                performance_zeitvergleich_ausfuehren=performance_aktiv,
-                busy_ratio_konfiguration=busy_konfiguration,
-                busy_ratio_ausfuehren=busy_aktiv,
+            kontext = (
+                st.spinner("Token-Based Replay wird durchgeführt …")
+                if conformance
+                else nullcontext()
             )
+            with kontext:
+                vorschau = service.vorschau(
+                    projekt_id=projekt_id,
+                    freigabe_id=freigabe_id,
+                    analyse_id=analyse_id,
+                    kpi_konfigurationen=kpi_konfigurationen,
+                    sollmodell=sollmodell,
+                    aktivitaetsmapping=mapping,
+                    conformance_ausfuehren=conformance,
+                    sollzeitdaten=sollzeitdaten,
+                    sollzeit_tabelle=sollzeit_tabelle,
+                    zeitvergleich_konfiguration=None,
+                    zeitvergleich_ausfuehren=False,
+                    ressourcenanalyse=ressourcenanalyse,
+                    ressourcenattributzuordnungen=ressourcenattribute,
+                    entitaetsattributzuordnungen=entitaetsattribute,
+                    entitaetstyp=entitaetstyp,
+                    bestaetigte_warteschlangen=warteschlangen,
+                    ankunftsstroeme=ankunftsstroeme,
+                    performance_zeitvergleich_konfiguration=performance_konfiguration,
+                    performance_zeitvergleich_ausfuehren=performance_aktiv,
+                    busy_ratio_konfiguration=busy_konfiguration,
+                    busy_ratio_ausfuehren=busy_aktiv,
+                    vereinfachte_zeitspannen_bestaetigt=(vereinfachte_zeitspannen_bestaetigt),
+                )
             st.session_state.ag_vorschau = vorschau
             aggregations_id = (
                 UUID(str(st.session_state.get("ag_neue_id")))

@@ -327,7 +327,11 @@ class Untersuchungsauftrag:
         object.__setattr__(
             self,
             "ausgewaehlte_kpi_ids",
-            bereinige_kpi_auswahl(self.logistische_zielgroessen, self.ausgewaehlte_kpi_ids),
+            bereinige_kpi_auswahl(
+                self.logistische_zielgroessen,
+                self.ausgewaehlte_kpi_ids,
+                self.systemtyp,
+            ),
         )
 
     def ist_vollstaendig(self) -> bool:

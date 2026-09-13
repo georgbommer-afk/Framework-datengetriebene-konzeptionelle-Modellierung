@@ -1,4 +1,4 @@
-"""Fachliche Formeltests der 16 KPI-Definitionen aus A.7 bis A.10."""
+"""Fachliche Formeltests der systemspezifischen KPI-Matrix aus A.7 bis A.10."""
 
 import math
 
@@ -14,8 +14,10 @@ from framework_mvp.application.ergebnisaggregation.kpi import (
     profilkennzahlen_fuer_operand,
     zulaessige_quellen_fuer_operand,
 )
+from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     Datenartefakt,
+    KpiBehandlungsart,
     KpiKonfiguration,
     KpiOperandDefinition,
     KpiStatus,
@@ -79,6 +81,11 @@ def _basis(
     ("kpi_id", "operanden", "erwartet"),
     (
         (
+            "einhaltung_lagerbandbreite",
+            {"tage_innerhalb_bestandsgrenzen": 9, "betrachtungszeitraum_tage": 10},
+            90,
+        ),
+        (
             "servicegrad",
             {"befriedigte_kundenauftragspositionen": 8, "kundenauftragspositionen": 10},
             80,
@@ -88,16 +95,51 @@ def _basis(
             {"startbare_produktionsauftraege": 9, "produktionsauftraege": 10},
             90,
         ),
+        (
+            "bestaetigungsquote_kundenwunschtermin",
+            {"bestaetigte_kundenauftragspositionen": 8, "kundenauftragspositionen": 10},
+            80,
+        ),
         ("liefertreue", {"liefertreue_produktionsauftraege": 7, "produktionsauftraege": 10}, 70),
+        (
+            "liefertreue_intralogistik",
+            {"befriedigte_kundenauftragspositionen": 8, "kundenauftragspositionen": 10},
+            80,
+        ),
+        (
+            "mittlere_durchfuehrungszeit",
+            {"summe_durchfuehrungszeiten": 24, "produktionsauftraege": 4},
+            6,
+        ),
         (
             "mittlere_dlz_warenausgang",
             {"summe_dlz_warenausgang": 24, "lieferscheinpositionen": 4},
             6,
         ),
         (
+            "mittlerer_durchfuehrungszeitanteil",
+            {"summe_durchfuehrungszeiten": 24, "summe_durchlaufzeiten": 30},
+            80,
+        ),
+        (
             "mittlere_dlz_wareneingang",
             {"summe_dlz_wareneingang": 15, "wareneingangspositionen": 3},
             5,
+        ),
+        (
+            "mittlere_wartezeit_je_foerdereinheit",
+            {"summe_wartezeiten": 30, "foerdereinheiten": 5},
+            6,
+        ),
+        (
+            "tatsaechliche_transportzeit_att",
+            {
+                "auftragsausfuehrungszeit": 20,
+                "belegungszeit_arbeitseinheit": 7,
+                "wartezeit": 2,
+                "verzoegerungszeit_arbeitseinheit": 1,
+            },
+            10,
         ),
         (
             "tatsaechliche_wartezeit_aqt",
@@ -118,6 +160,11 @@ def _basis(
         (
             "standardabweichung_dlz_warenausgang",
             {"dlz_warenausgang_werte": (2, 4, 6)},
+            8 / 3,
+        ),
+        (
+            "standardabweichung_bearbeitungszeit",
+            {"bearbeitungszeit_werte": (2, 4, 6)},
             math.sqrt(8 / 3),
         ),
         (
@@ -126,13 +173,29 @@ def _basis(
             75,
         ),
         (
+            "first_time_quality_ftq",
+            {"gutmenge_gq": 38, "produzierte_fertigungsmenge_pqf": 40},
+            95,
+        ),
+        (
             "lieferqualitaetstreue",
             {"qualitaetsgerechte_wareneingangspositionen": 19, "wareneingangspositionen": 20},
             95,
         ),
         ("nacharbeitsquote_rr", {"nacharbeiten": 2, "verarbeitete_menge": 40}, 5),
+        (
+            "reklamationsquote",
+            {"berechtigte_kundenreklamationen": 2, "lieferscheinpositionen": 40},
+            5,
+        ),
         ("nutzungseffizienz_ue", {"produktionszeit": 8, "auslastung_der_einheit": 10}, 80),
+        (
+            "kommissionierauftragspositionen_pro_mitarbeiterstunde",
+            {"kommissionierauftragspositionen": 120, "mitarbeiterstunden_distribution": 8},
+            15,
+        ),
         ("ruestzeitanteil", {"summe_ruestzeiten": 5, "summe_durchfuehrungszeiten": 100}, 5),
+        ("setupzeit_je_kommissionierliste", {"setupzeit_kommissionierliste": 4}, 4),
         (
             "bewertete_umschlagshaeufigkeit",
             {
@@ -147,6 +210,11 @@ def _basis(
             {"kosten_produktionslogistik": 1000, "produktionsauftraege": 20},
             50,
         ),
+        (
+            "mittlere_kosten_distributionstaetigkeiten_je_kommissionierauftragsposition",
+            {"kosten_distributionstaetigkeiten": 1000, "kommissionierauftragspositionen": 20},
+            50,
+        ),
     ),
 )
 def test_feste_kpi_formeln(kpi_id: str, operanden: dict[str, object], erwartet: float) -> None:
@@ -154,14 +222,57 @@ def test_feste_kpi_formeln(kpi_id: str, operanden: dict[str, object], erwartet: 
     assert ergebnis == pytest.approx(erwartet)
 
 
-def test_katalog_besitzt_genau_16_versionierte_definitionen() -> None:
-    assert len(KPI_DEFINITIONEN) == 16
-    assert all(wert.definitionsversion == 1 for wert in KPI_DEFINITIONEN.values())
+def test_katalog_besitzt_29_eindeutige_versionierte_definitionen() -> None:
+    assert len(KPI_DEFINITIONEN) == 29
+    assert {
+        name: wert.definitionsversion
+        for name, wert in KPI_DEFINITIONEN.items()
+        if wert.definitionsversion > 1
+    } == {
+        "standardabweichung_dlz_warenausgang": 2,
+        "nacharbeitsquote_rr": 2,
+    }
     assert all(
         wert.formel and wert.operanden and wert.bezugsmenge for wert in KPI_DEFINITIONEN.values()
     )
     assert all(wert.formel_latex for wert in KPI_DEFINITIONEN.values())
-    assert len({wert.formel_latex for wert in KPI_DEFINITIONEN.values()}) == 16
+    assert len({wert.formel_latex for wert in KPI_DEFINITIONEN.values()}) == 28
+
+
+def test_kpi_einheiten_entsprechen_der_tatsaechlichen_ergebnisgroesse() -> None:
+    prozent_kpis = {
+        "einhaltung_lagerbandbreite",
+        "servicegrad",
+        "verfuegbarkeit_planstarttermin",
+        "bestaetigungsquote_kundenwunschtermin",
+        "liefertreue",
+        "liefertreue_intralogistik",
+        "mittlerer_durchfuehrungszeitanteil",
+        "anteil_regulaer_abgeschlossener_faelle",
+        "first_time_quality_ftq",
+        "lieferqualitaetstreue",
+        "nacharbeitsquote_rr",
+        "reklamationsquote",
+        "nutzungseffizienz_ue",
+        "ruestzeitanteil",
+    }
+    assert {name for name, wert in KPI_DEFINITIONEN.items() if wert.einheit == "%"} == (
+        prozent_kpis
+    )
+    assert (
+        KPI_DEFINITIONEN["kommissionierauftragspositionen_pro_mitarbeiterstunde"].einheit == "1/h"
+    )
+    assert KPI_DEFINITIONEN["bewertete_umschlagshaeufigkeit"].einheit == "1/Jahr"
+    assert (
+        KPI_DEFINITIONEN["mittlere_kosten_produktionslogistik_pro_produktionsauftrag"].einheit
+        == "EUR"
+    )
+    assert (
+        KPI_DEFINITIONEN[
+            "mittlere_kosten_distributionstaetigkeiten_je_kommissionierauftragsposition"
+        ].einheit
+        == "EUR"
+    )
 
 
 def test_nullnenner_ist_kontrolliert_nicht_berechenbar() -> None:
@@ -170,6 +281,65 @@ def test_nullnenner_ist_kontrolliert_nicht_berechenbar() -> None:
             "servicegrad",
             {"befriedigte_kundenauftragspositionen": 0, "kundenauftragspositionen": 0},
         )
+
+
+def test_setupzeit_wird_nur_bei_eindeutigem_wert_berechnet() -> None:
+    konfiguration = KpiKonfiguration(
+        "setupzeit_je_kommissionierliste",
+        (
+            OperandZuordnung(
+                "setupzeit_kommissionierliste",
+                Datenartefakt.ZWISCHENDATENSATZ_T,
+                spalte="Setupzeit",
+            ),
+        ),
+        "s",
+        "Kommissionierliste p",
+    )
+    eindeutig = _basis(tabelle=pd.DataFrame({"Setupzeit": [4.0, 4.0, 4.0]}))
+    mehrdeutig = _basis(tabelle=pd.DataFrame({"Setupzeit": [4.0, 5.0]}))
+
+    (berechnet,) = berechne_ausgewaehlte_kpis(
+        ("setupzeit_je_kommissionierliste",), (konfiguration,), eindeutig
+    )
+    (offen,) = berechne_ausgewaehlte_kpis(
+        ("setupzeit_je_kommissionierliste",), (konfiguration,), mehrdeutig
+    )
+
+    assert berechnet.status is KpiStatus.BERECHNET
+    assert berechnet.ergebnis == 4.0
+    assert berechnet.einheit == "s"
+    assert offen.status is KpiStatus.NICHT_BERECHENBAR
+    assert "nicht für alle" in offen.fehlende_voraussetzungen[0]
+
+
+def test_nicht_endliche_tabellenwerte_werden_nicht_stillschweigend_verrechnet() -> None:
+    konfiguration = KpiKonfiguration(
+        "mittlere_durchfuehrungszeit",
+        (
+            OperandZuordnung(
+                "summe_durchfuehrungszeiten",
+                Datenartefakt.ZWISCHENDATENSATZ_T,
+                spalte="Dauer",
+            ),
+            OperandZuordnung(
+                "produktionsauftraege",
+                Datenartefakt.ZWISCHENDATENSATZ_T,
+                spalte="Auftrag",
+            ),
+        ),
+        "s",
+        "Produktionsaufträge n",
+    )
+    basis = _basis(tabelle=pd.DataFrame({"Dauer": [2.0, float("inf")], "Auftrag": ["A", "B"]}))
+
+    (ergebnis,) = berechne_ausgewaehlte_kpis(
+        ("mittlere_durchfuehrungszeit",), (konfiguration,), basis
+    )
+
+    assert ergebnis.status is KpiStatus.BERECHNET
+    assert ergebnis.ergebnis == 1.0
+    assert ergebnis.ausgeschlossene_werte == 1
 
 
 def test_nur_ausgewaehlte_kpis_werden_berechnet_und_fehler_bleiben_isoliert() -> None:
@@ -285,7 +455,7 @@ def test_strukturierte_profilkennzahl_wird_fachlich_lesbar_angezeigt() -> None:
 
     assert "Datensatz: Produktionsdaten" in referenz.anzeigetext
     assert "Spalte: Nacharbeit" in referenz.anzeigetext
-    assert "Absolute Häufigkeit eines Indikators" in referenz.anzeigetext
+    assert "Summe der Indikatorfunktion (absolute Häufigkeit)" in referenz.anzeigetext
     assert "Nacharbeit = Ja" in referenz.anzeigetext
     assert "Wert: 73" in referenz.anzeigetext
     assert "indikator-ja" not in referenz.anzeigetext
@@ -523,6 +693,102 @@ def test_nacharbeitsquote_verwendet_r_indikator_als_zaehler_und_t_summe_als_nenn
     assert ergebnis.wertebedingungen[0]["in_schritt_7_ausgewertet"] is False
 
 
+def test_r_indikator_ist_auch_fuer_summe_operand_auswaehlbar_und_wird_uebernommen() -> None:
+    indikator = _profilkennzahl(
+        Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR,
+        4,
+        referenz_id="verarbeitete-menge-indikator",
+        spalte="Verarbeitet",
+        operator="gleich",
+        vergleichswert="Ja",
+        auswertbar=5,
+        gesamt=6,
+    )
+    summendefinition = KPI_DEFINITIONEN["nacharbeitsquote_rr"].operanden[1]
+    assert summendefinition.operandentyp is Operandentyp.SUMME
+    assert profilkennzahlen_fuer_operand(summendefinition, _basis(indikator)) == (indikator,)
+    konfiguration = KpiKonfiguration(
+        "nacharbeitsquote_rr",
+        (
+            OperandZuordnung(
+                "nacharbeiten",
+                Datenartefakt.ZWISCHENDATENSATZ_T,
+                spalte="Nacharbeit",
+            ),
+            OperandZuordnung(
+                "verarbeitete_menge",
+                Datenartefakt.DATENPROFIL_R,
+                profilkennzahl=indikator,
+            ),
+        ),
+        "%",
+        "verarbeitete Menge",
+    )
+    basis = _basis(
+        indikator,
+        tabelle=pd.DataFrame({"Nacharbeit": [2.0, 0.0]}),
+    )
+
+    (ergebnis,) = berechne_ausgewaehlte_kpis(
+        ("nacharbeitsquote_rr",),
+        (konfiguration,),
+        basis,
+    )
+
+    assert ergebnis.status is KpiStatus.BERECHNET
+    assert ergebnis.zwischensummen == {"nacharbeiten": 2.0, "verarbeitete_menge": 4.0}
+    assert ergebnis.ergebnis == pytest.approx(50)
+    assert ergebnis.zugeordnete_operanden[1]["wert_aus_gespeichertem_r_uebernommen"] is True
+    assert ergebnis.ausgeschlossene_werte == 1
+
+
+def test_veralteter_r_indikator_wird_auch_beim_summe_operand_abgelehnt() -> None:
+    gespeichert = _profilkennzahl(
+        Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR,
+        4,
+        referenz_id="verarbeitete-menge-indikator",
+        spalte="Verarbeitet",
+        operator="gleich",
+        vergleichswert="Ja",
+    )
+    aktuell = _profilkennzahl(
+        Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR,
+        5,
+        referenz_id="verarbeitete-menge-indikator",
+        spalte="Verarbeitet",
+        operator="gleich",
+        vergleichswert="Ja",
+    )
+    konfiguration = KpiKonfiguration(
+        "nacharbeitsquote_rr",
+        (
+            OperandZuordnung(
+                "nacharbeiten",
+                Datenartefakt.ZWISCHENDATENSATZ_T,
+                spalte="Nacharbeit",
+            ),
+            OperandZuordnung(
+                "verarbeitete_menge",
+                Datenartefakt.DATENPROFIL_R,
+                profilkennzahl=gespeichert,
+            ),
+        ),
+        "%",
+        "verarbeitete Menge",
+    )
+
+    (ergebnis,) = berechne_ausgewaehlte_kpis(
+        ("nacharbeitsquote_rr",),
+        (konfiguration,),
+        _basis(aktuell, tabelle=pd.DataFrame({"Nacharbeit": ["Ja"]})),
+    )
+
+    assert ergebnis.status is KpiStatus.NICHT_BERECHENBAR
+    assert any(
+        "nicht mehr mit dem aktuellen R" in wert for wert in ergebnis.fehlende_voraussetzungen
+    )
+
+
 def test_ungleich_zaehlt_fehlwert_in_t_nicht_als_treffer() -> None:
     tabelle = pd.DataFrame({"status": ["Ja", "Nein", None]})
     konfiguration = KpiKonfiguration(
@@ -646,19 +912,23 @@ def test_alle_16_definitionen_bieten_nur_tatsaechlich_bestimmbare_quellen_an() -
         ),
     )
 
-    assert len(KPI_DEFINITIONEN) == 16
+    assert len(KPI_DEFINITIONEN) == 29
     for definition in KPI_DEFINITIONEN.values():
         for operand in definition.operanden:
             quellen = zulaessige_quellen_fuer_operand(operand, basis)
             assert set(quellen) <= set(operand.zulaessige_quellen)
             if operand.operandentyp in {
-                Operandentyp.SUMME,
                 Operandentyp.MESSWERTE,
                 Operandentyp.ZEITDIFFERENZ_SUMME,
+                Operandentyp.EINDEUTIGER_WERT,
             }:
                 assert Datenartefakt.DATENPROFIL_R not in quellen
             if Datenartefakt.DATENPROFIL_R in quellen:
-                assert operand.operandentyp in {Operandentyp.ANZAHL, Operandentyp.MITTELWERT}
+                assert operand.operandentyp in {
+                    Operandentyp.ANZAHL,
+                    Operandentyp.SUMME,
+                    Operandentyp.MITTELWERT,
+                }
 
 
 def test_zeitbezogene_kpi_verwendet_explizite_aktivitaeten_und_vorkommensregel() -> None:
@@ -710,3 +980,45 @@ def test_zeitbezogene_kpi_verwendet_explizite_aktivitaeten_und_vorkommensregel()
     assert ergebnis.einheit == "Sekunden"
     assert ergebnis.zugeordnete_operanden[0]["startaktivitaet"] == "A"
     assert ergebnis.zugeordnete_operanden[0]["endaktivitaet"] == "B"
+
+
+def test_kpi_kann_ohne_operand_als_spaeter_manuell_behandelt_werden() -> None:
+    konfiguration = KpiKonfiguration(
+        "servicegrad",
+        (),
+        "%",
+        "Kundenauftragspositionen",
+        behandlungsart=KpiBehandlungsart.SPAETER_MANUELL_BERECHNEN,
+    )
+
+    (ergebnis,) = berechne_ausgewaehlte_kpis(
+        ("servicegrad",),
+        (konfiguration,),
+        _basis(),
+    )
+
+    assert ergebnis.status is KpiStatus.FUER_SPAETERE_MANUELLE_BERECHNUNG
+    assert ergebnis.behandlungsart is KpiBehandlungsart.SPAETER_MANUELL_BERECHNEN
+    assert ergebnis.ergebnis is None
+    assert ergebnis.zugeordnete_operanden == ()
+    assert ergebnis.quellenreferenzen == ()
+    assert ergebnis.fehlende_voraussetzungen == ()
+    assert ergebnis.formel
+    assert ergebnis.einheit == "%"
+    assert ergebnis.bezugsmenge == "Kundenauftragspositionen"
+    assert ergebnis.definitionsversion >= 1
+
+
+def test_spaeter_manuelle_kpi_schliesst_automatische_zuordnung_aus() -> None:
+    with pytest.raises(Domaenenfehler, match="keine automatische Operandenzuordnung"):
+        KpiKonfiguration(
+            "servicegrad",
+            (
+                OperandZuordnung(
+                    "kundenauftragspositionen",
+                    Datenartefakt.ZWISCHENDATENSATZ_T,
+                    spalte="position",
+                ),
+            ),
+            behandlungsart=KpiBehandlungsart.SPAETER_MANUELL_BERECHNEN,
+        )

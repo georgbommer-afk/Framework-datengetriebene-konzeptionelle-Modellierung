@@ -90,16 +90,24 @@ Transformationspläne unterstützen:
 
 - Datentyp konvertieren,
 - Werte ersetzen,
+- Werte regelbasiert abstrahieren, beim Überschreiben auch in mehreren Quellspalten,
 - exakte Tupel-Duplikate entfernen,
 - vollständig leere Spalten entfernen,
 - Zeilen anhand expliziter Text-, Leerwert-, Zahlen-, Zeit- oder Mengenbedingungen löschen,
 - ein festes Präfix oder Suffix entfernen,
 - Text zwischen zwei Begrenzern extrahieren.
 
+Jede Planänderung wird gespeichert und die Vorschau erneut aus Raw-Daten und dem vollständigen
+Plan berechnet. Einzelne Schritte können entfernt werden; die verbleibende Kette wird dabei neu
+nummeriert. Während dieser Bearbeitung entsteht kein physischer T-Snapshot und eine bereits
+aktive Folgeartefaktkette bleibt gültig. Erst der explizite Abschluss von Schritt 2 persistiert
+genau ein finales T. Ist dessen Datenprüfsumme unverändert, werden T und Folgeartefakte
+wiederverwendet; nur ein tatsächlich geändertes Ergebnis ersetzt T und invalidiert die bisherige
+Folgekette.
+
 Die Textbereinigung verwendet für Live-Vorschau und tatsächliche Transformation dieselbe reine
-Funktion. Die Vorschau zeigt unterschiedliche, nichtleere Original- und Ergebniswerte, verändert
-aber weder T noch den Transformationsplan. Nichttreffer bleiben unverändert. Lange Zellinhalte
-werden nur für die Darstellung gekürzt.
+Funktion. Die Vorschau zeigt unterschiedliche, nichtleere Original- und Ergebniswerte.
+Nichttreffer bleiben unverändert. Lange Zellinhalte werden nur für die Darstellung gekürzt.
 
 Mehrere separat aufbereitete Datensätze können kontrolliert per LEFT-, RIGHT-, INNER- oder
 OUTER-Join verknüpft werden. Vor der Ausführung werden Kardinalität, Trefferquote, erwartete
@@ -170,6 +178,14 @@ erforderlich. A_G-Version 1 bleibt lesbar.
 
 Die fachliche Vorschau wird neu berechnet und anschließend ohne redundante
 Bestätigungscheckbox mit einem primären Button gespeichert und an Schritt 8 übergeben.
+
+Wird in einem fortgeschrittenen Projekt nachträglich ausschließlich die KPI-Auswahl in U
+geändert, bleiben T, M, Event-Log-Konfiguration, E, E*, P und A_D aktiv. Nur die aktive Lineage
+ab A_G wird gelöst und der persistierte Fortschritt auf Schritt 7 gesetzt; historische A_G-,
+K/O- und K*-Artefakte bleiben erhalten. Schritt 7 verwendet das jüngste über T/R/E*/P/A_D
+kompatible A_G als Vorlage, übernimmt bestehende KPI-Konfigurationen strikt über ihre KPI-ID und
+berechnet die Ergebnisse neu. Projektbezeichnung und bloßer Änderungszeitpunkt beeinflussen den
+fachlichen A_G-Fingerabdruck nicht.
 
 ### 8. Modellbestandteile ableiten
 

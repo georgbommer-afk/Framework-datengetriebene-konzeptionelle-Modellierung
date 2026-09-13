@@ -186,7 +186,7 @@ ZIELGRUPPEN = (
     ZielgruppenEintrag("Ressourcennutzung erhöhen", tuple(LogistischeZielgroesse)[12:]),
 )
 
-_KPI_DATEN: dict[LogistischeZielgroesse, tuple[str, str]] = {
+_LEGACY_KPI_DATEN: dict[LogistischeZielgroesse, tuple[str, str]] = {
     LogistischeZielgroesse.LIEFERFAEHIGKEIT: ("servicegrad", "Servicegrad"),
     LogistischeZielgroesse.LIEFERBEREITSCHAFT: (
         "verfuegbarkeit_planstarttermin",
@@ -235,6 +235,129 @@ _KPI_DATEN: dict[LogistischeZielgroesse, tuple[str, str]] = {
     ),
 }
 
+KPI_MATRIX: dict[Systemtyp, dict[LogistischeZielgroesse, tuple[str, str]]] = {
+    Systemtyp.PRODUKTION: {
+        LogistischeZielgroesse.LIEFERFAEHIGKEIT: (
+            "einhaltung_lagerbandbreite",
+            "Einhaltung Lagerbandbreite",
+        ),
+        LogistischeZielgroesse.LIEFERBEREITSCHAFT: (
+            "verfuegbarkeit_planstarttermin",
+            "Verfügbarkeit zum Planstarttermin",
+        ),
+        LogistischeZielgroesse.LIEFERTREUE: ("liefertreue", "Liefertreue"),
+        LogistischeZielgroesse.LIEFERZEIT: (
+            "mittlere_durchfuehrungszeit",
+            "Mittlere Durchführungszeit",
+        ),
+        LogistischeZielgroesse.DURCHLAUFZEIT: (
+            "mittlerer_durchfuehrungszeitanteil",
+            "Mittlerer Durchführungszeitanteil",
+        ),
+        LogistischeZielgroesse.WARTEZEIT: (
+            "tatsaechliche_wartezeit_aqt",
+            "Tatsächliche (tats.) Wartezeit (AQT)",
+        ),
+        LogistischeZielgroesse.TRANSPORTZEIT: (
+            "tatsaechliche_transportzeit_att",
+            "Tatsächliche (tats.) Transportzeit (ATT)",
+        ),
+        LogistischeZielgroesse.REAKTIONSZEIT: (
+            "mittlere_reaktionszeit",
+            "Mittlere Reaktionszeit",
+        ),
+        LogistischeZielgroesse.PROZESSVARIABILITAET: (
+            "standardabweichung_bearbeitungszeit",
+            "Standardabweichung der Bearbeitungszeit",
+        ),
+        LogistischeZielgroesse.PROZESSSICHERHEIT: (
+            "anteil_regulaer_abgeschlossener_faelle",
+            "Anteil regulär abgeschlossener Fälle",
+        ),
+        LogistischeZielgroesse.QUALITAET: ("first_time_quality_ftq", "First Time Quality (FTQ)"),
+        LogistischeZielgroesse.NACHARBEIT: (
+            "nacharbeitsquote_rr",
+            "Nacharbeitsquote (RR)",
+        ),
+        LogistischeZielgroesse.RESSOURCENAUSLASTUNG: (
+            "nutzungseffizienz_ue",
+            "Nutzungseffizienz (UE)",
+        ),
+        LogistischeZielgroesse.RUESTZEIT: ("ruestzeitanteil", "Rüstzeitanteil"),
+        LogistischeZielgroesse.BESTAENDE: (
+            "bewertete_umschlagshaeufigkeit",
+            "Bewertete Umschlagshäufigkeit",
+        ),
+        LogistischeZielgroesse.KOSTEN: (
+            "mittlere_kosten_produktionslogistik_pro_produktionsauftrag",
+            "Mittlere Kosten der Produktionslogistik pro Produktionsauftrag",
+        ),
+    },
+    Systemtyp.INTRALOGISTIK: {
+        LogistischeZielgroesse.LIEFERFAEHIGKEIT: ("servicegrad", "Servicegrad"),
+        LogistischeZielgroesse.LIEFERBEREITSCHAFT: (
+            "bestaetigungsquote_kundenwunschtermin",
+            "Bestätigungsquote Kundenwunschtermin",
+        ),
+        LogistischeZielgroesse.LIEFERTREUE: (
+            "liefertreue_intralogistik",
+            "Liefertreue",
+        ),
+        LogistischeZielgroesse.LIEFERZEIT: (
+            "mittlere_dlz_warenausgang",
+            "Mittlere DLZ Warenausgang",
+        ),
+        LogistischeZielgroesse.DURCHLAUFZEIT: (
+            "mittlere_dlz_wareneingang",
+            "Mittlere DLZ Wareneingang",
+        ),
+        LogistischeZielgroesse.WARTEZEIT: (
+            "mittlere_wartezeit_je_foerdereinheit",
+            "Mittlere Wartezeit je Fördereinheit",
+        ),
+        LogistischeZielgroesse.TRANSPORTZEIT: (
+            "mittlere_transportzeit_je_warensendung",
+            "Mittlere Transportzeit je Warensendung",
+        ),
+        LogistischeZielgroesse.REAKTIONSZEIT: (
+            "mittlere_reaktionszeit",
+            "Mittlere Reaktionszeit",
+        ),
+        LogistischeZielgroesse.PROZESSVARIABILITAET: (
+            "standardabweichung_dlz_warenausgang",
+            "Standardabweichung DLZ Warenausgang",
+        ),
+        LogistischeZielgroesse.PROZESSSICHERHEIT: (
+            "anteil_regulaer_abgeschlossener_faelle",
+            "Anteil regulär abgeschlossener Fälle",
+        ),
+        LogistischeZielgroesse.QUALITAET: (
+            "lieferqualitaetstreue",
+            "Lieferqualitätstreue",
+        ),
+        LogistischeZielgroesse.NACHARBEIT: (
+            "reklamationsquote",
+            "Reklamationsquote",
+        ),
+        LogistischeZielgroesse.RESSOURCENAUSLASTUNG: (
+            "kommissionierauftragspositionen_pro_mitarbeiterstunde",
+            "Kommissionierauftragspositionen pro Mitarbeiterstunde",
+        ),
+        LogistischeZielgroesse.RUESTZEIT: (
+            "setupzeit_je_kommissionierliste",
+            "Setupzeit je Kommissionierliste",
+        ),
+        LogistischeZielgroesse.BESTAENDE: (
+            "bewertete_umschlagshaeufigkeit",
+            "Bewertete Umschlagshäufigkeit",
+        ),
+        LogistischeZielgroesse.KOSTEN: (
+            "mittlere_kosten_distributionstaetigkeiten_je_kommissionierauftragsposition",
+            "Mittlere Kosten Distributionstätigkeiten je Kommissionierauftragsposition",
+        ),
+    },
+}
+
 _KPI_ID_ALIASE = {
     "lieferfaehigkeitsquote": "servicegrad",
     "erfuellungsquote": "servicegrad",
@@ -272,19 +395,44 @@ _KPI_ID_ALIASE = {
 
 def leite_kpi_kandidaten_ab(
     zielgroessen: tuple[LogistischeZielgroesse, ...],
+    systemtyp: Systemtyp | None = None,
 ) -> tuple[KpiKandidat, ...]:
-    """Liefert je Zielgröße genau den in A.7 bis A.10 zugeordneten KPI-Kandidaten."""
-    return tuple(KpiKandidat(*_KPI_DATEN[ziel], ziel) for ziel in zielgroessen)
+    """Liefert je Zielgröße den systemspezifischen Kandidaten aus A.7 bis A.10.
+
+    ``None`` und der historische Systemtyp ``KOMBINIERT`` behalten ausschließlich für
+    Altprojekte die bisherige 16er-Zuordnung bei. Neue Projekte übergeben immer einen der
+    beiden in den Tabellen ausgewiesenen Systemtypen.
+    """
+    daten = (
+        KPI_MATRIX[systemtyp]
+        if systemtyp is not None and systemtyp in KPI_MATRIX
+        else _LEGACY_KPI_DATEN
+    )
+    return tuple(KpiKandidat(daten[ziel][0], daten[ziel][1], ziel) for ziel in zielgroessen)
 
 
 def bereinige_kpi_auswahl(
-    zielgroessen: tuple[LogistischeZielgroesse, ...], ausgewaehlte_ids: tuple[str, ...]
+    zielgroessen: tuple[LogistischeZielgroesse, ...],
+    ausgewaehlte_ids: tuple[str, ...],
+    systemtyp: Systemtyp | None = None,
 ) -> tuple[str, ...]:
-    """Migriert alte KPI-IDs und entfernt nicht zu den gewählten Zielgrößen gehörende IDs."""
-    erlaubte_ids = {kandidat.kpi_id for kandidat in leite_kpi_kandidaten_ab(zielgroessen)}
+    """Migriert alte bzw. vormals gemischte IDs zur systemspezifischen Zielzuordnung."""
+    kandidaten = leite_kpi_kandidaten_ab(zielgroessen, systemtyp)
+    erlaubte_ids = {kandidat.kpi_id for kandidat in kandidaten}
+    erwartete_id_nach_ziel = {kandidat.zielgroesse: kandidat.kpi_id for kandidat in kandidaten}
     ergebnis: list[str] = []
     for kpi_id in ausgewaehlte_ids:
         normalisiert = _KPI_ID_ALIASE.get(kpi_id, kpi_id)
+        if normalisiert not in erlaubte_ids and systemtyp in KPI_MATRIX:
+            for ziel in zielgroessen:
+                bekannte_ids = {
+                    _LEGACY_KPI_DATEN[ziel][0],
+                    KPI_MATRIX[Systemtyp.PRODUKTION][ziel][0],
+                    KPI_MATRIX[Systemtyp.INTRALOGISTIK][ziel][0],
+                }
+                if normalisiert in bekannte_ids:
+                    normalisiert = erwartete_id_nach_ziel[ziel]
+                    break
         if normalisiert in erlaubte_ids and normalisiert not in ergebnis:
             ergebnis.append(normalisiert)
     return tuple(ergebnis)

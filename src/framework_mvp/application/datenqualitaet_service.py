@@ -40,7 +40,8 @@ from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
 
 QUALITAETS_ARTEFAKTVERSION = 1
-QUALITY_GATE_ARTEFAKTVERSION = 2
+QUALITY_GATE_ARTEFAKTVERSION = 3
+QUALITY_GATE_LESBARE_ARTEFAKTVERSIONEN = frozenset({2, QUALITY_GATE_ARTEFAKTVERSION})
 
 
 class DatenqualitaetService:
@@ -211,21 +212,14 @@ class DatenqualitaetService:
             raise Importintegritaetsfehler("Die Prüfsumme des Freigabeberichts ist ungültig.")
         try:
             report = json.loads(report_bytes)
+            artefaktversion = report.get("artefaktversion")
             if (
-                report.get("artefaktversion") != QUALITY_GATE_ARTEFAKTVERSION
+                artefaktversion not in QUALITY_GATE_LESBARE_ARTEFAKTVERSIONEN
                 or report.get("artefaktart") != "quality_gate_freigabe_e_stern"
                 or report["freigabe"]["freigabe_id"] != str(freigabe.freigabe_id)
             ):
                 raise Importintegritaetsfehler("Der Freigabebericht ist inkonsistent.")
-            entscheidungen = tuple(
-                FachlicheEntscheidung(
-                    wert["kriterium_id"],
-                    bool(wert["ist_mangel"]),
-                    wert["begruendung"],
-                    wert.get("ruecksprung_schritt"),
-                )
-                for wert in report["quality_gate_ergebnis"]["entscheidungen"]
-            )
+            entscheidungen = self._entscheidungen_aus_report(report)
         except Importintegritaetsfehler:
             raise
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as fehler:
@@ -246,6 +240,35 @@ class DatenqualitaetService:
             )
         return freigabe, kontext.event_log.ereignisse.copy(deep=True)
 
+    @staticmethod
+    def _entscheidungen_aus_report(report: dict[str, object]) -> tuple[FachlicheEntscheidung, ...]:
+        """Liest neue Bewertungen und ergänzt sichere Defaults für gültige v2-Freigaben."""
+        gate = report["quality_gate_ergebnis"]
+        if not isinstance(gate, dict):
+            raise TypeError("quality_gate_ergebnis")
+        roh = gate["entscheidungen"]
+        if not isinstance(roh, list):
+            raise TypeError("entscheidungen")
+        entscheidungen = tuple(
+            FachlicheEntscheidung(
+                wert["kriterium_id"],
+                bool(wert["ist_mangel"]),
+                str(wert.get("begruendung", "")),
+                wert.get("ruecksprung_schritt"),
+            )
+            for wert in roh
+            if isinstance(wert, dict)
+        )
+        if report.get("artefaktversion") == 2:
+            vorhanden = {wert.kriterium_id for wert in entscheidungen}
+            ergaenzungen = tuple(
+                FachlicheEntscheidung(kriterium_id, False, "")
+                for kriterium_id in ("t_verwendbar", "m_verstaendlich")
+                if kriterium_id not in vorhanden
+            )
+            return (*entscheidungen, *ergaenzungen)
+        return entscheidungen
+
     def freigaben_fuer_projekt(self, projekt_id: UUID) -> list[Qualitaetsfreigabe]:
         """Listet ausschließlich aktuell gültige neue E*-Freigaben, niemals Legacy-Kopien."""
         ergebnis = []
@@ -261,15 +284,7 @@ class DatenqualitaetService:
         """Lädt die begründeten Bewertungen einer zuvor erneut validierten Freigabe."""
         freigabe, _ = self.freigabe_laden(freigabe_id)
         report = json.loads(self._artefakte.lesen(freigabe.relativer_report_pfad))
-        return tuple(
-            FachlicheEntscheidung(
-                wert["kriterium_id"],
-                bool(wert["ist_mangel"]),
-                wert["begruendung"],
-                wert.get("ruecksprung_schritt"),
-            )
-            for wert in report["quality_gate_ergebnis"]["entscheidungen"]
-        )
+        return self._entscheidungen_aus_report(report)
 
     def freigaben_fuer_event_log(
         self, projekt_id: UUID, event_log_id: UUID

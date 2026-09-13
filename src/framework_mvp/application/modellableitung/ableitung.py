@@ -348,13 +348,8 @@ def _problem_ziele_ausgaben(sammlung: _Sammlung) -> None:
                 f"kpi_ergebnisse[{index}]",
                 ergebnis,
             )
-    zieltext = " ".join((*zwecke, u.individuelles_ziel)).casefold()
     conformance = sammlung.basis.a_g.get("conformance_checking", {})
-    if (
-        isinstance(conformance, dict)
-        and conformance.get("durchgefuehrt")
-        and any(wort in zieltext for wort in ("konform", "abweich", "sollprozess"))
-    ):
+    if isinstance(conformance, dict) and conformance.get("durchgefuehrt"):
         sammlung.info(
             ModellbestandteilId.AUSGABEN,
             Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
@@ -363,14 +358,17 @@ def _problem_ziele_ausgaben(sammlung: _Sammlung) -> None:
             Uebernahmeart.METADATENZUSAMMENFASSUNG,
         )
     performance = _strukturierte_ergebnisse(sammlung).get("performance_und_engpassanalyse", {})
-    if (
-        isinstance(performance, dict)
-        and performance
-        and any(
-            wort in zieltext
-            for wort in ("leistung", "engpass", "termin", "bearbeitung", "warte", "zeit", "auslast")
-        )
-    ):
+    dt_db_ergebnis = performance.get("dt_db_ergebnis") if isinstance(performance, dict) else None
+    busy_ratio_ergebnis = (
+        performance.get("busy_ratio_ergebnis") if isinstance(performance, dict) else None
+    )
+    hat_dt_db = isinstance(dt_db_ergebnis, dict) and bool(
+        dt_db_ergebnis.get("dt_statistik") or dt_db_ergebnis.get("db_statistik")
+    )
+    hat_busy_ratio = isinstance(busy_ratio_ergebnis, dict) and bool(
+        busy_ratio_ergebnis.get("ressourcenstatistiken")
+    )
+    if isinstance(performance, dict) and (hat_dt_db or hat_busy_ratio):
         sammlung.info(
             ModellbestandteilId.AUSGABEN,
             Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
@@ -635,10 +633,9 @@ def _annahmen_vereinfachungen(sammlung: _Sammlung) -> None:
     discovery_referenz = sammlung.basis.a_g.get("discovery_ergebnisse_a_d", {})
     strukturierte = _strukturierte_ergebnisse(sammlung)
     vereinfachungen = strukturierte.get("vereinfachungen", {})
+    zeitdaten = strukturierte.get("zeitbezogene_datenauswahl", {})
     etl_abstraktionen = (
-        vereinfachungen.get("etl_abstraktionen", [])
-        if isinstance(vereinfachungen, dict)
-        else []
+        vereinfachungen.get("etl_abstraktionen", []) if isinstance(vereinfachungen, dict) else []
     )
     if isinstance(etl_abstraktionen, list) and etl_abstraktionen:
         sammlung.info(
@@ -646,6 +643,27 @@ def _annahmen_vereinfachungen(sammlung: _Sammlung) -> None:
             Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
             "strukturierte_ergebnisse.vereinfachungen.etl_abstraktionen",
             etl_abstraktionen,
+            Uebernahmeart.METADATENZUSAMMENFASSUNG,
+        )
+    hat_zeitvereinfachung = (
+        isinstance(zeitdaten, dict)
+        and bool(zeitdaten.get("vereinfachte_zeitspannen_bestaetigt"))
+        and isinstance(zeitdaten.get("vereinfachte_zeitspannen"), list)
+        and bool(zeitdaten.get("vereinfachte_zeitspannen"))
+    )
+    if hat_zeitvereinfachung:
+        sammlung.info(
+            ModellbestandteilId.VEREINFACHUNGEN,
+            Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
+            "strukturierte_ergebnisse.zeitbezogene_datenauswahl.vereinfachte_zeitspannen",
+            {
+                "entscheidung": zeitdaten.get("vereinfachungsentscheidung"),
+                "zeitspannen": zeitdaten.get("vereinfachte_zeitspannen"),
+                "bedeutung": (
+                    "Start(B) - Start(A); nicht in Bearbeitungs-, Transport- oder Wartezeit "
+                    "zerlegt."
+                ),
+            },
             Uebernahmeart.METADATENZUSAMMENFASSUNG,
         )
     k_roh = (
@@ -666,7 +684,9 @@ def _annahmen_vereinfachungen(sammlung: _Sammlung) -> None:
             },
             Uebernahmeart.METADATENZUSAMMENFASSUNG,
         )
-    elif not (isinstance(etl_abstraktionen, list) and etl_abstraktionen):
+    elif not (isinstance(etl_abstraktionen, list) and etl_abstraktionen) and not (
+        hat_zeitvereinfachung
+    ):
         sammlung.oeffnen(
             ModellbestandteilId.VEREINFACHUNGEN,
             Offenheitskategorie.NICHT_ABLEITBAR,
@@ -678,6 +698,7 @@ def _annahmen_vereinfachungen(sammlung: _Sammlung) -> None:
 def _daten(sammlung: _Sammlung) -> None:
     strukturierte = _strukturierte_ergebnisse(sammlung)
     zeitdaten = strukturierte.get("zeitbezogene_datenauswahl", {})
+    datenaufbereitung = strukturierte.get("datenaufbereitung", {})
     for quelle in sammlung.basis.datenquellen:
         auswahlwert = {
             "datenquellen_id": str(quelle.datenquellen_id),
@@ -744,6 +765,12 @@ def _daten(sammlung: _Sammlung) -> None:
                 "bestaetigte_datenbasis": zeitdaten.get("bestaetigte_datenbasis", []),
                 "datenbasis_referenzen": zeitdaten.get("datenbasis_referenzen", {}),
                 "bearbeitungszeiten": zeitdaten.get("bearbeitungszeiten", []),
+                "vereinfachte_zeitspannen": zeitdaten.get("vereinfachte_zeitspannen", []),
+                "vereinfachte_zeitspannen_bestaetigt": zeitdaten.get(
+                    "vereinfachte_zeitspannen_bestaetigt", False
+                ),
+                "vereinfachungsentscheidung": zeitdaten.get("vereinfachungsentscheidung", ""),
+                "system_zwischenankunftszeit": zeitdaten.get("system_zwischenankunftszeit"),
                 "zwischenankunftszeiten": zeitdaten.get("zwischenankunftszeiten", []),
                 "potenzielle_wartezeiten": zeitdaten.get(
                     "potenzielle_wartezeiten", zeitdaten.get("uebergangswartezeiten", [])
@@ -756,6 +783,14 @@ def _daten(sammlung: _Sammlung) -> None:
             ModellbestandteilId.DATENAUSWAHL,
             Offenheitskategorie.NICHT_ABLEITBAR,
             "A_G enthält keine strukturierte Datenauswahl; Schritt 8 berechnet sie nicht neu.",
+        )
+    if isinstance(datenaufbereitung, dict) and datenaufbereitung:
+        sammlung.info(
+            ModellbestandteilId.DATENAUSWAHL,
+            Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
+            "strukturierte_ergebnisse.datenaufbereitung",
+            datenaufbereitung,
+            Uebernahmeart.METADATENZUSAMMENFASSUNG,
         )
     sammlung.info(
         ModellbestandteilId.DATEN,

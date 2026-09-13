@@ -1,5 +1,7 @@
 """Tests für aggregierte, von Profilkennzahlen getrennte Diagrammdaten."""
 
+from typing import Any, cast
+
 import numpy as np
 import pandas as pd
 from pandas.testing import assert_frame_equal
@@ -30,11 +32,15 @@ def test_histogramm_und_medianlayer_nutzen_den_vollstaendigen_wertebereich() -> 
     daten = pd.DataFrame({"Kosten_EUR": [1.2, 12.0, 69.33, 691.2]})
     profil = erstelle_datenprofil(daten)
     diagramm = erstelle_diagrammdaten(daten, profil).spalten[0]
+    assert diagramm.numerisch is not None
     histogramm = diagramm.numerisch.histogramm
     assert histogramm.klassen[0].untergrenze == 1.2
     assert histogramm.klassen[-1].obergrenze == 691.2
-    spezifikation = histogramm_spezifikation(profil.spaltenprofile[0], diagramm)
-    assert [layer["encoding"]["x"]["scale"]["domain"] for layer in spezifikation["layer"]] == [
+    spezifikation = cast(
+        dict[str, Any], histogramm_spezifikation(profil.spaltenprofile[0], diagramm)
+    )
+    layer = cast(list[dict[str, Any]], spezifikation["layer"])
+    assert [wert["encoding"]["x"]["scale"]["domain"] for wert in layer] == [
         [1.2, 691.2],
         [1.2, 691.2],
     ]

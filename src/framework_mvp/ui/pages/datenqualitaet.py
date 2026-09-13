@@ -15,13 +15,13 @@ from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     FachlicheEntscheidung,
     QualityGateBefund,
+    QualityGateBereich,
     QualityGateErgebnis,
     QualityGateStatus,
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.ui.components.voraussetzungshinweis import zeige_voraussetzungshinweis
 from framework_mvp.ui.fortschritt import unterschritte_fuer
-from framework_mvp.ui.helpers import fachliche_auswahl
 from framework_mvp.ui.navigation import (
     framework_bereich_oeffnen,
     schritt_abschliessen_und_weiter,
@@ -93,11 +93,13 @@ def _persistierte_freigabe_rehydrieren(
             },
         )
         return False
+    entscheidungen = service.entscheidungen_der_freigabe(freigabe_id)
     zustand.update(
         {
             "freigabe_id": freigabe_id,
             "freigabe": freigabe,
-            "entscheidungen": service.entscheidungen_der_freigabe(freigabe_id),
+            "entscheidungen": entscheidungen,
+            "persistierte_entscheidungen": entscheidungen,
             "schritt": 4,
         }
     )
@@ -142,6 +144,26 @@ _SCHRITTNAMEN = {
     4: "Event Log E",
 }
 
+_ARTEFAKTNAMEN = {
+    QualityGateBereich.DATENQUELLENKATALOG: "Datenquellenkatalog Q",
+    QualityGateBereich.ZWISCHENDATENSATZ: "Zwischendatensatz T",
+    QualityGateBereich.MAPPINGTABELLE: "Semantisches Mapping M",
+    QualityGateBereich.EVENT_LOG: "Event Log E",
+}
+
+_RUECKSPRUNG_NACH_BEREICH = {
+    QualityGateBereich.DATENQUELLENKATALOG: 1,
+    QualityGateBereich.ZWISCHENDATENSATZ: 2,
+    QualityGateBereich.MAPPINGTABELLE: 3,
+    QualityGateBereich.EVENT_LOG: 4,
+}
+
+_FACHLICHE_STATI = {
+    QualityGateStatus.FACHLICHE_BESTAETIGUNG_ERFORDERLICH,
+    QualityGateStatus.FACHLICH_ALS_MANGEL_BEWERTET,
+    QualityGateStatus.FACHLICH_BEGRUENDET_KEIN_MANGEL,
+}
+
 
 def _qualitaetsdimension(bereich: str, kriterium: str) -> str:
     """Ordnet vorhandene Kriterien erklärend ein, ohne einen neuen Score zu bilden."""
@@ -160,14 +182,9 @@ def _befundtabelle(befunde: tuple[QualityGateBefund, ...]) -> pd.DataFrame:
     for befund in befunde:
         gruppen.setdefault((befund.bereich.value, befund.kriterium), []).append(befund)
     zeilen = []
-    fachstatus = {
-        QualityGateStatus.FACHLICHE_BESTAETIGUNG_ERFORDERLICH,
-        QualityGateStatus.FACHLICH_ALS_MANGEL_BEWERTET,
-        QualityGateStatus.FACHLICH_BEGRUENDET_KEIN_MANGEL,
-    }
     for (bereich, kriterium), werte in gruppen.items():
-        automatisch = [wert for wert in werte if wert.status not in fachstatus]
-        fachlich = [wert for wert in werte if wert.status in fachstatus]
+        automatisch = [wert for wert in werte if wert.status not in _FACHLICHE_STATI]
+        fachlich = [wert for wert in werte if wert.status in _FACHLICHE_STATI]
         blockierend = [wert for wert in werte if wert.blockiert]
         rueckspruenge = sorted(
             {
@@ -199,7 +216,7 @@ def _befundtabelle(befunde: tuple[QualityGateBefund, ...]) -> pd.DataFrame:
                 "Fachliche Bewertung": "; ".join(wert.status.value for wert in fachlich)
                 or "nicht erforderlich",
                 "Gesamtergebnis": gesamtergebnis,
-                "Begründung/Feststellung": " | ".join(
+                "Anmerkung/Feststellung": " | ".join(
                     wert.begruendung or wert.meldung for wert in werte
                 ),
                 "Konsequenz": (
@@ -225,7 +242,7 @@ def _befundtabelle(befunde: tuple[QualityGateBefund, ...]) -> pd.DataFrame:
             "Automatische Prüfung",
             "Fachliche Bewertung",
             "Gesamtergebnis",
-            "Begründung/Feststellung",
+            "Anmerkung/Feststellung",
             "Konsequenz",
         ),
     )
@@ -293,6 +310,25 @@ def _artefaktkette(ergebnis: QualityGateErgebnis, kontext: EventLogKontext) -> N
 
 def _automatische_pruefung(ergebnis: QualityGateErgebnis) -> None:
     st.write("### Zusammengeführte Qualitätsprüfung der erzeugten Artefakte")
+    for bereich in QualityGateBereich:
+        automatische_befunde = [
+            wert
+            for wert in ergebnis.befunde
+            if wert.bereich is bereich and wert.status not in _FACHLICHE_STATI
+        ]
+        if any(
+            wert.status is QualityGateStatus.AUTOMATISCHER_MANGEL for wert in automatische_befunde
+        ):
+            st.error(f"{bereich.value}: automatische Prüfung nicht bestanden")
+        elif bereich is QualityGateBereich.MAPPINGTABELLE and any(
+            wert.status is QualityGateStatus.NICHT_ANWENDBAR for wert in automatische_befunde
+        ):
+            st.success(
+                "M: automatische Prüfung bestanden – fachlich kann kein zusätzliches "
+                "Mapping erforderlich sein."
+            )
+        else:
+            st.success(f"{bereich.value}: automatische Prüfung bestanden")
     st.dataframe(_befundtabelle(ergebnis.befunde), hide_index=True, width="stretch")
     st.write("### Erforderliche und ausgewählte Quellspalten in T")
     st.dataframe(
@@ -320,8 +356,8 @@ def _menschliche_bewertung(
 ) -> bool:
     st.write("### Menschliche Bewertung und Domänenwissen")
     st.caption(
-        "Bewerten Sie die grundsätzliche Verwendbarkeit. Jede Entscheidung benötigt eine "
-        "kurze fachliche Begründung; sie ist keine numerische Qualitätsbewertung."
+        "Bewerten Sie Q, T, M und E jeweils fachlich. Eine Anmerkung kann bei Bedarf "
+        "eingeblendet werden, ist für die Freigabe aber nicht erforderlich."
     )
     if kontext.mappingtabelle is not None and kontext.mappingtabelle.eintraege:
         st.write("**Zuordnungen der Mappingtabelle M**")
@@ -345,65 +381,99 @@ def _menschliche_bewertung(
             hide_index=True,
             width="stretch",
         )
-    fachliche_befunde = [
-        wert
-        for wert in ergebnis.befunde
-        if wert.status
-        in {
-            QualityGateStatus.FACHLICHE_BESTAETIGUNG_ERFORDERLICH,
-            QualityGateStatus.FACHLICH_ALS_MANGEL_BEWERTET,
-            QualityGateStatus.FACHLICH_BEGRUENDET_KEIN_MANGEL,
-        }
-    ]
+    fachliche_befunde = [wert for wert in ergebnis.befunde if wert.status in _FACHLICHE_STATI]
     bisher = {wert.kriterium_id: wert for wert in zustand.get("entscheidungen", ())}
     entscheidungen: list[FachlicheEntscheidung] = []
     vollstaendig = True
-    for befund in fachliche_befunde:
-        st.write(f"**{befund.bereich.value}: {befund.kriterium}**")
-        st.write(befund.meldung)
-        vorhandene = bisher.get(befund.kriterium_id)
-        auswahl = st.radio(
-            "Fachliche Entscheidung",
-            ("Noch nicht bewertet", "Begründet kein Mangel", "Als Mangel bewertet"),
-            index=(0 if vorhandene is None else 2 if vorhandene.ist_mangel else 1),
-            key=f"gate_entscheidung_{zustand['event_log_id']}_{befund.kriterium_id}",
-            horizontal=True,
-        )
-        begruendung = st.text_area(
-            "Kurze fachliche Begründung",
-            value=vorhandene.begruendung if vorhandene is not None else "",
-            key=f"gate_begruendung_{zustand['event_log_id']}_{befund.kriterium_id}",
-        ).strip()
-        if auswahl == "Noch nicht bewertet" or not begruendung:
-            vollstaendig = False
+    for bereich in QualityGateBereich:
+        bereichsbefunde = [wert for wert in fachliche_befunde if wert.bereich is bereich]
+        if not bereichsbefunde:
             continue
-        ruecksprung = vorhandene.ruecksprung_schritt if vorhandene is not None else None
-        if auswahl == "Als Mangel bewertet" and befund.kriterium_id == "e_interpretierbar":
-            ruecksprung = fachliche_auswahl(
-                "Ursächlicher vorheriger Schritt",
-                (2, 3, 4),
-                wert=ruecksprung if ruecksprung in {2, 3, 4} else None,
-                format_func=lambda wert: {
-                    2: "Schritt 2 – Ursache in T",
-                    3: "Schritt 3 – Ursache in M",
-                    4: "Schritt 4 – Konfiguration oder Erzeugung von E",
-                }[wert],
-                key=f"gate_ursache_{zustand['event_log_id']}_{befund.kriterium_id}",
-            )
-            if ruecksprung is None:
-                vollstaendig = False
-                continue
-        entscheidungen.append(
-            FachlicheEntscheidung(
-                befund.kriterium_id,
-                auswahl == "Als Mangel bewertet",
-                begruendung,
-                ruecksprung if auswahl == "Als Mangel bewertet" else None,
-            )
+        st.markdown(f"#### {bereich.value} – {_ARTEFAKTNAMEN[bereich]}")
+        with st.container(border=True):
+            for befund in bereichsbefunde:
+                st.write(f"**{befund.kriterium}**")
+                st.write(befund.meldung)
+                vorhandene = bisher.get(befund.kriterium_id)
+                auswahl = st.radio(
+                    "Fachliche Beurteilung",
+                    (
+                        "Noch nicht bewertet",
+                        "Fachlich ausreichend",
+                        "Änderungsbedarf festgestellt",
+                    ),
+                    index=(0 if vorhandene is None else 2 if vorhandene.ist_mangel else 1),
+                    key=f"gate_entscheidung_{zustand['event_log_id']}_{befund.kriterium_id}",
+                    horizontal=True,
+                )
+                sichtbarkeit_key = (
+                    f"gate_anmerkung_sichtbar_{zustand['event_log_id']}_{befund.kriterium_id}"
+                )
+                anmerkung_key = f"gate_begruendung_{zustand['event_log_id']}_{befund.kriterium_id}"
+                if vorhandene is not None and vorhandene.anmerkung:
+                    st.session_state[sichtbarkeit_key] = True
+                anmerkung = ""
+                if st.session_state.get(sichtbarkeit_key, False):
+                    if anmerkung_key not in st.session_state:
+                        st.session_state[anmerkung_key] = (
+                            vorhandene.anmerkung if vorhandene is not None else ""
+                        )
+                    anmerkung = st.text_area(
+                        "Optionale Anmerkung",
+                        key=anmerkung_key,
+                    ).strip()
+                elif st.button(
+                    "Anmerkung hinzufügen",
+                    key=f"gate_anmerkung_hinzufuegen_{zustand['event_log_id']}_{befund.kriterium_id}",
+                ):
+                    st.session_state[sichtbarkeit_key] = True
+                    st.rerun()
+                if auswahl == "Noch nicht bewertet":
+                    vollstaendig = False
+                    continue
+                ist_mangel = auswahl == "Änderungsbedarf festgestellt"
+                ruecksprung = _RUECKSPRUNG_NACH_BEREICH[bereich] if ist_mangel else None
+                entscheidungen.append(
+                    FachlicheEntscheidung(
+                        befund.kriterium_id,
+                        ist_mangel,
+                        anmerkung,
+                        ruecksprung,
+                    )
+                )
+                if not ist_mangel:
+                    continue
+                assert ruecksprung is not None
+                st.info(
+                    f"Die Korrektur von {bereich.value} erfolgt in Schritt {ruecksprung}: "
+                    f"{_SCHRITTNAMEN[ruecksprung]}. Der Rücksprung ist optional."
+                )
+                if st.button(
+                    f"{bereich.value} in Schritt {ruecksprung} korrigieren",
+                    key=f"gate_fachlicher_ruecksprung_{zustand['event_log_id']}_{befund.kriterium_id}",
+                ):
+                    framework_bereich_oeffnen(schritt=ruecksprung, projekt_id=ergebnis.projekt_id)
+    neue_entscheidungen = tuple(entscheidungen)
+    persistierte = tuple(zustand.get("persistierte_entscheidungen", ()))
+    persistierter_stand = {
+        wert.kriterium_id: (wert.ist_mangel, wert.anmerkung, wert.ruecksprung_schritt)
+        for wert in persistierte
+    }
+    neuer_stand = {
+        wert.kriterium_id: (wert.ist_mangel, wert.anmerkung, wert.ruecksprung_schritt)
+        for wert in neue_entscheidungen
+    }
+    if zustand.get("freigabe") is not None and neuer_stand != persistierter_stand:
+        zustand.pop("freigabe", None)
+        zustand["freigabe_id"] = uuid4()
+        zustand.pop("persistierte_entscheidungen", None)
+        st.info(
+            "Die gespeicherte Beurteilung wurde geändert. Beim Freigeben entsteht eine neue "
+            "E*-Generation; die bisherige Freigabe bleibt historisch erhalten."
         )
-    zustand["entscheidungen"] = tuple(entscheidungen)
+    zustand["entscheidungen"] = neue_entscheidungen
     if not vollstaendig:
-        st.info("Alle fachlichen Bewertungen und Begründungen sind vor der Entscheidung nötig.")
+        st.info("Alle fachlichen Beurteilungen sind vor der Freigabe erforderlich.")
     return vollstaendig
 
 
@@ -459,6 +529,7 @@ def _abschluss(
                 "Die gespeicherte Freigabe konnte nicht im aktiven Kontext validiert werden."
             )
         zustand["freigabe"] = geladen
+        zustand["persistierte_entscheidungen"] = tuple(zustand["entscheidungen"])
         st.session_state.aktuelle_freigabe_id = str(geladen.freigabe_id)
         st.session_state.freigegebenes_event_log_id = str(event_log_id)
         schritt_abschliessen_und_weiter(aktueller_schritt=5, projekt_id=projekt_id)
@@ -556,6 +627,7 @@ def zeige_datenqualitaet_seite(
                         zustand["entscheidungen"] = qualitaet_service.entscheidungen_der_freigabe(
                             auswahl
                         )
+                        zustand["persistierte_entscheidungen"] = zustand["entscheidungen"]
                         st.session_state.aktuelle_freigabe_id = str(auswahl)
                         st.session_state.freigegebenes_event_log_id = str(event_log_id)
                         zustand["schritt"] = 4

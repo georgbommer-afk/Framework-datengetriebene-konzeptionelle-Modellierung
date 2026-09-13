@@ -33,6 +33,9 @@ from framework_mvp.application.modellableitung_service import ModellableitungSer
 from framework_mvp.application.modellausgabe_service import ModellausgabeService
 from framework_mvp.application.modellvalidierung_service import ModellvalidierungService
 from framework_mvp.application.process_mining_service import ProcessMiningService
+from framework_mvp.application.projekt_aenderungsfolgen_service import (
+    ProjektAenderungsfolgenService,
+)
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.application.projektarchiv_service import ArchivGrenzen, ProjektArchivService
 from framework_mvp.application.projektkontext_service import ProjektkontextService
@@ -144,7 +147,14 @@ def ermittle_datenbankpfad(datenbankpfad: Path | str | None = None) -> Path:
 
 def erstelle_projekt_service(datenbankpfad: Path | str | None = None) -> ProjektService:
     """Erzeugt einen Projektservice ohne globale veränderliche Instanz."""
-    return ProjektService(SQLiteProjektRepository(ermittle_datenbankpfad(datenbankpfad)))
+    pfad = ermittle_datenbankpfad(datenbankpfad)
+    return ProjektService(
+        SQLiteProjektRepository(pfad),
+        ProjektAenderungsfolgenService(
+            AktiveLineageService(pfad),
+            SQLiteZugriffsRepository(pfad),
+        ),
+    )
 
 
 def erstelle_loesch_service(
@@ -316,6 +326,7 @@ def erstelle_transformations_service(
         erstelle_datenimport_service(),
         ImportartefaktSpeicher(workspace_konfiguration),
         AktiveLineageService(pfad),
+        erstelle_loesch_service(pfad, workspace_konfiguration),
     )
 
 

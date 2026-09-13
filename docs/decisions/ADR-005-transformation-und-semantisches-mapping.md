@@ -17,10 +17,19 @@ Transformationen werden als unveränderliche, geordnete und aktivierbare Schritt
 Transformationsplan modelliert. Jeder Schritt enthält Typ, betroffene Spalten, explizite
 Parameter, Reihenfolge, Beschreibung und optionale fachliche Begründung. Die Ausführung beginnt
 bei jeder Vorschau erneut mit den bestätigten Rohdaten und arbeitet auf Kopien. Für neue Pläne
-sind gemäß Tabelle 3.11 ausschließlich Datentypkonvertierung, Wertersetzung, Entfernung exakter
-Tupel-Duplikate und Entfernung vollständig leerer Spalten auswählbar. Ein Plan ohne
-Transformation ist zulässig. Frühere Typen bleiben zur kontrollierten Erkennung alter Pläne im
-Lademodell, werden aber weder angeboten noch als aktueller Sollprozess ausgeführt.
+sind gemäß Tabelle 3.11 Datentypkonvertierung, konkrete und regelbasierte Wertersetzung,
+Entfernung exakter Tupel-Duplikate und vollständig leerer Spalten, bedingtes Löschen von Zeilen
+sowie begrenzte Textbereinigung auswählbar. Eine regelbasierte Ersetzung darf beim Überschreiben
+dieselbe Regel auf mehrere Quellspalten anwenden; Treffer und Lineage werden je Spalte
+dokumentiert. Ein Plan ohne Transformation ist zulässig. Frühere Typen bleiben zur
+kontrollierten Erkennung alter Pläne im Lademodell, werden aber weder angeboten noch als
+aktueller Sollprozess ausgeführt.
+
+Planänderungen persistieren ausschließlich den Transformationsplan. Hinzufügen und Entfernen
+berechnen die Vorschau aus Raw-Daten und der vollständigen Kette neu, erzeugen aber weder einen
+vollständigen T-Snapshot noch eine Downstream-Invalidierung. Ein bereits finalisierter Plan wird
+für die Bearbeitung als neuer Planentwurf fortgeführt, sodass die aktive Lineage unverändert
+bleibt. Erst der ausdrückliche Abschluss von Schritt 2 bildet die Persistenzgrenze für T.
 
 Joins sind eine nachgelagerte Verknüpfungsoperation zwischen separat bestätigten und
 aufbereiteten Datensätzen. Unterstützt werden Left, Right, Inner und Outer Join. Vor der
@@ -40,7 +49,14 @@ erfolgt erst in Schritt 4.
 Ein erzeugter Zwischendatensatz besteht aus einer komprimierten CSV-Datei, einer Schema-JSON und
 einer Herkunfts- und Transformation-JSON im projektbezogenen `interim`-Verzeichnis. Diese enthält
 alle Ausgangsimporte, Profilreferenzen und die ausgeführte Historie. SQLite speichert Metadaten
-und Beziehungen. Eine zusätzliche Schemamigration ist dafür nicht erforderlich.
+und Beziehungen. Stimmt die deterministische Datenprüfsumme eines erneut abgeschlossenen Plans
+mit dem aktiven T überein, bleibt dessen Identität samt Folgeartefakten erhalten und nur die
+aktuelle Plan-Lineage wird nachgeführt. Bei abweichender Prüfsumme wird genau ein neues finales T
+aktiviert; die bisherige T-Generation und ihre abhängigen berechneten Artefakte werden über den
+vorhandenen Lösch- und Lineage-Service entfernt. Die Trennung von Planentwurf, Inhaltsvergleich
+und Downstream-Bereinigung lässt in einem späteren Ausbau eine selektive Übernahme weiterhin
+gültiger Benutzerkonfigurationen vor der Neuberechnung zu. Eine zusätzliche Schemamigration ist
+dafür nicht erforderlich.
 
 Schritt 3 verwendet das zentral gewählte Projekt und den aktiven, integritätsgeprüften
 Zwischendatensatz T ohne lokale Projekt- oder Datensatzauswahl. Seine einzige fachliche Ausgabe
@@ -68,6 +84,7 @@ Hauptbereiche und lokale Fortschrittsanzeigen der jeweiligen Wizards.
 ## Konsequenzen
 
 - Raw-Daten bleiben unverändert und Transformationen sind reproduzierbar.
+- Während der Planbearbeitung wachsen Workspace und Projektexport nicht um T-Snapshots je Schritt.
 - Zwischendatensätze lassen sich über Prüfsumme, Schema und Transformationshistorie prüfen.
 - Datenquellenkatalog Q, Datenprofil R und Zwischendatensatz T werden am Ende getrennt ausgegeben.
 - Technische Referenzen, fachliche Bezeichnungen und Event-Log-Rollen bleiben getrennt.

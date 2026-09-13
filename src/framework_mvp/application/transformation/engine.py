@@ -46,9 +46,7 @@ def ermittle_ersatzwert_aus_profil(
     raise Domaenenfehler("Die Ersatzstrategie passt nicht zum Datentyp der Spalte.")
 
 
-def ermittle_wertersetzungsmaske(
-    spalte: pd.Series, parameter: dict[str, Any]
-) -> pd.Series:
+def ermittle_wertersetzungsmaske(spalte: pd.Series, parameter: dict[str, Any]) -> pd.Series:
     """Validiert eine Wertersetzungsregel und liefert ihre Treffermaske.
 
     Parameter älterer Pläne ohne ``vergleichsart`` bleiben exakte Vergleiche. Die
@@ -476,10 +474,6 @@ def _wende_schritt_an(
         if not schritt.betroffene_spalten:
             raise Domaenenfehler("Für die Wertersetzung muss eine Quellspalte gewählt werden.")
         if schritt.typ is Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN:
-            if len(schritt.betroffene_spalten) != 1:
-                raise Domaenenfehler(
-                    "Die regelbasierte Abstraktion benötigt genau eine Quellspalte."
-                )
             vergleichsart = parameter.get("vergleichsart")
             if vergleichsart not in {
                 Wertevergleichsart.BEGINNT_MIT.value,
@@ -497,6 +491,7 @@ def _wende_schritt_an(
                 "Die Quellspalten sind nicht vorhanden: " + ", ".join(fehlende_spalten)
             )
         anzahl = 0
+        treffer_nach_spalte: dict[str, int] = {}
         if zielmodus == "Neue Spalte erstellen":
             if len(schritt.betroffene_spalten) != 1:
                 raise Domaenenfehler(
@@ -520,14 +515,25 @@ def _wende_schritt_an(
             return daten, f"{anzahl} Werte {aktion}; Zielspalte {zielspalte} erstellt"
         for name in schritt.betroffene_spalten:
             maske = ermittle_wertersetzungsmaske(daten[name], parameter)
-            anzahl += int(maske.sum())
+            spaltentreffer = int(maske.sum())
+            treffer_nach_spalte[name] = spaltentreffer
+            anzahl += spaltentreffer
             daten.loc[maske, name] = ersatz
         aktion = (
             "regelbasiert abstrahiert"
             if schritt.typ is Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN
             else "ersetzt"
         )
-        return daten, f"{anzahl} Werte {aktion}"
+        details = (
+            " ("
+            + "; ".join(
+                f"{name}: {treffer} Treffer" for name, treffer in treffer_nach_spalte.items()
+            )
+            + ")"
+            if len(treffer_nach_spalte) > 1
+            else ""
+        )
+        return daten, f"{anzahl} Werte {aktion}{details}"
     if schritt.typ is Transformationsart.DATENTYP_KONVERTIEREN:
         fehler = 0
         for name in schritt.betroffene_spalten:
@@ -640,9 +646,7 @@ def fuehre_transformationsplan_aus(
                 if schritt.typ is Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN
                 else "Wertersetzung"
             )
-            warnungen.append(
-                f"Die {bezeichnung} hatte im aktuellen Datenstand keine Treffer."
-            )
+            warnungen.append(f"Die {bezeichnung} hatte im aktuellen Datenstand keine Treffer.")
     return Transformationsergebnis(
         daten=daten,
         vorschau=daten.head(MAXIMALE_VORSCHAUZEILEN).copy(deep=True),

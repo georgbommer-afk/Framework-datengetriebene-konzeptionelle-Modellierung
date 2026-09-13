@@ -12,6 +12,8 @@ from jinja2 import (
     select_autoescape,
 )
 
+from framework_mvp.formatierung import formatiere_fachwert
+
 _TEMPLATE_VERSION = "V1"
 _TEMPLATE_ROOT = (
     Path(__file__).resolve().parent / "templates" / "conceptual_model" / _TEMPLATE_VERSION
@@ -60,6 +62,7 @@ def _umgebung() -> Environment:
         undefined=StrictUndefined,
         trim_blocks=True,
         lstrip_blocks=True,
+        finalize=formatiere_fachwert,
     )
 
     umgebung.globals["hat_inhalt"] = _hat_inhalt

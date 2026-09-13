@@ -168,10 +168,10 @@ class DemoProjektService:
                 "Belastbare konzeptionelle Grundlage für Verbesserungsentscheidungen"
             ),
             logistische_zielgroessen=(
-                LogistischeZielgroesse.LIEFERFAEHIGKEIT,
+                LogistischeZielgroesse.QUALITAET,
                 LogistischeZielgroesse.LIEFERTREUE,
             ),
-            ausgewaehlte_kpi_ids=("servicegrad", "liefertreue"),
+            ausgewaehlte_kpi_ids=("first_time_quality_ftq", "liefertreue"),
             systemklassifikation=Systemklassifikation(
                 bereich="Synthetische variantenreiche Auftragsfertigung",
                 objekte_gueter="Produktionsaufträge und diskrete Stückgüter",
@@ -266,9 +266,7 @@ class DemoProjektService:
         ressourcenimport = self._importieren(projekt, ressourcenquelle, "Ressourcenstamm", inhalt)
 
         ressourcenplan = Transformationsplan.neu(projekt.projekt_id, (ressourcenimport.import_id,))
-        ressourcen_t = self._transformationen.zwischendatensatz_erzeugen(
-            ressourcenplan, self._transformationen.vorschau(ressourcenplan), uuid4()
-        )
+        self._transformationen.plan_speichern(ressourcenplan)
         plan = Transformationsplan.neu(
             projekt.projekt_id, (ereignisimport.import_id, ressourcenimport.import_id)
         )
@@ -278,7 +276,7 @@ class DemoProjektService:
                 typ=Transformationsart.TABELLEN_JOIN,
                 betroffene_spalten=("Ressourcen_ID",),
                 parameter={
-                    "rechter_zwischendatensatz_id": str(ressourcen_t.zwischendatensatz_id),
+                    "rechter_transformationsplan_id": str(ressourcenplan.transformationsplan_id),
                     "linke_schluessel": ["Ressourcen_ID"],
                     "rechte_schluessel": ["Ressourcen_ID"],
                     "join_art": "LEFT",
@@ -368,6 +366,10 @@ class DemoProjektService:
                 "Datenherkunft, Arbeitsblätter und Verantwortungsbereiche sind im "
                 "Demoprojekt vollständig dokumentiert."
             ),
+            "t_verwendbar": (
+                "Die für den Event Log verwendeten Daten in T sind fachlich vollständig "
+                "und für die weitere Analyse verwendbar."
+            ),
             "m_verstaendlich": (
                 "Die bestätigte leere Mappingtabelle ist fachlich plausibel, weil die "
                 "technischen Spaltenbezeichnungen bereits eindeutig verständlich sind."
@@ -423,42 +425,21 @@ class DemoProjektService:
         )
         kpis = (
             KpiKonfiguration(
-                "servicegrad",
+                "first_time_quality_ftq",
                 (
                     OperandZuordnung(
-                        "befriedigte_kundenauftragspositionen",
+                        "gutmenge_gq",
                         Datenartefakt.ZWISCHENDATENSATZ_T,
-                        spalte="Qualitaetsstatus",
-                        bedingungsoperator="gleich",
-                        bedingungswert="FREIGEGEBEN",
+                        spalte="Gutmenge",
                     ),
                     OperandZuordnung(
-                        "kundenauftragspositionen",
+                        "produzierte_fertigungsmenge_pqf",
                         Datenartefakt.ZWISCHENDATENSATZ_T,
-                        spalte="Produktionsauftrag",
+                        spalte="Auftragsmenge",
                     ),
                 ),
                 "%",
-                "Produktionsereignisse",
-            ),
-            KpiKonfiguration(
-                "liefertreue",
-                (
-                    OperandZuordnung(
-                        "liefertreue_produktionsauftraege",
-                        Datenartefakt.ZWISCHENDATENSATZ_T,
-                        spalte="Qualitaetsstatus",
-                        bedingungsoperator="gleich",
-                        bedingungswert="FREIGEGEBEN",
-                    ),
-                    OperandZuordnung(
-                        "produktionsauftraege",
-                        Datenartefakt.ZWISCHENDATENSATZ_T,
-                        spalte="Produktionsauftrag",
-                    ),
-                ),
-                "%",
-                "Produktionsereignisse",
+                "produzierte Fertigungsmenge (PQF)",
             ),
         )
         performance = PerformanceZeitvergleichKonfiguration(

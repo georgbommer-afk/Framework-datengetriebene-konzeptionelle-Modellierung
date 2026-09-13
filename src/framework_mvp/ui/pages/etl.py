@@ -244,7 +244,11 @@ def _gespeicherten_import_wiederherstellen(
     if transformations_service is not None and aktiver_zwischendatensatz_id is not None:
         datensatz, _ = transformations_service.zwischendatensatz_laden(aktiver_zwischendatensatz_id)
         if import_id in datensatz.import_ids:
-            plan = transformations_service.plan_laden(datensatz.transformationsplan_id)
+            finaler_plan = transformations_service.plan_laden(datensatz.transformationsplan_id)
+            entwurf = transformations_service.neuester_plan_fuer_import(
+                importvorgang.projekt_id, import_id
+            )
+            plan = entwurf or finaler_plan
             if plan is None:
                 raise Domaenenfehler(
                     "Der Transformationsplan des aktiven Zwischendatensatzes fehlt."
@@ -862,21 +866,16 @@ def _transformation(
         plan, ergebnis, datensatz = anwendung
         zustand["transformationsplan"] = plan
         zustand["transformationsergebnis"] = ergebnis
-        zustand["zwischendatensatz"] = datensatz
-        zustand["zwischendatensatz_id"] = datensatz.zwischendatensatz_id
-        st.success("Die Transformation wurde angewendet und als neuer Zwischenstand gespeichert.")
+        if datensatz is not None:
+            zustand["zwischendatensatz"] = datensatz
+            zustand["zwischendatensatz_id"] = datensatz.zwischendatensatz_id
+        st.success("Der Transformationsplan wurde gespeichert und die Vorschau neu berechnet.")
     if plan is None:
         plan = service.neuester_plan_fuer_import(projekt_id, importvorgang.import_id)
     if plan is None:
         plan = Transformationsplan.neu(projekt_id, (importvorgang.import_id,))
         service.plan_speichern(plan)
-    letzter_datensatz, arbeitsdaten = service.arbeitsstand_laden(plan)
-    if letzter_datensatz is not None:
-        zustand["zwischendatensatz"] = letzter_datensatz
-        zustand["zwischendatensatz_id"] = letzter_datensatz.zwischendatensatz_id
-        st.session_state.aktueller_zwischendatensatz_id = str(
-            letzter_datensatz.zwischendatensatz_id
-        )
+    arbeitsdaten = service.vorschau(plan).daten
     arbeitsprofil = service.arbeitsprofil_erstellen(arbeitsdaten)
     plan = zeige_transformationseditor(service, plan, arbeitsdaten, asdict(arbeitsprofil.profil))
     if any(schritt.aktiviert and not schritt.frameworkkonform for schritt in plan.schritte):
@@ -894,12 +893,6 @@ def _transformation(
             f"{len(gespeichertes_ergebnis.daten.columns):,} Spalten"
         )
         st.dataframe(gespeichertes_ergebnis.vorschau, width="stretch")
-    if st.session_state.get("folgeartefakte_veraltet") == str(projekt_id):
-        st.warning(
-            "Die Datenbasis wurde geändert. Mapping, Event Log, Datenqualität, "
-            "Process Mining und Modellergebnisse müssen auf diesem Zwischenstand neu "
-            "erzeugt werden."
-        )
 
 
 def _join_konfigurieren(
@@ -951,6 +944,7 @@ def _join_konfigurieren(
     vorhandene_rechte_id = (
         UUID(str(vorhandener_join.parameter["rechter_zwischendatensatz_id"]))
         if vorhandener_join is not None
+        and vorhandener_join.parameter.get("rechter_zwischendatensatz_id")
         else None
     )
     datensaetze = [
@@ -977,6 +971,7 @@ def _join_konfigurieren(
         return plan
     weg = st.radio("Quelle der Zusatztabelle", wege, key=f"{widget_praefix}_quelle")
     rechter_datensatz = None
+    rechter_plan = None
     rechte_daten = None
     if weg == "Bereits aufbereitete Tabelle verwenden":
         rechter_datensatz_id = st.selectbox(
@@ -1007,20 +1002,21 @@ def _join_konfigurieren(
             session_key=f"{widget_praefix}_profil_{tabellenblatt}",
             daten=blattdaten,
         )
-        bestaetigt_id = st.session_state.get(f"{widget_praefix}_bestaetigtes_blatt_id")
+        bestaetigt_id = st.session_state.get(f"{widget_praefix}_bestaetigter_plan_id")
         if bestaetigt_id:
-            rechter_datensatz, rechte_daten = service.zwischendatensatz_laden(
-                UUID(str(bestaetigt_id))
-            )
+            rechter_plan = service.plan_laden(UUID(str(bestaetigt_id)))
+            if rechter_plan is None:
+                raise Domaenenfehler("Der Transformationsplan der Zusatztabelle fehlt.")
+            rechte_daten = service.vorschau(rechter_plan).daten
         elif st.button("Zusätzliche Tabelle fachlich bestätigen", type="primary"):
-            _, _, rechter_datensatz, rechte_daten = service.excel_arbeitsblatt_aufbereiten(
+            _, rechter_plan, _, rechte_daten = service.excel_arbeitsblatt_aufbereiten(
                 plan.import_ids[0], tabellenblatt
             )
-            st.session_state[f"{widget_praefix}_bestaetigtes_blatt_id"] = str(
-                rechter_datensatz.zwischendatensatz_id
+            st.session_state[f"{widget_praefix}_bestaetigter_plan_id"] = str(
+                rechter_plan.transformationsplan_id
             )
             st.rerun()
-    if rechter_datensatz is None or rechte_daten is None:
+    if (rechter_datensatz is None and rechter_plan is None) or rechte_daten is None:
         st.info("Bestätigen Sie die Zusatztabelle, bevor Sie den Join konfigurieren.")
         return plan
     st.write(f"**Haupttabelle:** {len(linke_daten):,} Zeilen")
@@ -1083,7 +1079,6 @@ def _join_konfigurieren(
     for warnung in pruefung.warnungen:
         st.warning(warnung)
     parameter = {
-        "rechter_zwischendatensatz_id": str(rechter_datensatz.zwischendatensatz_id),
         "linke_schluessel": linke_schluessel,
         "rechte_schluessel": rechte_schluessel,
         "join_art": join_art,
@@ -1096,6 +1091,14 @@ def _join_konfigurieren(
             "moegliche_zeilenvervielfachung": pruefung.moegliche_zeilenvervielfachung,
         },
     }
+    rechte_import_ids: tuple[UUID, ...]
+    if rechter_plan is not None:
+        parameter["rechter_transformationsplan_id"] = str(rechter_plan.transformationsplan_id)
+        rechte_import_ids = rechter_plan.import_ids
+    else:
+        assert rechter_datensatz is not None
+        parameter["rechter_zwischendatensatz_id"] = str(rechter_datensatz.zwischendatensatz_id)
+        rechte_import_ids = rechter_datensatz.import_ids
     if st.button("Verknüpfung anwenden", type="primary", width="stretch"):
         schritt = Transformationsschritt.neu(
             typ=Transformationsart.TABELLEN_JOIN,
@@ -1110,23 +1113,16 @@ def _join_konfigurieren(
             plan, ergebnis, datensatz = service.transformation_anwenden(
                 plan,
                 schritt,
-                uuid4(),
-                zusaetzliche_import_ids=rechter_datensatz.import_ids,
+                zusaetzliche_import_ids=rechte_import_ids,
             )
         else:
             plan, ergebnis, datensatz = service.join_schritt_ersetzen(
                 plan,
                 vorhandener_join.transformationsschritt_id,
                 schritt,
-                uuid4(),
-                zusaetzliche_import_ids=rechter_datensatz.import_ids,
+                zusaetzliche_import_ids=rechte_import_ids,
             )
         st.session_state.etl_transformationsanwendung = (plan, ergebnis, datensatz)
-        folgeartefakte_zustand_invalidieren(
-            cast("MutableMapping[str, Any]", st.session_state),
-            projekt_id,
-            datensatz.zwischendatensatz_id,
-        )
         st.rerun()
     return plan
 
@@ -1320,16 +1316,10 @@ def _zwischendatensatz(
     st.subheader("Ausgabe dieses Schritts")
     plan: Transformationsplan = zustand["transformationsplan"]
     datensatz = zustand.get("zwischendatensatz")
-    if datensatz is not None:
-        _, daten = service.zwischendatensatz_laden(datensatz.zwischendatensatz_id)
-        gespeichertes_ergebnis = zustand.get("transformationsergebnis")
-        ergebnis = (
-            gespeichertes_ergebnis if gespeichertes_ergebnis is not None else service.vorschau(plan)
-        )
-        if len(ergebnis.daten) != len(daten) or list(ergebnis.daten.columns) != list(daten.columns):
-            raise Domaenenfehler("Der aktive Zwischenstand passt nicht zur Transformationskette.")
-    else:
-        ergebnis = service.vorschau(plan)
+    ergebnis = service.vorschau(plan)
+    plan_ist_final = (
+        datensatz is not None and datensatz.transformationsplan_id == plan.transformationsplan_id
+    )
     importe = _importe_des_plans(service, projekt_id, plan)
     _zeige_datenquellenkatalog_q(
         importe=importe,
@@ -1340,7 +1330,7 @@ def _zwischendatensatz(
         importe=importe,
         plan=plan,
         ergebnis=ergebnis,
-        datensatz=datensatz,
+        datensatz=datensatz if plan_ist_final else None,
     )
     if datenprofil_service is not None and st.button("Indikatorbedingungen bearbeiten"):
         zustand["schritt"] = 3
@@ -1356,17 +1346,28 @@ def _zwischendatensatz(
         zustand.clear()
         zustand.update({"schritt": 1, "durchlauf_version": version})
         st.rerun()
-    datensatz_id = zustand.setdefault("zwischendatensatz_id", uuid4())
 
     def weiter_zu_mapping() -> None:
-        aktueller_datensatz = datensatz
-        if aktueller_datensatz is None:
-            aktueller_datensatz = service.zwischendatensatz_erzeugen(plan, ergebnis, datensatz_id)
-            zustand["zwischendatensatz"] = aktueller_datensatz
+        bisherige_id = datensatz.zwischendatensatz_id if datensatz is not None else None
+        abschluss = service.zwischendatensatz_abschliessen(
+            plan,
+            bisheriger_datensatz_id=bisherige_id,
+        )
+        aktueller_datensatz = abschluss.datensatz
+        zustand["zwischendatensatz"] = aktueller_datensatz
+        zustand["zwischendatensatz_id"] = aktueller_datensatz.zwischendatensatz_id
+        zustand["transformationsergebnis"] = abschluss.ergebnis
+        if abschluss.daten_geaendert and bisherige_id is not None:
+            folgeartefakte_zustand_invalidieren(
+                cast("MutableMapping[str, Any]", st.session_state),
+                projekt_id,
+                aktueller_datensatz.zwischendatensatz_id,
+            )
         st.session_state.aktueller_zwischendatensatz_id = str(
             aktueller_datensatz.zwischendatensatz_id
         )
-        st.session_state.pop("folgeartefakte_veraltet", None)
+        if not abschluss.daten_geaendert:
+            st.session_state.pop("folgeartefakte_veraltet", None)
         schritt_abschliessen_und_weiter(aktueller_schritt=2, projekt_id=projekt_id)
 
     zeige_unterschritt_navigation(
@@ -1377,7 +1378,7 @@ def _zwischendatensatz(
         weiter_callback=weiter_zu_mapping,
         weiter_label=(
             "Zwischendatensatz erstellen und weiter zu Schritt 3: Semantisches Mapping"
-            if datensatz is None
+            if not plan_ist_final
             else "Weiter zu Schritt 3: Semantisches Mapping"
         ),
         schluessel="etl_abschluss_navigation",

@@ -1,7 +1,10 @@
 """Anwendungsservice für die Projektverwaltung."""
 
+from __future__ import annotations
+
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Protocol
 from uuid import UUID
 
 from framework_mvp.application.ports.projekt_repository import ProjektRepository
@@ -14,12 +17,34 @@ from framework_mvp.domain.models import (
 )
 
 
+class ProjektAenderungsfolgen(Protocol):
+    """Port für persistierte Folgen einer fachlich klassifizierten U-Änderung."""
+
+    def kpi_auswahl_geaendert(self, projekt_id: UUID) -> None: ...
+
+
+def ist_reine_kpi_aenderung(
+    vorher: Untersuchungsauftrag,
+    nachher: Untersuchungsauftrag,
+) -> bool:
+    """Erkennt exakt eine geänderte KPI-Auswahl bei sonst unverändertem U."""
+    return (
+        vorher.ausgewaehlte_kpi_ids != nachher.ausgewaehlte_kpi_ids
+        and replace(vorher, ausgewaehlte_kpi_ids=nachher.ausgewaehlte_kpi_ids) == nachher
+    )
+
+
 class ProjektService:
     """Orchestriert fachliche Projektoperationen und deren Speicherung."""
 
-    def __init__(self, repository: ProjektRepository) -> None:
+    def __init__(
+        self,
+        repository: ProjektRepository,
+        aenderungsfolgen: ProjektAenderungsfolgen | None = None,
+    ) -> None:
         """Erzeugt den Service mit einem austauschbaren Repository."""
         self._repository = repository
+        self._aenderungsfolgen = aenderungsfolgen
 
     def projekt_anlegen(
         self,
@@ -66,6 +91,11 @@ class ProjektService:
             beteiligte_personen=beteiligte_personen,
         )
         self._repository.speichern(aktualisiert)
+        if self._aenderungsfolgen is not None and ist_reine_kpi_aenderung(
+            projekt.untersuchungsauftrag,
+            aktualisiert.untersuchungsauftrag,
+        ):
+            self._aenderungsfolgen.kpi_auswahl_geaendert(projekt_id)
         return aktualisiert
 
     def betrachtungszeitraum_aus_event_log_aktualisieren(

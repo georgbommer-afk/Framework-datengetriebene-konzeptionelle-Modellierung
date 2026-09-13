@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -116,7 +117,7 @@ class AktiveLineageService:
         self,
         projekt_id: UUID | str,
         endpunkt: LineageEndpunkt,
-        referenzen: dict[str, UUID | str],
+        referenzen: Mapping[str, UUID | str],
     ) -> AktiveProjektlineage:
         """Aktiviert eine Generation und entfernt nur nachgelagerte aktive Referenzen."""
         projekt = kanonische_projekt_id(projekt_id)
@@ -160,6 +161,21 @@ class AktiveLineageService:
         finally:
             verbindung.close()
         return AktiveProjektlineage(UUID(projekt), endpunkt, behalten, revision, zeitpunkt)
+
+    def bis_endpunkt_zuruecksetzen(
+        self,
+        projekt_id: UUID | str,
+        endpunkt: LineageEndpunkt,
+    ) -> AktiveProjektlineage | None:
+        """Kürzt nur eine bereits weiter fortgeschrittene aktive Lineage.
+
+        Die bis zum Zielendpunkt gehörenden Referenzen werden aus dem bestehenden
+        Checkpoint übernommen. Fachartefakte werden dabei weder verändert noch gelöscht.
+        """
+        aktuell = self.laden(projekt_id)
+        if aktuell is None or REIHENFOLGE.index(aktuell.endpunkt) < REIHENFOLGE.index(endpunkt):
+            return aktuell
+        return self.aktivieren(projekt_id, endpunkt, aktuell.referenzen)
 
     def legacy_uebernehmen(
         self,
