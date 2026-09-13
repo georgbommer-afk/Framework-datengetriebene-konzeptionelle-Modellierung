@@ -229,86 +229,6 @@ def _informationen(report: Mapping[str, Any], ids: set[str]) -> list[dict[str, A
     return ergebnis
 
 
-def _statistikzeilen(report: Mapping[str, Any]) -> list[dict[str, Any]]:
-    daten = _mapping(report.get("daten"))
-    zeitwahl = _mapping(daten.get("zeitbezogene_datenauswahl"))
-    ergebnis: list[dict[str, Any]] = []
-
-    def aufnehmen(art: str, bezug: str, statistik: Any) -> None:
-        stats = _mapping(statistik)
-        ergebnis.append(
-            {
-                "art": art,
-                "bezug": bezug,
-                "anzahl": stats.get("anzahl"),
-                "mittelwert": stats.get("mittelwert_sekunden", stats.get("mittelwert")),
-                "median": stats.get("median_sekunden", stats.get("median")),
-                "minimum": stats.get("minimum_sekunden", stats.get("minimum")),
-                "maximum": stats.get("maximum_sekunden", stats.get("maximum")),
-                "einheit": stats.get("einheit", "Sekunden"),
-            }
-        )
-
-    system_iat = _mapping(zeitwahl.get("system_zwischenankunftszeit"))
-    system_statistik = _mapping(system_iat.get("statistik"))
-    if system_statistik:
-        aufnehmen(
-            "System-IAT nach Gl. 3.16",
-            "Systemeintritt · frühester Ist-Start je Case",
-            system_statistik,
-        )
-    einzelwert = zeitwahl.get("zwischenankunftszeit")
-    if not system_statistik and isinstance(einzelwert, Mapping) and einzelwert:
-        aufnehmen("Zwischenankunftszeit", "Gesamt", einzelwert.get("statistik", einzelwert))
-    for eintrag in _liste(zeitwahl.get("zwischenankunftszeiten")):
-        mapping = _mapping(eintrag)
-        if not mapping:
-            continue
-        definition = _mapping(mapping.get("definition"))
-        bezug = str(definition.get("bezeichnung") or mapping.get("bezeichnung") or "Gesamt")
-        statistik = mapping.get("statistik")
-        if isinstance(statistik, Mapping) and statistik:
-            aufnehmen("Zwischenankunftszeit", bezug, statistik)
-    for schluessel, titel in (
-        ("bearbeitungszeiten", "Bearbeitungszeit"),
-        ("ressourcenbezogene_bearbeitungszeiten", "Ressourcenbezogene Bearbeitungszeit"),
-    ):
-        for eintrag in _liste(zeitwahl.get(schluessel)):
-            mapping = _mapping(eintrag)
-            bezug = (
-                " / ".join(
-                    str(mapping.get(name))
-                    for name in ("aktivitaet", "ressource")
-                    if mapping.get(name) not in (None, "")
-                )
-                or "Gesamt"
-            )
-            aufnehmen(titel, bezug, mapping.get("statistik", mapping))
-    for eintrag in _liste(zeitwahl.get("vereinfachte_zeitspannen")):
-        mapping = _mapping(eintrag)
-        aufnehmen(
-            "Vereinfachte Start-zu-Start-Zeitspanne",
-            f"{mapping.get('von_aktivitaet', '')} → {mapping.get('zu_aktivitaet', '')}",
-            mapping.get("statistik", mapping),
-        )
-    for hinweis in _liste(_mapping(report.get("warteschlangen")).get("wartestellenhinweise")):
-        mapping = _mapping(hinweis)
-        uebergang = _mapping(mapping.get("uebergang"))
-        ergebnis.append(
-            {
-                "art": "Wartezeit",
-                "bezug": f"{uebergang.get('von', '')} → {uebergang.get('zu', '')}",
-                "anzahl": mapping.get("anzahl"),
-                "mittelwert": mapping.get("mittlere_wartezeit_sekunden"),
-                "median": mapping.get("mediane_wartezeit_sekunden"),
-                "minimum": None,
-                "maximum": None,
-                "einheit": "Sekunden",
-            }
-        )
-    return ergebnis
-
-
 def _svg_zu_png(svg: str) -> bytes | None:
     """Konvertiert SVG bevorzugt in-process, optional über vorhandenes rsvg-convert."""
     try:
@@ -398,7 +318,6 @@ def _uebersicht(ws: Worksheet, report: Mapping[str, Any]) -> None:
         zeile,
         (
             ("Projekt", projekt.get("bezeichnung") or dokument.get("titel")),
-            ("Projekt-ID", projekt.get("projekt_id")),
             ("Systemtyp", umfang.get("systemtyp_anzeige") or umfang.get("systemtyp")),
             (
                 "Systemgegenstand",
@@ -408,6 +327,7 @@ def _uebersicht(ws: Worksheet, report: Mapping[str, Any]) -> None:
             ("Problemstellung", _kurz(_mapping(report.get("problemstellung")).get("text"), 400)),
             ("Zielsetzung", ziel.get("individuelles_ziel") or ziel.get("untersuchungszwecke")),
             ("Validierungsstatus", validierung.get("status_anzeige")),
+            ("Fachliche Validierung", validierung.get("validierungsvermerk")),
             ("Modellstand", modell.get("erstellt_am")),
             ("Framework-Version", dokument.get("softwareversion")),
         ),
@@ -430,7 +350,14 @@ def _uebersicht(ws: Worksheet, report: Mapping[str, Any]) -> None:
         },
         {
             "kategorie": "Warteschlangen",
-            "inhalt": _mapping(report.get("warteschlangen")).get("wartestellenhinweise"),
+            "inhalt": [
+                wert.get("bezeichnung")
+                or f"{wert.get('vorgaengeraktivitaet', '')} → {wert.get('folgeaktivitaet', '')}"
+                for wert in _liste(
+                    _mapping(report.get("warteschlangen")).get("bestaetigte_warteschlangen")
+                )
+                if isinstance(wert, Mapping)
+            ],
         },
         {
             "kategorie": "Zustände",
@@ -441,11 +368,8 @@ def _uebersicht(ws: Worksheet, report: Mapping[str, Any]) -> None:
             ],
         },
         {
-            "kategorie": "Attribute/Variablen",
-            "inhalt": {
-                "Fallattribut": _mapping(report.get("entitaeten")).get("kanonisches_fallattribut"),
-                "Ressourcenattribut": ressourcen.get("ressourcenattribut"),
-            },
+            "kategorie": "Fallidentifikation",
+            "inhalt": _mapping(report.get("entitaeten")).get("fallidentifikation"),
         },
         {
             "kategorie": "Prozesssteuerung/Logik",
@@ -453,11 +377,22 @@ def _uebersicht(ws: Worksheet, report: Mapping[str, Any]) -> None:
         },
         {
             "kategorie": "Eingaben",
-            "inhalt": [wert.get("wert") for wert in _informationen(report, {"eingaben"})],
+            "inhalt": [
+                f"{wert.get('bezeichnung', 'Experimenteller Faktor')} "
+                f"({wert.get('bezugstyp_anzeige', 'Bezug')} "
+                f"{wert.get('konkreter_bezug', '')}): "
+                f"{wert.get('wertebereich_anzeige', '')}"
+                for wert in _liste(_mapping(report.get("eingaben")).get("experimentelle_faktoren"))
+                if isinstance(wert, Mapping)
+            ],
         },
         {
             "kategorie": "Ausgaben",
-            "inhalt": _mapping(report.get("ausgaben_und_eingaben")).get("ausgewaehlte_kpis"),
+            "inhalt": [
+                wert.get("bezeichnung")
+                for wert in _liste(_mapping(report.get("ausgaben")).get("ausgewaehlte_kpis"))
+                if isinstance(wert, Mapping)
+            ],
         },
         {
             "kategorie": "Annahmen",
@@ -520,7 +455,8 @@ def _problem_und_grenze(ws: Worksheet, report: Mapping[str, Any]) -> None:
 
 def _ziele(ws: Worksheet, report: Mapping[str, Any]) -> None:
     ziel = _mapping(report.get("zielsetzung"))
-    ausgaben = _mapping(report.get("ausgaben_und_eingaben"))
+    ausgaben = _mapping(report.get("ausgaben"))
+    eingaben = _mapping(report.get("eingaben"))
     zeile = _sheet_start(ws, SHEET_NAMES[2], "Ziele, Zielgrößen und Kennzahlen")
     zeile = _abschnitt(ws, zeile, "Zielbild")
     zeile = _paare(
@@ -554,11 +490,10 @@ def _ziele(ws: Worksheet, report: Mapping[str, Any]) -> None:
     for kpi in kpis:
         if not isinstance(kpi.get("ergebnis"), (int, float)):
             kpi["ergebnis"] = kpi.get("ergebnis_anzeige")
-    _tabelle(
+    zeile = _tabelle(
         ws,
         zeile,
         (
-            ("KPI-ID", "kpi_id"),
             ("Bezeichnung", "bezeichnung"),
             ("Ergebnis", "ergebnis"),
             ("Einheit", "einheit"),
@@ -569,6 +504,25 @@ def _ziele(ws: Worksheet, report: Mapping[str, Any]) -> None:
         kpis,
         autofilter=True,
         zahlenformate={"ergebnis": "0.##"},
+    )
+    zeile += 1
+    zeile = _abschnitt(ws, zeile, "Experimentelle Faktoren")
+    _tabelle(
+        ws,
+        zeile,
+        (
+            ("Bezugstyp", "bezugstyp_anzeige"),
+            ("Konkreter Bezug", "konkreter_bezug"),
+            ("Experimenteller Faktor", "bezeichnung"),
+            ("Art", "art_anzeige"),
+            ("Wertebereich / Ausprägungen", "wertebereich_anzeige"),
+        ),
+        [
+            dict(wert)
+            for wert in _liste(eingaben.get("experimentelle_faktoren"))
+            if isinstance(wert, Mapping)
+        ],
+        autofilter=True,
     )
 
 
@@ -587,8 +541,6 @@ def _prozess(ws: Worksheet, report: Mapping[str, Any]) -> None:
                 "Notation",
                 prozess.get("notation_anzeige") or annahmen.get("prozessnotation_anzeige"),
             ),
-            ("Prozessmodell-ID", prozess.get("prozessmodell_id")),
-            ("Process-Mining-Analyse-ID", prozess.get("process_mining_analyse_id")),
             ("Modellierungsentscheidungen", annahmen.get("modellierungsentscheidungen")),
             ("Schwellwert-Auswirkung", annahmen.get("schwellwert_auswirkung")),
         ),
@@ -636,48 +588,52 @@ def _systemelemente(ws: Worksheet, report: Mapping[str, Any]) -> None:
     ergaenzen(
         "Ressource",
         ressourcen.get("event_log_ressourcen") or ressourcen.get("systemressourcen"),
-        ursprung=ressourcen.get("zuordnungsherkunft") or "Ressourcenanalyse",
+        ursprung=(
+            "Automatisch aus dem Event Log abgeleitet"
+            if ressourcen.get("zuordnungsmodus") == "automatisch"
+            else "In Schritt 7 fachlich zugeordnet"
+        ),
     )
     ergaenzen(
-        "Warteschlange/Wartepunkt",
-        warteschlangen.get("wartestellenhinweise"),
-        ursprung="Zeitbezogene Analyse",
+        "Warteschlange",
+        warteschlangen.get("bestaetigte_warteschlangen"),
+        ursprung="Fachliche Validierung",
     )
-    for bezeichnung, wert, ursprung in (
-        ("Fallattribut", entitaeten.get("kanonisches_fallattribut"), "Event-Log-Schema"),
-        ("Ressourcenattribut", ressourcen.get("ressourcenattribut"), "Event-Log-Schema"),
-    ):
-        if wert not in (None, ""):
-            daten.append(
-                {
-                    "kategorie": "Attribut/Variable",
-                    "element": bezeichnung,
-                    "typ": "Attribut",
-                    "beschreibung": wert,
-                    "ursprung": ursprung,
-                    "eigenschaften": None,
-                    "status": "Fachlich validiert",
-                }
-            )
-    for eintrag in _informationen(report, {"eingaben"}):
+    if entitaeten.get("fallidentifikation"):
+        daten.append(
+            {
+                "kategorie": "Entität/Objekt",
+                "element": "Fallidentifikation",
+                "typ": "Fachlicher Fallbezug",
+                "beschreibung": entitaeten.get("fallidentifikation"),
+                "ursprung": "Systemprofil",
+                "eigenschaften": None,
+                "status": "Fachlich validiert",
+            }
+        )
+    for faktor in _liste(_mapping(report.get("eingaben")).get("experimentelle_faktoren")):
+        mapping = _mapping(faktor)
         daten.append(
             {
                 "kategorie": "Eingabe",
-                "element": eintrag.get("referenz"),
-                "typ": "Eingabe",
-                "beschreibung": _kurz(eintrag.get("wert"), 300),
-                "ursprung": eintrag.get("quelle"),
-                "eigenschaften": None,
-                "status": eintrag.get("status"),
+                "element": mapping.get("bezeichnung"),
+                "typ": "Experimenteller Faktor",
+                "beschreibung": mapping.get("wertebereich_anzeige"),
+                "ursprung": "Fachliche Validierung",
+                "eigenschaften": {
+                    "Bezugstyp": mapping.get("bezugstyp_anzeige"),
+                    "Konkreter Bezug": mapping.get("konkreter_bezug"),
+                },
+                "status": "Fachlich validiert",
             }
         )
-    ausgaben = _mapping(report.get("ausgaben_und_eingaben"))
+    ausgaben = _mapping(report.get("ausgaben"))
     for kpi in _liste(ausgaben.get("kpi_ergebnisse")):
         mapping = _mapping(kpi)
         daten.append(
             {
                 "kategorie": "Ausgabe/KPI",
-                "element": mapping.get("bezeichnung") or mapping.get("kpi_id"),
+                "element": mapping.get("bezeichnung") or "KPI-Ergebnis",
                 "typ": "Kennzahl",
                 "beschreibung": mapping.get("ergebnis_anzeige"),
                 "ursprung": "Ergebnisaggregation",
@@ -723,6 +679,41 @@ def _annahmen(ws: Worksheet, report: Mapping[str, Any]) -> None:
             ),
         ),
     )
+    explizite_inhalte = [
+        {
+            "typ": "Annahme",
+            "bezug": "Gesamtsystem",
+            "inhalt": wert.get("annahme"),
+            "hintergrund": wert.get("hintergrund"),
+        }
+        for wert in _liste(annahmen.get("explizite_annahmen"))
+        if isinstance(wert, Mapping)
+    ]
+    explizite_inhalte.extend(
+        {
+            "typ": "Vereinfachung",
+            "bezug": wert.get("konkreter_bezug") or "Gesamtsystem",
+            "inhalt": wert.get("beschreibung"),
+            "hintergrund": None,
+        }
+        for wert in _liste(vereinfachungen.get("explizite_vereinfachungen"))
+        if isinstance(wert, Mapping)
+    )
+    if explizite_inhalte:
+        zeile += 1
+        zeile = _abschnitt(ws, zeile, "Explizite Annahmen und Vereinfachungen")
+        zeile = _tabelle(
+            ws,
+            zeile,
+            (
+                ("Typ", "typ"),
+                ("Bezug", "bezug"),
+                ("Inhalt", "inhalt"),
+                ("Hintergrund", "hintergrund"),
+            ),
+            explizite_inhalte,
+            autofilter=True,
+        )
     zeile += 1
     zeile = _abschnitt(ws, zeile, "Fachliche Entscheidungen, Anpassungen und offene Punkte")
     entscheidungen: list[dict[str, Any]] = []
@@ -764,14 +755,43 @@ def _annahmen(ws: Worksheet, report: Mapping[str, Any]) -> None:
 def _daten(ws: Worksheet, report: Mapping[str, Any]) -> None:
     daten = _mapping(report.get("daten"))
     zeile = _sheet_start(ws, SHEET_NAMES[6], "Datenbasis und zeitbezogene Datenauswahl")
-    zeile = _abschnitt(ws, zeile, "Datenquellen und Datenartefakte")
+    zeile = _abschnitt(ws, zeile, "Datenquellen")
+    zeile = _tabelle(
+        ws,
+        zeile,
+        (
+            ("Datenquelle", "bezeichnung"),
+            ("Quellsystem", "quellsystem_anzeige"),
+            ("Format", "format_anzeige"),
+            ("Verwendung", "verwendung"),
+        ),
+        [dict(wert) for wert in _liste(daten.get("datenquellen")) if isinstance(wert, Mapping)],
+        autofilter=True,
+    )
+    zeile += 1
+    zeile = _abschnitt(ws, zeile, "Datenartefakte")
+    event_log = _mapping(daten.get("event_log"))
     zeile = _paare(
         ws,
         zeile,
         (
-            ("Datenquellen", daten.get("datenquellen")),
-            ("Zwischendatensatz", daten.get("zwischendatensatz")),
-            ("Event Log", daten.get("event_log")),
+            (
+                "Zwischendatensatz",
+                {
+                    "Zeilen": _mapping(daten.get("zwischendatensatz")).get("zeilenanzahl"),
+                    "Spalten": _mapping(daten.get("zwischendatensatz")).get("spaltenanzahl"),
+                },
+            ),
+            (
+                "Event Log",
+                {
+                    "Ereignisse": event_log.get("ereignisanzahl"),
+                    "Fälle": event_log.get("fallanzahl"),
+                    "Aktivitäten": event_log.get("aktivitaetsanzahl"),
+                },
+            ),
+            ("Von", event_log.get("zeitraum_von_anzeige", event_log.get("zeitraum_von"))),
+            ("Bis", event_log.get("zeitraum_bis_anzeige", event_log.get("zeitraum_bis"))),
         ),
     )
     aufbereitung = _mapping(daten.get("datenaufbereitung"))
@@ -808,13 +828,12 @@ def _daten(ws: Worksheet, report: Mapping[str, Any]) -> None:
         ws,
         zeile,
         (
-            ("Import-ID", "import_id"),
+            ("Datenquelle", "anzeigebezeichnung"),
             ("Zeilen", "zeilenanzahl"),
             ("Spalten", "spaltenanzahl"),
             ("Fehlwerte", "echte_fehlwerte"),
             ("Platzhalter", "textuelle_platzhalter"),
             ("Duplikate", "exakte_duplikate"),
-            ("Profil-Prüfsumme", "profil_sha256"),
         ),
         [dict(wert) for wert in _liste(daten.get("profile")) if isinstance(wert, Mapping)],
         zahlenformate={
@@ -826,39 +845,121 @@ def _daten(ws: Worksheet, report: Mapping[str, Any]) -> None:
         },
     )
     zeile += 1
-    zeile = _abschnitt(ws, zeile, "Zeitbezogene Kennwerte")
-    statistikzeilen = _statistikzeilen(report)
-    statistikspalten: list[tuple[str, str]] = [
-        ("Kennwert", "art"),
-        ("Bezug", "bezug"),
-        ("Anzahl", "anzahl"),
-        ("Mittelwert", "mittelwert"),
-        ("Median", "median"),
-    ]
-    if any(wert.get("minimum") not in (None, "") for wert in statistikzeilen):
-        statistikspalten.append(("Minimum", "minimum"))
-    if any(wert.get("maximum") not in (None, "") for wert in statistikzeilen):
-        statistikspalten.append(("Maximum", "maximum"))
-    statistikspalten.append(("Einheit", "einheit"))
-    _tabelle(
+    zeitwahl = _mapping(daten.get("zeitbezogene_datenauswahl"))
+    zeile = _abschnitt(ws, zeile, "Zwischenankunftszeit System · Gl. 3.16")
+    system_iat = _mapping(zeitwahl.get("system_zwischenankunftszeit"))
+    system_stats = _mapping(system_iat.get("statistik"))
+    zeile = _paare(
         ws,
         zeile,
-        tuple(statistikspalten),
-        statistikzeilen,
+        (
+            ("Systemeintritt", "Frühester Ist-Start je Fall"),
+            ("Entitäten", system_iat.get("anzahl_entitaeten")),
+            ("Anzahl Zwischenankunftszeiten", system_stats.get("anzahl")),
+            ("Mittelwert (s)", system_stats.get("mittelwert_sekunden")),
+            ("Median (s)", system_stats.get("median_sekunden")),
+        ),
+    )
+    zeile += 1
+    zeile = _abschnitt(ws, zeile, "Bearbeitungszeit · Gl. 3.3")
+    zeile = _tabelle(
+        ws,
+        zeile,
+        (
+            ("Aktivität", "aktivitaet"),
+            ("Ressource", "ressource"),
+            ("n", "anzahl"),
+            ("Mittelwert (s)", "mittelwert_sekunden"),
+            ("Median (s)", "median_sekunden"),
+        ),
+        [
+            dict(wert)
+            for wert in _liste(zeitwahl.get("bearbeitungszeiten_tabelle"))
+            if isinstance(wert, Mapping)
+        ],
         autofilter=True,
         zahlenformate={
             "anzahl": "#,##0",
-            "mittelwert": "0.##",
-            "median": "0.##",
-            "minimum": "0.##",
-            "maximum": "0.##",
+            "mittelwert_sekunden": "0.##",
+            "median_sekunden": "0.##",
         },
     )
+    zeile += 1
+    zeile = _abschnitt(ws, zeile, "Potenzielle Wartezeit · Gl. 3.15")
+    zeile = _paare(
+        ws,
+        zeile,
+        (
+            (
+                "Hinweis",
+                "Positive Zeitdifferenzen werden als potenzielle Wartezeiten ausgewiesen. "
+                "Sie stellen ohne fachliche Bestätigung keine Warteschlange dar.",
+            ),
+        ),
+    )
+    zeile = _tabelle(
+        ws,
+        zeile,
+        (
+            ("Übergang", "uebergang"),
+            ("n", "anzahl"),
+            ("Mittelwert (s)", "mittelwert_sekunden"),
+            ("Median (s)", "median_sekunden"),
+            ("Status", "status"),
+        ),
+        [
+            dict(wert)
+            for wert in _liste(zeitwahl.get("potenzielle_wartezeiten_tabelle"))
+            if isinstance(wert, Mapping)
+        ],
+        autofilter=True,
+        zahlenformate={
+            "anzahl": "#,##0",
+            "mittelwert_sekunden": "0.##",
+            "median_sekunden": "0.##",
+        },
+    )
+    vereinfachte = [
+        dict(wert)
+        for wert in _liste(zeitwahl.get("vereinfachte_zeitspannen_tabelle"))
+        if isinstance(wert, Mapping)
+    ]
+    if vereinfachte:
+        zeile += 1
+        zeile = _abschnitt(ws, zeile, "Vereinfachte Zeitspannen")
+        zeile = _paare(
+            ws,
+            zeile,
+            (
+                (
+                    "Einordnung",
+                    "Bestätigte Start-zu-Start-Zeitspannen enthalten mögliche "
+                    "Bearbeitungs-, Transport- und Warteanteile gemeinsam.",
+                ),
+            ),
+        )
+        _tabelle(
+            ws,
+            zeile,
+            (
+                ("Übergang", "uebergang"),
+                ("n", "anzahl"),
+                ("Mittelwert (s)", "mittelwert_sekunden"),
+                ("Median (s)", "median_sekunden"),
+            ),
+            vereinfachte,
+            autofilter=True,
+            zahlenformate={
+                "anzahl": "#,##0",
+                "mittelwert_sekunden": "0.##",
+                "median_sekunden": "0.##",
+            },
+        )
 
 
 def _analyse(ws: Worksheet, report: Mapping[str, Any]) -> None:
     prozess = _mapping(report.get("prozessdarstellung"))
-    ausgaben = _mapping(report.get("ausgaben_und_eingaben"))
+    ausgaben = _mapping(report.get("ausgaben"))
     ressourcen = _mapping(report.get("ressourcen"))
     warteschlangen = _mapping(report.get("warteschlangen"))
     zeile = _sheet_start(
@@ -868,20 +969,7 @@ def _analyse(ws: Worksheet, report: Mapping[str, Any]) -> None:
     zeile = _paare(
         ws,
         zeile,
-        (
-            ("Analyse-ID", prozess.get("process_mining_analyse_id")),
-            ("Notation", prozess.get("notation_anzeige")),
-            ("Verfügbare Visualisierungen", prozess.get("assets")),
-            (
-                "Relevante Analysebefunde",
-                [
-                    wert.get("wert")
-                    for wert in _informationen(
-                        report, {"annahmen", "darstellung_der_vorgaenge_des_systems"}
-                    )
-                ],
-            ),
-        ),
+        (("Notation", prozess.get("notation_anzeige")),),
     )
     conformance = _mapping(ausgaben.get("conformance_checking"))
     conformance_ergebnis = _mapping(conformance.get("ergebnis"))
@@ -988,6 +1076,49 @@ def _analyse(ws: Worksheet, report: Mapping[str, Any]) -> None:
             ),
             busy_zeilen,
         )
+        zeile = _paare(
+            ws,
+            zeile,
+            (
+                ("Potenzieller Engpass", busy.get("potenzieller_engpass")),
+                (
+                    "Einordnung",
+                    "Aus der Busy Ratio wird keine Ursache und keine reale "
+                    "Warteschlange abgeleitet.",
+                ),
+            ),
+        )
+        busy_einzelwerte = [
+            dict(wert) for wert in _liste(busy.get("einzelwerte")) if isinstance(wert, Mapping)
+        ]
+        if busy_einzelwerte:
+            zeile += 1
+            zeile = _abschnitt(
+                ws,
+                zeile,
+                "Busy-Ratio-Details · Zwischenankunftszeit Ressource · Gl. 3.4",
+            )
+            zeile = _tabelle(
+                ws,
+                zeile,
+                (
+                    ("Ressource", "ressource"),
+                    ("Aktivität", "aktivitaet"),
+                    ("Bearbeitungszeit (s)", "bearbeitungszeit_sekunden"),
+                    (
+                        "Zwischenankunftszeit Ressource (s)",
+                        "ressourcenbezogene_zwischenankunftszeit_sekunden",
+                    ),
+                    ("Busy Ratio", "busy_ratio"),
+                ),
+                busy_einzelwerte,
+                autofilter=True,
+                zahlenformate={
+                    "bearbeitungszeit_sekunden": "0.##",
+                    "ressourcenbezogene_zwischenankunftszeit_sekunden": "0.##",
+                    "busy_ratio": "0.####",
+                },
+            )
     zeile += 1
     zeile = _abschnitt(ws, zeile, "Aktivitäts-/Ressourcenzuordnung")
     _tabelle(
@@ -1023,24 +1154,19 @@ def _validierung(ws: Worksheet, report: Mapping[str, Any]) -> None:
         ),
     )
     zeile += 1
-    zeile = _abschnitt(ws, zeile, "Bestandteile im Vorher-/Nachher-Vergleich")
+    zeile = _abschnitt(ws, zeile, "Validierte Modellbestandteile")
     vergleich = []
     for bestandteil in _liste(report.get("modellbestandteile")):
         if not isinstance(bestandteil, Mapping):
             continue
-        original = [
-            wert.get("wert")
-            for wert in _liste(bestandteil.get("informationen"))
-            if isinstance(wert, Mapping)
-        ]
-        anpassungen = bestandteil.get("fachliche_anpassungen")
+        anpassungen = _liste(bestandteil.get("fachliche_anpassungen"))
+        entscheidungen = _liste(bestandteil.get("fachliche_entscheidungen"))
         vergleich.append(
             {
                 "bestandteil": bestandteil.get("bezeichnung"),
-                "vorschlag": _kurz(original, 800),
-                "final": _kurz([*original, *_liste(anpassungen)], 800),
-                "entscheidung": _kurz(bestandteil.get("fachliche_entscheidungen"), 500),
-                "geaendert": bool(_liste(anpassungen)),
+                "entscheidungen": len(entscheidungen),
+                "anpassungen": len(anpassungen),
+                "geaendert": bool(anpassungen),
                 "status": bestandteil.get("validierungsstatus_anzeige"),
             }
         )
@@ -1049,14 +1175,14 @@ def _validierung(ws: Worksheet, report: Mapping[str, Any]) -> None:
         zeile,
         (
             ("Bestandteil", "bestandteil"),
-            ("Vorgeschlagener Inhalt", "vorschlag"),
-            ("Finaler Inhalt", "final"),
-            ("Entscheidung/Begründung", "entscheidung"),
+            ("Fachliche Entscheidungen", "entscheidungen"),
+            ("Ergänzungen/Anpassungen", "anpassungen"),
             ("Geändert", "geaendert"),
             ("Status", "status"),
         ),
         vergleich,
         autofilter=True,
+        zahlenformate={"entscheidungen": "#,##0", "anpassungen": "#,##0"},
     )
 
 
@@ -1097,7 +1223,7 @@ def _lineage(ws: Worksheet, report: Mapping[str, Any]) -> None:
             ("Herkunftsartefakt", "herkunftsartefakt"),
             ("Artefakt-ID", "herkunftsartefakt_id"),
             ("Prüfsumme", "herkunftsartefakt_sha256"),
-            ("Übernahmeart", "uebernahmeart"),
+            ("Übernahmeart", "uebernahmeart_anzeige"),
         ),
         [dict(wert) for wert in _liste(lineage.get("informationen")) if isinstance(wert, Mapping)],
         autofilter=True,

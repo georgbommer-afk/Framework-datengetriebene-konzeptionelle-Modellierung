@@ -115,7 +115,16 @@ class ModellausgabeService:
             xlsx_dateiname=sicherer_dateiname(basis, "xlsx") if xlsx else None,
         )
         self._persistieren(projekt_id, validierungslauf_id, k_stern_id, ausgabe)
-        return ausgabe
+        # Nach einer selektiven Erzeugung wird die vollständige, formatweise persistierte
+        # Menge zurückgegeben. So bleiben früher erzeugte valide Formate auch in der UI sichtbar.
+        return (
+            self.persistierte_ausgabe_laden(
+                projekt_id=projekt_id,
+                validierungslauf_id=validierungslauf_id,
+                k_stern_id=k_stern_id,
+            )
+            or ausgabe
+        )
 
     def _reportverzeichnis(
         self, projekt_id: UUID, validierungslauf_id: UUID, k_stern_id: UUID

@@ -113,7 +113,30 @@ def zeige_modellausgabe_seite(
             },
             expanded=False,
         )
-    st.subheader("2. Ausgabe erzeugen")
+    st.subheader("2. Ausgabeform wählen")
+    st.caption(
+        "Eine oder mehrere Ausgabeformen können unabhängig voneinander gewählt und später "
+        "ergänzt werden. Alle Formate beruhen auf demselben validierten K*."
+    )
+    pdf_gewaehlt = st.checkbox(
+        "PDF – kompakte statische Dokumentation und Informationsweitergabe",
+        value=True,
+        key="schritt10_format_pdf",
+    )
+    html_gewaehlt = st.checkbox(
+        "HTML – interaktive beziehungsweise erweiterte Betrachtung des konzeptionellen Modells",
+        value=False,
+        key="schritt10_format_html",
+    )
+    xlsx_gewaehlt = st.checkbox(
+        "XLSX – strukturierte Weiterverarbeitung der Modellinformationen, insbesondere als "
+        "Grundlage für weitere DES-Arbeiten",
+        value=False,
+        key="schritt10_format_xlsx",
+    )
+    format_gewaehlt = pdf_gewaehlt or html_gewaehlt or xlsx_gewaehlt
+    if not format_gewaehlt:
+        st.warning("Bitte mindestens PDF, HTML oder XLSX auswählen.")
     signatur = (str(validierungslauf_id), str(k_stern_id))
     if "schritt10_ausgabe" not in st.session_state:
         try:
@@ -128,15 +151,15 @@ def zeige_modellausgabe_seite(
         if persistiert is not None:
             st.session_state.schritt10_ausgabe = persistiert
             st.session_state.schritt10_ausgabe_signatur = signatur
-    if st.button("HTML, PDF und Excel erzeugen", type="primary"):
+    if st.button("Gewählte Ausgabe erzeugen", type="primary", disabled=not format_gewaehlt):
         try:
             st.session_state.schritt10_ausgabe = ausgabe_service.erzeugen(
                 validierungslauf_id=validierungslauf_id,
                 projekt_id=projekt_id,
                 k_stern_id=k_stern_id,
-                html=True,
-                pdf=True,
-                xlsx=True,
+                html=html_gewaehlt,
+                pdf=pdf_gewaehlt,
+                xlsx=xlsx_gewaehlt,
             )
             st.session_state.schritt10_ausgabe_signatur = signatur
             fortschrittsabschluss_vormerken(projekt_id=projekt_id, schritt=10, unterschritt=1)

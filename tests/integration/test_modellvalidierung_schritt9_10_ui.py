@@ -193,12 +193,14 @@ class Validierungen:
 class Ausgaben:
     def persistierte_ausgabe_laden(self, **kwargs): return None
     def erzeugen(self, **kwargs):
-        assert kwargs["html"] is True and kwargs["pdf"] is True and kwargs["xlsx"] is True
         assert "excel" not in kwargs and "report" not in kwargs
         return StrukturierteModellausgabe(
-            b"<!DOCTYPE html><style></style>", "modell.html",
-            b"%PDF-1.7", "modell.pdf",
-            b"PK-xlsx", "modell.xlsx",
+            b"<!DOCTYPE html><style></style>" if kwargs["html"] else None,
+            "modell.html" if kwargs["html"] else None,
+            b"%PDF-1.7" if kwargs["pdf"] else None,
+            "modell.pdf" if kwargs["pdf"] else None,
+            b"PK-xlsx" if kwargs["xlsx"] else None,
+            "modell.xlsx" if kwargs["xlsx"] else None,
         )
 
 zeige_modellausgabe_seite(Projekte(), Validierungen(), Ausgaben())
@@ -349,7 +351,16 @@ def test_schritt_10_bietet_html_pdf_und_funktionalen_xlsx_download() -> None:
     app = _schritt_10()
     assert not app.exception
     assert len(app.expander) == 17
-    next(wert for wert in app.button if wert.label == "HTML, PDF und Excel erzeugen").click().run()
+    assert {wert.label for wert in app.checkbox} == {
+        "PDF – kompakte statische Dokumentation und Informationsweitergabe",
+        "HTML – interaktive beziehungsweise erweiterte Betrachtung des konzeptionellen Modells",
+        "XLSX – strukturierte Weiterverarbeitung der Modellinformationen, insbesondere als "
+        "Grundlage für weitere DES-Arbeiten",
+    }
+    assert next(wert for wert in app.checkbox if wert.label.startswith("PDF")).value is True
+    next(wert for wert in app.checkbox if wert.label.startswith("HTML")).check().run()
+    next(wert for wert in app.checkbox if wert.label.startswith("XLSX")).check().run()
+    next(wert for wert in app.button if wert.label == "Gewählte Ausgabe erzeugen").click().run()
     downloads = cast(list[Any], app.get("download_button"))
     assert {wert.label for wert in downloads} == {
         "HTML-Report herunterladen",
@@ -365,6 +376,15 @@ def test_schritt_10_bietet_html_pdf_und_funktionalen_xlsx_download() -> None:
     assert 'rel="noopener noreferrer"' in link
     assert 'href="/mock/media/' in link
     assert "data:" not in link
+
+
+def test_schritt_10_verlangt_mindestens_eine_ausgabeform() -> None:
+    app = _schritt_10()
+    next(wert for wert in app.checkbox if wert.label.startswith("PDF")).uncheck().run()
+
+    assert any("mindestens PDF, HTML oder XLSX" in wert.value for wert in app.warning)
+    erzeugen = next(wert for wert in app.button if wert.label == "Gewählte Ausgabe erzeugen")
+    assert erzeugen.disabled
 
 
 def test_html_link_akzeptiert_nur_streamlit_medienressource() -> None:

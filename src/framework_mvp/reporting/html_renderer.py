@@ -13,6 +13,7 @@ from jinja2 import (
 )
 
 from framework_mvp.formatierung import formatiere_fachwert
+from framework_mvp.reporting.report_data import REPORT_DATA_VERSION
 
 _TEMPLATE_VERSION = "V1"
 _TEMPLATE_ROOT = (
@@ -73,7 +74,7 @@ def _umgebung() -> Environment:
 def render_report_html(report_data: Mapping[str, Any]) -> str:
     """Rendert formatneutrale Reportdaten in ein vollständiges HTML-Dokument."""
     version = report_data.get("report_data_version")
-    if version != 1:
+    if version != REPORT_DATA_VERSION:
         raise HtmlRenderingFehler(f"Nicht unterstützte Report-Datenversion: {version!r}.")
 
     try:

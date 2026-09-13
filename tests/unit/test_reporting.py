@@ -2,7 +2,6 @@
 
 import copy
 from io import BytesIO
-from numbers import Real
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -21,6 +20,7 @@ from framework_mvp.reporting.html_renderer import render_report_html, template_v
 from framework_mvp.reporting.pdf_renderer import render_report_pdf
 from framework_mvp.reporting.report_data import (
     ERWARTETE_BESTANDTEIL_IDS,
+    REPORT_DATA_VERSION,
     ReportDataFehler,
     build_report_data,
 )
@@ -122,6 +122,15 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
                                 },
                             },
                             "busy_ratio_ergebnis": {
+                                "einzelwerte": [
+                                    {
+                                        "ressource": "M1",
+                                        "aktivitaet": "A",
+                                        "bearbeitungszeit_sekunden": 60.0,
+                                        "ressourcenbezogene_zwischenankunftszeit_sekunden": 75.0,
+                                        "busy_ratio": 0.8,
+                                    }
+                                ],
                                 "ressourcenstatistiken": [
                                     {
                                         "ressource": "M1",
@@ -134,6 +143,35 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
                             },
                         },
                         "A_G",
+                    ),
+                ]
+            )
+        elif bestandteil_id == "eingaben" and neue_felder:
+            menschliche_eintraege.append(
+                {
+                    "eintragstyp": "behandlung_offener_eintrag",
+                    "modellinhalt_erzeugt": True,
+                    "menschliche_entscheidung": True,
+                    "strukturierter_inhalt": {
+                        "strukturtyp": "experimenteller_faktor",
+                        "bezugstyp": "ressource",
+                        "konkreter_bezug": "M1",
+                        "bezeichnung": "Pausenzeit",
+                        "art": "quantitativer_parameter",
+                        "unterer_wert": 0,
+                        "oberer_wert": 30,
+                        "einheit": "min",
+                    },
+                }
+            )
+        elif bestandteil_id == "entitaeten":
+            informationen.extend(
+                [
+                    _information("systemprofil.objekte_gueter", ["Produktionsauftrag"], "S"),
+                    _information(
+                        "schema.case_id",
+                        {"kanonisches_attribut": "case_id", "fallanzahl": 3},
+                        "E*",
                     ),
                 ]
             )
@@ -263,6 +301,60 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
             )
             informationen.append(
                 _information(
+                    "datenquellen[0]",
+                    {
+                        "datenquellen_id": "quelle-1",
+                        "bezeichnung": "ERP/MES-Ereignisdaten",
+                        "quellsystemtyp": "erp_system",
+                    },
+                    "Q",
+                )
+            )
+        elif bestandteil_id == "daten" and neue_felder:
+            informationen.extend(
+                [
+                    _information(
+                        "datenquellen[0]",
+                        {
+                            "datenquellen_id": "quelle-1",
+                            "bezeichnung": "ERP/MES-Ereignisdaten",
+                            "quellsystemtyp": "erp_system",
+                            "konkretes_quellsystem": "ERP/MES",
+                            "quellenart": "excel",
+                            "fachliche_beschreibung": "Ereignis-, Aktivitäts- und Zeitdaten",
+                        },
+                        "Q",
+                    ),
+                    _information(
+                        "profile[0]",
+                        {
+                            "import_id": "import-1",
+                            "datenquellen_id": "quelle-1",
+                            "profil_sha256": "f" * 64,
+                            "gesamtprofil": {
+                                "zeilen": 1525,
+                                "spalten": 24,
+                                "echte_fehlwerte": 0,
+                                "exakte_duplikate": 0,
+                            },
+                        },
+                        "R",
+                    ),
+                    _information(
+                        "schema_umfang_zeitraum_und_referenz",
+                        {
+                            "ereignisanzahl": 6,
+                            "fallanzahl": 3,
+                            "aktivitaetsanzahl": 2,
+                            "zeitraum_von": "2026-08-12T08:00:00+00:00",
+                            "zeitraum_bis": "2026-08-12T10:00:00+00:00",
+                        },
+                        "E*",
+                    ),
+                ]
+            )
+            informationen.append(
+                _information(
                     "strukturierte_ergebnisse.datenaufbereitung",
                     {
                         "ausgang": "ursprüngliche Datenquelle D",
@@ -351,6 +443,8 @@ def test_build_report_data_projiziert_neue_felder_ohne_k_stern_mutation() -> Non
     report = build_report_data(k_stern)
 
     assert k_stern == vorher
+    assert report["report_data_version"] == REPORT_DATA_VERSION
+    assert report["warteschlangen"]["bestaetigte_warteschlangen"] == []
     assert report["warteschlangen"]["wartestellenhinweise"][0]["anzahl"] == 2
     assert report["ressourcen"]["aktivitaet_ressourcen"] == [
         {"aktivitaet": "A", "ressourcen": ["M1", "M2"]}
@@ -393,6 +487,17 @@ def test_build_report_data_projiziert_neue_felder_ohne_k_stern_mutation() -> Non
         ]
         == 180.0
     )
+    assert report["eingaben"]["experimentelle_faktoren"][0]["wertebereich_anzeige"] == (
+        "0 bis 30 min"
+    )
+    assert len(report["daten"]["datenquellen"]) == 1
+    assert report["daten"]["datenquellen"][0]["quellsystem_anzeige"] == "ERP/MES"
+    assert report["daten"]["datenquellen"][0]["format_anzeige"] == "XLSX"
+    assert report["daten"]["profile"][0]["anzeigebezeichnung"] == ("ERP/MES-Ereignisdaten")
+    zeitwahl = report["daten"]["zeitbezogene_datenauswahl"]
+    assert zeitwahl["bearbeitungszeiten_tabelle"][0]["aktivitaet"] == "A"
+    assert zeitwahl["potenzielle_wartezeiten_tabelle"][0]["status"] == "Hinweis"
+    assert report["daten"]["event_log"]["zeitraum_von_anzeige"] == ("12.08.2026 08:00:00")
     assert report["vereinfachungen"]["vereinfachte_zeitspannen"] == {
         "status": "Menschlich bestätigt",
         "entscheidung": ("Mangels separatem Endzeitpunkt als vereinfachte Zeitspanne übernehmen."),
@@ -425,7 +530,7 @@ def test_reportgliederung_folgt_den_acht_fachlichen_abschnitten() -> None:
         ("5", "Annahmen und Vereinfachungen"),
         ("6", "Datenauswahl und Daten"),
         ("7", "Darstellung der Vorgänge des Systems"),
-        ("8", "Technische Nachvollziehbarkeit"),
+        ("8", "Technischer Anhang – Nachvollziehbarkeit"),
     ):
         assert f'<div class="component-number">\n        {nummer}\n' in html or (
             f'<div class="section-number">{nummer}</div>' in html
@@ -435,7 +540,8 @@ def test_reportgliederung_folgt_den_acht_fachlichen_abschnitten() -> None:
     assert "1850,18 s" in html
     assert "99,75 %" in html
     assert "0.9975345167" not in html
-    assert "12.08.2026 10:00:00 +00:00" in html
+    assert "12.08.2026 08:00:00 +00:00" not in html
+    assert "12.08.2026 08:00:00" in html
 
 
 @pytest.mark.parametrize(
@@ -558,6 +664,93 @@ def test_report_nutzt_potenzielle_wartezeiten_aus_datenauswahl_ohne_warteschlang
     ]
 
 
+def test_bestaetigte_warteschlange_bleibt_vom_datenhinweis_getrennt() -> None:
+    k_stern = _k_stern()
+    bestandteile = cast(list[dict[str, Any]], k_stern["modellbestandteile"])
+    warteschlangen = next(
+        wert for wert in bestandteile if wert["bestandteil_id"] == "warteschlangen"
+    )
+    warteschlangen["menschliche_eintraege"].append(
+        {
+            "eintragstyp": "behandlung_offener_eintrag",
+            "modellinhalt_erzeugt": True,
+            "menschliche_entscheidung": True,
+            "strukturierter_inhalt": {
+                "strukturtyp": "warteschlangenergaenzung",
+                "vorgaengeraktivitaet": "A",
+                "folgeaktivitaet": "B",
+                "fachlich_bestaetigt": True,
+                "kapazitaet": "5 Aufträge",
+                "regel": "FIFO",
+            },
+        }
+    )
+
+    report = build_report_data(k_stern)
+    html = render_report_html(report)
+
+    assert len(report["warteschlangen"]["bestaetigte_warteschlangen"]) == 1
+    assert (
+        report["daten"]["zeitbezogene_datenauswahl"]["potenzielle_wartezeiten_tabelle"][0]["status"]
+        == "Bestätigt"
+    )
+    warteschlangen_html = html.split("<h1>Warteschlangen</h1>", 1)[1].split(
+        "<h1>Ressourcen</h1>", 1
+    )[0]
+    assert "Fachlich bestätigte Warteschlangen" in warteschlangen_html
+    assert "Mittelwert" not in warteschlangen_html
+    datenauswahl_html = html.split("<h1>Datenauswahl und Daten</h1>", 1)[1]
+    assert "Potenzielle Wartezeit · Gl. 3.15" in datenauswahl_html
+
+
+def test_fehlende_experimentelle_faktoren_werden_verstaendlich_ausgewiesen() -> None:
+    html = render_report_html(build_report_data(_k_stern(neue_felder=False)))
+
+    assert "Keine experimentellen Faktoren festgelegt." in html
+
+
+def test_pdf_tabellenlayout_bleibt_bei_vielen_langen_zeilen_renderbar(tmp_path: Path) -> None:
+    report = build_report_data(_k_stern())
+    zeitwahl = report["daten"]["zeitbezogene_datenauswahl"]
+    zeitwahl["bearbeitungszeiten_tabelle"] = [
+        {
+            "aktivitaet": f"Sehr lange Aktivitätsbezeichnung für Bearbeitungsschritt {index}",
+            "ressource": f"Produktionsressource mit ausführlicher Bezeichnung {index}",
+            "anzahl": index + 1,
+            "mittelwert_sekunden": 1000.25 + index,
+            "median_sekunden": 900.0 + index,
+        }
+        for index in range(45)
+    ]
+    zeitwahl["potenzielle_wartezeiten_tabelle"] = [
+        {
+            "uebergang": (
+                f"Sehr lange Vorgängeraktivität {index} → Sehr lange Folgeaktivität {index}"
+            ),
+            "anzahl": index + 1,
+            "mittelwert_sekunden": 500.5 + index,
+            "median_sekunden": 480.0 + index,
+            "status": "Hinweis",
+        }
+        for index in range(45)
+    ]
+    report["ausgaben"]["performance_und_engpassanalyse"]["busy_ratio_ergebnis"][
+        "ressourcenstatistiken"
+    ] = [
+        {
+            "ressource": f"Ressource mit sehr langer Bezeichnung {index}",
+            "anzahl_gueltige_busy_ratios": index + 1,
+            "mittelwert_busy_ratio": 0.8,
+            "median_busy_ratio": 0.75,
+        }
+        for index in range(35)
+    ]
+
+    ziel = render_report_pdf(report, tmp_path / "tabellen-stresstest.pdf")
+
+    assert ziel.read_bytes().startswith(b"%PDF-")
+
+
 def test_xlsx_renderer_erzeugt_zehn_geordnete_lesbare_arbeitsblaetter() -> None:
     report = build_report_data(
         _k_stern(),
@@ -590,38 +783,20 @@ def test_xlsx_renderer_erzeugt_zehn_geordnete_lesbare_arbeitsblaetter() -> None:
         if zelle.value is not None
     )
     datenblatt = arbeitsmappe["Daten & Datenauswahl"]
-    kopfzeile = next(
-        zeile
+    datenwerte = {
+        str(zelle.value)
         for zeile in datenblatt.iter_rows()
-        if zeile[0].value == "Kennwert" and zeile[1].value == "Bezug"
-    )
-    kopfwerte = [zelle.value for zelle in kopfzeile if zelle.value is not None]
-    assert "Minimum" not in kopfwerte and "Maximum" not in kopfwerte
-    statistikwerte = [
-        zeile
-        for zeile in datenblatt.iter_rows(
-            min_row=cast(int, kopfzeile[0].row) + 1,
-            values_only=False,
-        )
-        if zeile[0].value
-        in {
-            "System-IAT nach Gl. 3.16",
-            "Zwischenankunftszeit",
-            "Bearbeitungszeit",
-            "Vereinfachte Start-zu-Start-Zeitspanne",
-            "Wartezeit",
-        }
-    ]
-    assert {cast(str, zeile[0].value) for zeile in statistikwerte} == {
-        "System-IAT nach Gl. 3.16",
-        "Zwischenankunftszeit",
-        "Bearbeitungszeit",
-        "Vereinfachte Start-zu-Start-Zeitspanne",
-        "Wartezeit",
+        for zelle in zeile
+        if zelle.value is not None
     }
-    assert all(isinstance(zeile[2].value, int) for zeile in statistikwerte)
-    assert all(isinstance(zeile[3].value, Real) for zeile in statistikwerte)
-    assert all(zeile[3].number_format == "0.##" for zeile in statistikwerte)
+    assert "Zwischenankunftszeit System · Gl. 3.16" in datenwerte
+    assert "Bearbeitungszeit · Gl. 3.3" in datenwerte
+    assert "Potenzielle Wartezeit · Gl. 3.15" in datenwerte
+    assert "Vereinfachte Zeitspannen" in datenwerte
+    assert "Datenquelle" in datenwerte
+    assert "ERP/MES-Ereignisdaten" in datenwerte
+    assert "ERP/MES" in datenwerte
+    assert "XLSX" in datenwerte
     assert any(
         zelle.value == "Transformationshistorie D → aktiver Datensatz T"
         for zeile in datenblatt.iter_rows()
@@ -638,6 +813,7 @@ def test_xlsx_renderer_erzeugt_zehn_geordnete_lesbare_arbeitsblaetter() -> None:
     assert "0,8" in analysewerte
     assert "Soll-/Ist-Abweichungen" in analysewerte
     assert "Ergänzende Performance · Busy Ratio" in analysewerte
+    assert "Zwischenankunftszeit Ressource (s)" in analysewerte
     assert any(
         zelle.value == "Vereinfachte Start-zu-Start-Zeitspannen"
         for zeile in arbeitsmappe["Annahmen & offene Punkte"].iter_rows()
@@ -813,10 +989,10 @@ def test_html_renderer_bettet_die_einzige_css_quelle_und_svgs_ein(tmp_path: Path
 
     assert '<link rel="stylesheet" href="report_html.css">' not in html
     assert f"<style>\n{css}\n</style>" in html
-    assert "Übergangswartezeiten aus Schritt 7" in html
+    assert "Keine Warteschlange fachlich bestätigt." in html
     assert "Aktivität-Ressourcen-Zuordnungen" in html
-    assert "menschlich bestätigte Zuordnung in Schritt 7" in html
-    assert "Zwischenankunftszeit" in html
+    assert "Ressourcenzuordnung aus Schritt 7 übernommen." not in html
+    assert "Zwischenankunftszeit System · Gl. 3.16" in html
     assert "Ist-Ende(A) − Ist-Start(A)" in html
     assert "Für spätere manuelle Berechnung vorgesehen" in html
     assert "Conformance Checking" in html
@@ -826,16 +1002,38 @@ def test_html_renderer_bettet_die_einzige_css_quelle_und_svgs_ein(tmp_path: Path
     assert "20.0" not in html
     assert "Ergänzende Performance · Busy Ratio" in html
     assert "<td>0,8</td>" in html
-    assert "Vereinfachte Start-zu-Start-Zeitspannen" in html
-    assert "Potenzielle Wartestellen · Gleichung 3.15" in html
+    assert "Vereinfachte Zeitspannen" in html
+    assert "Potenzielle Wartezeit · Gl. 3.15" in html
+    assert "Pausenzeit" in html
+    assert html.count("ERP/MES-Ereignisdaten") == 2
+    hauptbericht = html.split("Technischer Anhang – Nachvollziehbarkeit", 1)[0]
+    for technischer_code in (
+        "erp_system",
+        "case_id",
+        "direkte_uebernahme",
+        "metadatenzusammenfassung",
+        "artefaktreferenz",
+    ):
+        assert technischer_code not in hauptbericht
 
 
 def test_pdf_renderer_verwendet_pdf_template_und_css(tmp_path: Path) -> None:
     report = resolve_report_assets(build_report_data(_k_stern()), workspace_root=tmp_path)
     template = template_verzeichnis() / "report_pdf.html"
     css = template_verzeichnis() / "report_pdf.css"
-    assert 'href="report_pdf.css"' in template.read_text(encoding="utf-8")
-    assert "@page" in css.read_text(encoding="utf-8")
+    template_text = template.read_text(encoding="utf-8")
+    css_text = css.read_text(encoding="utf-8")
+    assert 'href="report_pdf.css"' in template_text
+    assert "Fachliche Validierung" in template_text
+    assert "Keine experimentellen Faktoren festgelegt." in template_text
+    assert "Keine Warteschlange fachlich bestätigt." in template_text
+    assert "Zwischenankunftszeit System · Gl. 3.16" in template_text
+    assert "Bearbeitungszeit · Gl. 3.3" in template_text
+    assert "Potenzielle Wartezeit · Gl. 3.15" in template_text
+    assert "Technischer Anhang – Nachvollziehbarkeit" in template_text
+    assert "@page" in css_text
+    assert "display: table-header-group" in css_text
+    assert "overflow-wrap: anywhere" in css_text
 
     ziel = render_report_pdf(report, tmp_path / "bericht.pdf")
 
@@ -846,7 +1044,7 @@ def test_service_uebergibt_identische_gemeinsame_reportdaten_an_alle_renderer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     k_stern = _k_stern()
-    aufgeloest = {"report_data_version": 1, "gemeinsam": object()}
+    aufgeloest = {"report_data_version": REPORT_DATA_VERSION, "gemeinsam": object()}
     aufrufe = {"build": 0, "resolve": 0}
     renderer_ids: list[int] = []
 
@@ -857,10 +1055,10 @@ def test_service_uebergibt_identische_gemeinsame_reportdaten_an_alle_renderer(
             "softwareversion": "1.2",
         }
         aufrufe["build"] += 1
-        return {"report_data_version": 1}
+        return {"report_data_version": REPORT_DATA_VERSION}
 
     def resolve(wert, *, workspace_root):  # type: ignore[no-untyped-def]
-        assert wert == {"report_data_version": 1}
+        assert wert == {"report_data_version": REPORT_DATA_VERSION}
         assert workspace_root == tmp_path
         aufrufe["resolve"] += 1
         return aufgeloest

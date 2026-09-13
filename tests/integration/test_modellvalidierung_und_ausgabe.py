@@ -646,7 +646,13 @@ def test_geaenderte_eingaben_oder_menschliche_entscheidung_invalidieren_arbeitsf
 
 @pytest.mark.parametrize(
     ("html", "pdf", "xlsx"),
-    [(True, False, False), (False, True, False), (False, False, True), (True, True, True)],
+    [
+        (True, False, False),
+        (False, True, False),
+        (False, False, True),
+        (False, True, True),
+        (True, True, True),
+    ],
 )
 def test_html_pdf_xlsx_und_gemeinsame_auswahl_enthalten_alle_16_ohne_mutation(
     tmp_path, html, pdf, xlsx
@@ -692,6 +698,36 @@ def test_html_pdf_xlsx_und_gemeinsame_auswahl_enthalten_alle_16_ohne_mutation(
     else:
         assert ergebnis.report_xlsx is None
     assert service.laden(gespeichert.validierungslauf_id)[1] == vorher
+
+
+def test_teilweise_erzeugte_formatmenge_bleibt_beim_spaeteren_ergaenzen_erhalten(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    service, ausgaben, _, _, ableitungen = _umgebung(tmp_path)
+    gespeichert = service.speichern(
+        _arbeitsfassung(service, ableitungen),
+        validierungslauf_id=uuid4(),
+        k_stern_id=uuid4(),
+    )
+    koordinaten = {
+        "validierungslauf_id": gespeichert.validierungslauf_id,
+        "projekt_id": gespeichert.projekt_id,
+        "k_stern_id": gespeichert.k_stern_id,
+    }
+
+    nur_html = ausgaben.erzeugen(**koordinaten, html=True, pdf=False, xlsx=False)
+    assert nur_html.report_html is not None
+    assert nur_html.report_pdf is None
+    assert nur_html.report_xlsx is None
+
+    html_und_xlsx = ausgaben.erzeugen(**koordinaten, html=False, pdf=False, xlsx=True)
+    assert html_und_xlsx.report_html == nur_html.report_html
+    assert html_und_xlsx.html_dateiname == nur_html.html_dateiname
+    assert html_und_xlsx.report_pdf is None
+    assert html_und_xlsx.report_xlsx is not None
+
+    erneut = ausgaben.persistierte_ausgabe_laden(**koordinaten)
+    assert erneut == html_und_xlsx
 
 
 def test_schritt_10_akzeptiert_nur_passendes_fachlich_validiertes_k_stern(tmp_path) -> None:  # type: ignore[no-untyped-def]

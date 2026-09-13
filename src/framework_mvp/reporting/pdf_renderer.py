@@ -8,6 +8,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoes
 from weasyprint import HTML
 
 from framework_mvp.formatierung import formatiere_fachwert
+from framework_mvp.reporting.report_data import REPORT_DATA_VERSION
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates" / "conceptual_model" / "V1"
 
@@ -23,6 +24,10 @@ def render_report_pdf(
     zielpfad: str | Path,
 ) -> Path:
     """Rendert den aggregierten PDF-Report."""
+
+    version = report_data.get("report_data_version")
+    if version != REPORT_DATA_VERSION:
+        raise PdfRenderingFehler(f"Nicht unterstützte Report-Datenversion: {version!r}.")
 
     ziel = Path(zielpfad)
     ziel.parent.mkdir(parents=True, exist_ok=True)
