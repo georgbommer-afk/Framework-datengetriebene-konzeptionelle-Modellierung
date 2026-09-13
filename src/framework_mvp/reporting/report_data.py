@@ -8,7 +8,11 @@ from enum import Enum
 from typing import Any, cast
 from uuid import UUID
 
-from framework_mvp.formatierung import formatiere_messwert, formatiere_zeitstempel
+from framework_mvp.formatierung import (
+    formatiere_anteil_als_prozent,
+    formatiere_messwert,
+    formatiere_zeitstempel,
+)
 
 REPORT_DATA_VERSION = 1
 
@@ -85,6 +89,17 @@ def _normalisieren(wert: Any) -> Any:
     if isinstance(wert, (tuple, list, set, frozenset)):
         return [_normalisieren(inhalt) for inhalt in wert]
     return wert
+
+
+def _conformance_aufbereiten(wert: Mapping[str, Any]) -> dict[str, Any]:
+    """Ergänzt reine Anzeigewerte, während Fitness als Rohanteil erhalten bleibt."""
+    ergebnis = _normalisieren(wert)
+    if not isinstance(ergebnis, dict):
+        return {}
+    details = ergebnis.get("ergebnis")
+    if isinstance(details, dict) and details.get("fitness") is not None:
+        details["fitness_anzeige"] = formatiere_anteil_als_prozent(details["fitness"])
+    return ergebnis
 
 
 REPORT_LIST_LIMIT = 20
@@ -820,7 +835,7 @@ def build_report_data(
                     "kpi_ergebnisse[",
                 )
             ],
-            "conformance_checking": _normalisieren(conformance_ausgabe),
+            "conformance_checking": _conformance_aufbereiten(conformance_ausgabe),
             "performance_und_engpassanalyse": _normalisieren(performance_ausgabe),
         },
         "modellumfang": {

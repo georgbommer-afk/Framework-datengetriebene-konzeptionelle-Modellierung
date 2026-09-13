@@ -28,14 +28,15 @@ from framework_mvp.application.modellableitung import (
     extrahiere_sichtbare_aktivitaeten,
     leite_modellbestandteile_ab,
     validiere_quellenzuordnung,
-    wende_fachliche_entscheidungen_an,
+    wende_pruefhinweise_an,
 )
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
+    AnwenderhinweisFuerSchritt9,
+    Bestandteilstatus,
     Datenquelle,
     Eingangsartefakt,
-    FachlicheBestandteilentscheidung,
-    FachlicheEntscheidungsart,
+    FachlicheUnsicherheitskennzeichnung,
     Intralogistikklassifikation,
     Kennzeichnungsherkunft,
     LogistischeZielgroesse,
@@ -237,7 +238,7 @@ def _json_dict(wert):  # type: ignore[no-untyped-def]
 
 
 def test_sechzehn_bestandteile_und_quellenmatrix_sind_exakt_und_stabil() -> None:
-    assert MAPPINGVERSION == 3
+    assert MAPPINGVERSION == 4
     assert [wert.bezeichnung for wert in MODELLBESTANDTEILE] == [
         "Problemstellung",
         "Zielsetzung",
@@ -456,6 +457,17 @@ def test_bestaetigte_start_zu_start_zeitspanne_geht_in_datenauswahl_und_vereinfa
             },
         }
     ]
+    zeitdaten["bearbeitungszeiten"] = [
+        {"aktivitaet": "A", "statistik": {"mittelwert_sekunden": 60.0}}
+    ]
+    zeitdaten["system_zwischenankunftszeit"] = {"statistik": {"mittelwert_sekunden": 120.0}}
+    zeitdaten["potenzielle_wartezeiten"] = [
+        {
+            "von_aktivitaet": "A",
+            "zu_aktivitaet": "B",
+            "statistik": {"mittelwert_sekunden": 30.0},
+        }
+    ]
 
     bestandteile, _ = leite_modellbestandteile_ab(basis)
     datenauswahl = next(
@@ -471,6 +483,14 @@ def test_bestaetigte_start_zu_start_zeitspanne_geht_in_datenauswahl_und_vereinfa
     )
 
     assert datenauswahl_info["vereinfachte_zeitspannen"][0]["statistik"]["anzahl"] == 2
+    assert datenauswahl_info["bearbeitungszeiten"][0]["statistik"]["mittelwert_sekunden"] == 60.0
+    assert (
+        datenauswahl_info["system_zwischenankunftszeit"]["statistik"]["mittelwert_sekunden"]
+        == 120.0
+    )
+    assert (
+        datenauswahl_info["potenzielle_wartezeiten"][0]["statistik"]["mittelwert_sekunden"] == 30.0
+    )
     assert any(
         wert.strukturreferenz.endswith("vereinfachte_zeitspannen")
         for wert in vereinfachungen.informationen
@@ -500,26 +520,41 @@ def test_transformationshistorie_wird_datenauswahl_und_nicht_eingaben_zugeordnet
     )
 
 
-def test_menschliche_entscheidungen_steuern_k_und_o(tmp_path: Path) -> None:
+def test_k_und_o_bleiben_je_bestandteil_parallel_erhalten(tmp_path: Path) -> None:
     vorschlaege, systematisch_offen = leite_modellbestandteile_ab(_basis(tmp_path))
-    jetzt = datetime.now(UTC)
-    entscheidungen = tuple(
-        FachlicheBestandteilentscheidung(
-            wert.bestandteil_id,
-            (
-                FachlicheEntscheidungsart.OFFEN_UNSICHER
-                if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN or not wert.informationen
-                else FachlicheEntscheidungsart.UEBERNEHMEN
-            ),
-            "Aktivitäten müssen fachlich geprüft werden."
-            if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN or not wert.informationen
-            else "",
-            jetzt,
-        )
-        for wert in vorschlaege
+
+    bestandteile, offen = wende_pruefhinweise_an(vorschlaege, systematisch_offen)
+
+    problem = bestandteile[0]
+    assert problem.informationen
+    assert problem.status is Bestandteilstatus.VOLLSTAENDIG_ZUGEORDNET
+    assert not problem.offene_eintrag_ids
+    eingaben = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.EINGABEN
     )
-    bestandteile, offen = wende_fachliche_entscheidungen_an(
-        vorschlaege, systematisch_offen, entscheidungen
+    assert not eingaben.informationen
+    assert eingaben.status is Bestandteilstatus.OFFEN
+    assert any(wert.bestandteil_id is ModellbestandteilId.EINGABEN for wert in offen)
+    detaillierung = next(
+        wert
+        for wert in bestandteile
+        if wert.bestandteil_id is ModellbestandteilId.DETAILLIERUNGSGRAD
+    )
+    assert detaillierung.informationen and detaillierung.offene_eintrag_ids
+    assert detaillierung.status is Bestandteilstatus.TEILWEISE_OFFEN
+
+
+def test_unsicherheitsmarkierung_belaesst_sichere_information_in_k(tmp_path: Path) -> None:
+    vorschlaege, systematisch_offen = leite_modellbestandteile_ab(_basis(tmp_path))
+    bestandteile, offen = wende_pruefhinweise_an(
+        vorschlaege,
+        systematisch_offen,
+        unsicherheitskennzeichnungen=(
+            FachlicheUnsicherheitskennzeichnung(
+                ModellbestandteilId.AKTIVITAETEN,
+                "Aktivitätsbezeichnungen in Schritt 9 prüfen.",
+            ),
+        ),
     )
     aktivitaeten = next(
         wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
@@ -530,76 +565,51 @@ def test_menschliche_entscheidungen_steuern_k_und_o(tmp_path: Path) -> None:
         if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
         and wert.kennzeichnungsherkunft is Kennzeichnungsherkunft.MENSCHLICH_MARKIERT
     )
-    assert not aktivitaeten.informationen
-    assert markierung.status == "offen"
-    problem = bestandteile[0]
-    assert problem.informationen[0].fachliche_entscheidung is FachlicheEntscheidungsart.UEBERNEHMEN
-    assert problem.informationen[0].bestaetigt_am == jetzt
-    detaillierung = next(
-        wert
-        for wert in bestandteile
-        if wert.bestandteil_id is ModellbestandteilId.DETAILLIERUNGSGRAD
-    )
-    assert detaillierung.informationen and not detaillierung.offene_eintrag_ids
-    assert detaillierung.status.value == "vollstaendig_zugeordnet"
+    assert aktivitaeten.informationen
+    assert aktivitaeten.status is Bestandteilstatus.FACHLICH_UNSICHER
+    assert markierung.anwenderhinweis == "Aktivitätsbezeichnungen in Schritt 9 prüfen."
+    assert markierung.belegreferenzen[0]["wert"] == ("A", "B")
 
 
-def test_vorschlag_ohne_information_kann_nicht_uebernommen_werden(tmp_path: Path) -> None:
-    vorschlaege, systematisch_offen = leite_modellbestandteile_ab(_basis(tmp_path))
-    ohne_information = next(wert for wert in vorschlaege if not wert.informationen)
-
-    with pytest.raises(Domaenenfehler, match="kein übernehmbarer Vorschlag"):
-        wende_fachliche_entscheidungen_an(
-            vorschlaege,
-            systematisch_offen,
-            (
-                FachlicheBestandteilentscheidung(
-                    ohne_information.bestandteil_id,
-                    FachlicheEntscheidungsart.UEBERNEHMEN,
-                    "",
-                    datetime.now(UTC),
-                ),
-            ),
-        )
-
-
-def test_nicht_uebernehmen_benoetigt_begruendung() -> None:
-    with pytest.raises(Domaenenfehler, match="Begründung"):
-        FachlicheBestandteilentscheidung(
-            ModellbestandteilId.AKTIVITAETEN,
-            FachlicheEntscheidungsart.NICHT_UEBERNEHMEN,
-            "",
-            datetime.now(UTC),
-        )
-
-
-def test_nicht_uebernehmen_entfernt_vorschlag_aus_k_und_dokumentiert_o(
+def test_anwenderhinweis_ergaenzt_systematischen_o_punkt_ohne_ihn_zu_loesen(
     tmp_path: Path,
 ) -> None:
     vorschlaege, systematisch_offen = leite_modellbestandteile_ab(_basis(tmp_path))
-    entscheidung = FachlicheBestandteilentscheidung(
-        ModellbestandteilId.PROBLEMSTELLUNG,
-        FachlicheEntscheidungsart.NICHT_UEBERNEHMEN,
-        "Die Problemstellung ist fachlich nicht mehr aktuell.",
-        datetime.now(UTC),
+    eingaben_o = next(
+        wert for wert in systematisch_offen if wert.bestandteil_id is ModellbestandteilId.EINGABEN
     )
 
-    bestandteile, offen = wende_fachliche_entscheidungen_an(
-        vorschlaege, systematisch_offen, (entscheidung,)
+    bestandteile, offen = wende_pruefhinweise_an(
+        vorschlaege,
+        systematisch_offen,
+        (AnwenderhinweisFuerSchritt9(eingaben_o.offener_eintrag_id, "Schichtmodell prüfen."),),
     )
 
-    problem = bestandteile[0]
-    assert not problem.informationen
-    menschlicher_o_eintrag = next(
-        wert
-        for wert in offen
-        if wert.bestandteil_id is ModellbestandteilId.PROBLEMSTELLUNG
-        and wert.kennzeichnungsherkunft is Kennzeichnungsherkunft.MENSCHLICH_MARKIERT
+    gespeichert = next(
+        wert for wert in offen if wert.offener_eintrag_id == eingaben_o.offener_eintrag_id
     )
-    assert menschlicher_o_eintrag.fachliche_entscheidung is (
-        FachlicheEntscheidungsart.NICHT_UEBERNEHMEN
+    eingaben = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.EINGABEN
     )
-    assert menschlicher_o_eintrag.belegreferenzen[0]["wert"] == "Unveränderte Problemstellung"
+    assert gespeichert.begruendung == eingaben_o.begruendung
+    assert gespeichert.anwenderhinweis == "Schichtmodell prüfen."
+    assert gespeichert.status == "offen"
+    assert eingaben.status is Bestandteilstatus.OFFEN
+
+
+def test_nicht_zuordenbarer_bestandteil_kann_nicht_als_unsicher_markiert_werden(
+    tmp_path: Path,
+) -> None:
+    vorschlaege, systematisch_offen = leite_modellbestandteile_ab(_basis(tmp_path))
+
+    with pytest.raises(Domaenenfehler, match="keine zu kennzeichnende Information"):
+        wende_pruefhinweise_an(
+            vorschlaege,
+            systematisch_offen,
+            unsicherheitskennzeichnungen=(
+                FachlicheUnsicherheitskennzeichnung(ModellbestandteilId.EINGABEN),
+            ),
+        )
 
 
 def test_ressourcen_werden_nur_aus_strukturiertem_a_g_uebernommen(tmp_path: Path) -> None:

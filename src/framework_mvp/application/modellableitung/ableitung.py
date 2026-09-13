@@ -12,10 +12,10 @@ from pm4py.objects.bpmn.obj import BPMN
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     AbgeleiteterModellbestandteil,
+    AnwenderhinweisFuerSchritt9,
     Bestandteilstatus,
     Eingangsartefakt,
-    FachlicheBestandteilentscheidung,
-    FachlicheEntscheidungsart,
+    FachlicheUnsicherheitskennzeichnung,
     Informationseintrag,
     Kennzeichnungsherkunft,
     ModellbestandteilDefinition,
@@ -27,7 +27,7 @@ from framework_mvp.domain.models import (
 )
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 
-MAPPINGVERSION = 3
+MAPPINGVERSION = 4
 
 MODELLBESTANDTEILE = (
     ModellbestandteilDefinition(
@@ -861,49 +861,49 @@ def leite_modellbestandteile_ab(
     return tuple(bestandteile), tuple(alle_offenen)
 
 
-def wende_fachliche_entscheidungen_an(
+def wende_pruefhinweise_an(
     vorschlaege: tuple[AbgeleiteterModellbestandteil, ...],
     systematische_offene: tuple[OffenerEintrag, ...],
-    entscheidungen: tuple[FachlicheBestandteilentscheidung, ...],
+    anwenderhinweise: tuple[AnwenderhinweisFuerSchritt9, ...] = (),
+    unsicherheitskennzeichnungen: tuple[FachlicheUnsicherheitskennzeichnung, ...] = (),
 ) -> tuple[tuple[AbgeleiteterModellbestandteil, ...], tuple[OffenerEintrag, ...]]:
-    """Überführt ausschließlich explizit bestätigte Vorschläge nach K und den Rest nach O."""
-    nach_id = {wert.bestandteil_id: wert for wert in entscheidungen}
-    if len(nach_id) != len(entscheidungen) or set(nach_id) - set(_DEFINITIONEN):
-        raise Domaenenfehler("Die fachlichen Entscheidungen sind nicht eindeutig oder ungültig.")
+    """Ergänzt O, ohne sicher abgeleitete Informationen aus K zu entfernen."""
+    hinweise_nach_id = {wert.offener_eintrag_id: wert for wert in anwenderhinweise}
+    offene_ids = {wert.offener_eintrag_id for wert in systematische_offene}
+    if len(hinweise_nach_id) != len(anwenderhinweise) or set(hinweise_nach_id) - offene_ids:
+        raise Domaenenfehler("Die Anwenderhinweise sind nicht eindeutig oder referenzieren kein O.")
+    unsicher_nach_id = {wert.bestandteil_id: wert for wert in unsicherheitskennzeichnungen}
+    if len(unsicher_nach_id) != len(unsicherheitskennzeichnungen) or set(unsicher_nach_id) - set(
+        _DEFINITIONEN
+    ):
+        raise Domaenenfehler(
+            "Die fachlichen Unsicherheitskennzeichnungen sind nicht eindeutig oder ungültig."
+        )
     offene_nach_id: dict[ModellbestandteilId, list[OffenerEintrag]] = {
         definition.bestandteil_id: [] for definition in MODELLBESTANDTEILE
     }
     for eintrag in systematische_offene:
-        offene_nach_id[eintrag.bestandteil_id].append(eintrag)
+        hinweis = hinweise_nach_id.get(eintrag.offener_eintrag_id)
+        offene_nach_id[eintrag.bestandteil_id].append(
+            replace(eintrag, anwenderhinweis=hinweis.anwenderhinweis) if hinweis else eintrag
+        )
     ergebnis: list[AbgeleiteterModellbestandteil] = []
     for vorschlag in vorschlaege:
-        entscheidung = nach_id.get(vorschlag.bestandteil_id)
-        infos: tuple[Informationseintrag, ...] = ()
-        if (
-            entscheidung is not None
-            and entscheidung.entscheidung is FachlicheEntscheidungsart.UEBERNEHMEN
-        ):
-            if not vorschlag.informationen:
+        infos = vorschlag.informationen
+        kennzeichnung = unsicher_nach_id.get(vorschlag.bestandteil_id)
+        if kennzeichnung is not None:
+            if not infos:
                 raise Domaenenfehler(
-                    f"Für {vorschlag.bezeichnung} liegt kein übernehmbarer Vorschlag vor."
+                    f"Für {vorschlag.bezeichnung} liegt keine zu kennzeichnende Information vor."
                 )
-            infos = tuple(
-                replace(
-                    info,
-                    fachliche_entscheidung=entscheidung.entscheidung,
-                    bestaetigt_am=entscheidung.entschieden_am,
-                )
-                for info in vorschlag.informationen
-            )
-            offene_nach_id[vorschlag.bestandteil_id].clear()
-        elif entscheidung is not None:
             offene = offene_nach_id[vorschlag.bestandteil_id]
             offene.append(
                 OffenerEintrag(
-                    f"{vorschlag.bestandteil_id.value}:offen:{len(offene) + 1}",
+                    f"{vorschlag.bestandteil_id.value}:unsicher:1",
                     vorschlag.bestandteil_id,
                     Offenheitskategorie.FACHLICH_UNSICHER,
-                    entscheidung.begruendung,
+                    "Automatisch zugeordnete Informationen wurden durch die anwendende Person "
+                    "für die fachliche Prüfung in Schritt 9 als unsicher markiert.",
                     tuple(
                         {
                             "informations_id": info.informations_id,
@@ -917,9 +917,7 @@ def wende_fachliche_entscheidungen_an(
                         for info in vorschlag.informationen
                     ),
                     Kennzeichnungsherkunft.MENSCHLICH_MARKIERT,
-                    "offen",
-                    entscheidung.entscheidung,
-                    entscheidung.entschieden_am,
+                    anwenderhinweis=kennzeichnung.anwenderhinweis,
                 )
             )
         offene = tuple(offene_nach_id[vorschlag.bestandteil_id])
@@ -931,7 +929,6 @@ def wende_fachliche_entscheidungen_an(
                 _eindeutig(wert.herkunftsartefakt for wert in infos),
                 infos,
                 tuple(wert.offener_eintrag_id for wert in offene),
-                entscheidung,
             )
         )
     alle_offenen = tuple(

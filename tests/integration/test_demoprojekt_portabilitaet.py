@@ -30,7 +30,6 @@ from framework_mvp.bootstrap import (
     erstelle_projektkontext_service,
     erstelle_transformations_service,
 )
-from framework_mvp.domain.models import ModellbestandteilId
 from framework_mvp.domain.models.zugriff import Projektaktion, Zugriffskontext
 from framework_mvp.ui.projektkontext import projektkontext_setzen
 from framework_mvp.workspace import WorkspaceKonfiguration
@@ -153,9 +152,11 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     ableitungs_id = UUID(quell_rehydriert.referenzen["aktuelle_modellableitungs_id"])
     _, k, o = erstelle_modellableitung_service(quell_db, quell_ws).laden(ableitungs_id)
     assert len(k["modellbestandteile"]) == 16
-    assert len(k["fachliche_entscheidungen"]) == 16
-    assert all(wert["begruendung"] for wert in k["fachliche_entscheidungen"])
+    assert k["artefaktversion"] == 2
+    assert k["menschlich_bestaetigt"] is True
+    assert k["bestaetigt_am"]
     assert "offene_eintraege" in o
+    assert all("anwenderhinweis" in wert for wert in o["offene_eintraege"])
 
     validierungslauf_id = UUID(quell_rehydriert.referenzen["aktuelle_validierungslauf_id"])
     _, k_stern = erstelle_modellvalidierung_service(quell_db, quell_ws).laden(validierungslauf_id)
@@ -513,13 +514,11 @@ def test_neue_a_g_generation_bleibt_nach_neustart_aktiv_und_nutzt_kontrollierte_
         k_id=uuid4(),
         o_id=uuid4(),
     )
-    vorbelegung, erneut_pruefen = modellableitung.vorherige_entscheidungsvorbelegung(
+    hinweise = modellableitung.vorherige_anwenderhinweise(
         projekt_id, neue_aggregation.aggregations_id, neuer_vorschlag
     )
     assert basis.aggregation.aggregations_id == neue_aggregation.aggregations_id
-    assert ModellbestandteilId.PROBLEMSTELLUNG in vorbelegung
-    assert set(vorbelegung).isdisjoint(erneut_pruefen)
-    assert len(vorbelegung) + len(erneut_pruefen) == 16
+    assert hinweise == {}
 
     nach_neustart = erstelle_projektkontext_service(datenbank, workspace).wiederherstellen(
         projekt_id

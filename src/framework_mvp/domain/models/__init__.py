@@ -137,10 +137,12 @@ from framework_mvp.domain.models.mappingtabelle import (
 )
 from framework_mvp.domain.models.modellableitung import (
     AbgeleiteterModellbestandteil,
+    AnwenderhinweisFuerSchritt9,
     Bestandteilstatus,
     Eingangsartefakt,
     FachlicheBestandteilentscheidung,
     FachlicheEntscheidungsart,
+    FachlicheUnsicherheitskennzeichnung,
     Informationseintrag,
     Kennzeichnungsherkunft,
     Modellableitung,
@@ -244,6 +246,7 @@ from framework_mvp.domain.models.zwischendatensatz import Zwischendatensatz
 
 __all__ = [
     "AbgeleiteterModellbestandteil",
+    "AnwenderhinweisFuerSchritt9",
     "Aggregationsstatus",
     "AnkunftsstromDefinition",
     "AktivitaetRessourcenZuordnung",
@@ -283,6 +286,7 @@ __all__ = [
     "Eingangsartefakt",
     "FachlicheBestandteilentscheidung",
     "FachlicheEntscheidungsart",
+    "FachlicheUnsicherheitskennzeichnung",
     "EventLogArtefakt",
     "EventLogKonfiguration",
     "EventLogStatus",

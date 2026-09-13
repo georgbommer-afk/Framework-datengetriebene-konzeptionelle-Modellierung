@@ -116,7 +116,10 @@ class Aggregation:
                         "bezugsmenge": "Aufträge",
                     },
                 ],
-                "conformance_checking": {"durchgefuehrt": True, "ergebnis": {"fitness": 0.9}},
+                "conformance_checking": {
+                    "durchgefuehrt": True,
+                    "ergebnis": {"fitness": 0.9975345167},
+                },
                 "strukturierte_ergebnisse": {
                     "ressourcen": {"modus": "automatisch", "zuordnungen": [{"aktivitaet": "A"}]},
                     "entitaetsinstanzen_und_attribute": {"instanzen": [{"instanz_id": "1"}]},
@@ -160,7 +163,8 @@ class Aggregation:
             return {}
         return {
             "conformance": {"ergebnis": {
-                "fitness": 0.9, "produzierte_tokens": 10, "konsumierte_tokens": 9,
+                "fitness": 0.9975345167,
+                "produzierte_tokens": 10, "konsumierte_tokens": 9,
                 "fehlende_tokens": 1, "verbleibende_tokens": 2,
                 "konforme_faelle": 1, "abweichende_faelle": 1,
             }},
@@ -353,6 +357,10 @@ def test_gespeichertes_a_g_zeigt_fachliche_ergebnisse_statt_json_hauptansicht() 
     assert any("Für spätere manuelle Berechnung vorgesehen" in wert.value for wert in app.info)
     metric_labels = {wert.label for wert in app.metric}
     assert "Fitness nach Gleichung 3.14" in metric_labels
+    assert (
+        next(wert.value for wert in app.metric if wert.label == "Fitness nach Gleichung 3.14")
+        == "99,75 %"
+    )
     assert "pT · produzierte Tokens" in metric_labels
     assert "Entitäten" in metric_labels
     markdown = "\n".join(wert.value for wert in app.markdown)

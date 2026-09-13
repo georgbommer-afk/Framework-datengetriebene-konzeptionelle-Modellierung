@@ -568,7 +568,7 @@ def _ziele(ws: Worksheet, report: Mapping[str, Any]) -> None:
         ),
         kpis,
         autofilter=True,
-        zahlenformate={"ergebnis": "0.00"},
+        zahlenformate={"ergebnis": "0.##"},
     )
 
 
@@ -848,10 +848,10 @@ def _daten(ws: Worksheet, report: Mapping[str, Any]) -> None:
         autofilter=True,
         zahlenformate={
             "anzahl": "#,##0",
-            "mittelwert": "0.00",
-            "median": "0.00",
-            "minimum": "0.00",
-            "maximum": "0.00",
+            "mittelwert": "0.##",
+            "median": "0.##",
+            "minimum": "0.##",
+            "maximum": "0.##",
         },
     )
 
@@ -892,7 +892,12 @@ def _analyse(ws: Worksheet, report: Mapping[str, Any]) -> None:
             ws,
             zeile,
             (
-                ("Fitness", conformance_ergebnis.get("fitness")),
+                (
+                    "Fitness",
+                    conformance_ergebnis.get(
+                        "fitness_anzeige", conformance_ergebnis.get("fitness")
+                    ),
+                ),
                 ("Produzierte Tokens pT", conformance_ergebnis.get("produzierte_tokens")),
                 ("Konsumierte Tokens cT", conformance_ergebnis.get("konsumierte_tokens")),
                 ("Fehlende Tokens mT", conformance_ergebnis.get("fehlende_tokens")),
@@ -928,7 +933,7 @@ def _analyse(ws: Worksheet, report: Mapping[str, Any]) -> None:
         ),
         kpi_zeilen,
         autofilter=True,
-        zahlenformate={"ergebnis": "0.00"},
+        zahlenformate={"ergebnis": "0.##"},
     )
     performance = _mapping(ausgaben.get("performance_und_engpassanalyse"))
     dt_db = _mapping(performance.get("dt_db_ergebnis"))
@@ -959,7 +964,7 @@ def _analyse(ws: Worksheet, report: Mapping[str, Any]) -> None:
                 ("Kürzer", "kuerzer_als_geplant"),
             ),
             performance_zeilen,
-            zahlenformate={"mittelwert_sekunden": "0.00", "median_sekunden": "0.00"},
+            zahlenformate={"mittelwert_sekunden": "0.##", "median_sekunden": "0.##"},
         )
     busy = _mapping(performance.get("busy_ratio_ergebnis"))
     busy_zeilen = [

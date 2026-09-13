@@ -88,7 +88,7 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
                         {
                             "durchgefuehrt": True,
                             "ergebnis": {
-                                "fitness": 0.95,
+                                "fitness": 0.9975345167,
                                 "produzierte_tokens": 20,
                                 "konsumierte_tokens": 19,
                                 "fehlende_tokens": 1,
@@ -361,7 +361,14 @@ def test_build_report_data_projiziert_neue_felder_ohne_k_stern_mutation() -> Non
     assert report["ausgaben_und_eingaben"]["kpi_ergebnisse"][1]["ergebnis_anzeige"] == (
         "Für spätere manuelle Berechnung vorgesehen"
     )
-    assert report["ausgaben_und_eingaben"]["conformance_checking"]["ergebnis"]["fitness"] == 0.95
+    assert (
+        report["ausgaben_und_eingaben"]["conformance_checking"]["ergebnis"]["fitness"]
+        == 0.9975345167
+    )
+    assert (
+        report["ausgaben_und_eingaben"]["conformance_checking"]["ergebnis"]["fitness_anzeige"]
+        == "99,75 %"
+    )
     assert (
         report["ausgaben_und_eingaben"]["performance_und_engpassanalyse"]["dt_db_ergebnis"][
             "dt_statistik"
@@ -426,11 +433,21 @@ def test_reportgliederung_folgt_den_acht_fachlichen_abschnitten() -> None:
         assert titel in html
     assert "1850.1799999999998" not in html
     assert "1850,18 s" in html
+    assert "99,75 %" in html
+    assert "0.9975345167" not in html
     assert "12.08.2026 10:00:00 +00:00" in html
 
 
 @pytest.mark.parametrize(
-    ("fallstudie", "systemtyp", "kpi_id", "kpi_name", "ergebnis", "einheit"),
+    (
+        "fallstudie",
+        "systemtyp",
+        "kpi_id",
+        "kpi_name",
+        "ergebnis",
+        "einheit",
+        "erwartete_anzeige",
+    ),
     (
         (
             "intralogistiksystem",
@@ -439,6 +456,7 @@ def test_reportgliederung_folgt_den_acht_fachlichen_abschnitten() -> None:
             "Servicegrad",
             3.333,
             "%",
+            "3,33 %",
         ),
         (
             "produktionssystem",
@@ -447,6 +465,7 @@ def test_reportgliederung_folgt_den_acht_fachlichen_abschnitten() -> None:
             "Einhaltung Lagerbandbreite",
             90.0,
             "%",
+            "90 %",
         ),
         (
             "synthetisches-produktionssystem",
@@ -455,6 +474,7 @@ def test_reportgliederung_folgt_den_acht_fachlichen_abschnitten() -> None:
             "Mittlere Durchführungszeit",
             1850.1799999999998,
             "s",
+            "1850,18 s",
         ),
     ),
 )
@@ -466,6 +486,7 @@ def test_reports_der_drei_fallstudien_bleiben_renderbar(
     kpi_name: str,
     ergebnis: float,
     einheit: str,
+    erwartete_anzeige: str,
 ) -> None:
     k_stern = _k_stern()
     bestandteile = cast(list[dict[str, Any]], k_stern["modellbestandteile"])
@@ -490,6 +511,7 @@ def test_reports_der_drei_fallstudien_bleiben_renderbar(
 
     assert report["modellumfang"]["systemtyp"] == systemtyp
     assert kpi_name in html
+    assert erwartete_anzeige in html
     assert str(ergebnis) not in html
     assert pdf.read_bytes().startswith(b"%PDF-")
 
@@ -599,7 +621,7 @@ def test_xlsx_renderer_erzeugt_zehn_geordnete_lesbare_arbeitsblaetter() -> None:
     }
     assert all(isinstance(zeile[2].value, int) for zeile in statistikwerte)
     assert all(isinstance(zeile[3].value, Real) for zeile in statistikwerte)
-    assert all(zeile[3].number_format == "0.00" for zeile in statistikwerte)
+    assert all(zeile[3].number_format == "0.##" for zeile in statistikwerte)
     assert any(
         zelle.value == "Transformationshistorie D → aktiver Datensatz T"
         for zeile in datenblatt.iter_rows()
@@ -612,6 +634,8 @@ def test_xlsx_renderer_erzeugt_zehn_geordnete_lesbare_arbeitsblaetter() -> None:
         if zelle.value is not None
     }
     assert "Token-Based Replay · Gleichung 3.14" in analysewerte
+    assert "99,75 %" in analysewerte
+    assert "0,8" in analysewerte
     assert "Soll-/Ist-Abweichungen" in analysewerte
     assert "Ergänzende Performance · Busy Ratio" in analysewerte
     assert any(
@@ -798,7 +822,10 @@ def test_html_renderer_bettet_die_einzige_css_quelle_und_svgs_ein(tmp_path: Path
     assert "Conformance Checking" in html
     assert "Produzierte Tokens pT" in html
     assert "dT · Fertigstellungsabweichung" in html
+    assert "mittelwert sekunden" in html
+    assert "20.0" not in html
     assert "Ergänzende Performance · Busy Ratio" in html
+    assert "<td>0,8</td>" in html
     assert "Vereinfachte Start-zu-Start-Zeitspannen" in html
     assert "Potenzielle Wartestellen · Gleichung 3.15" in html
 

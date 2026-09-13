@@ -46,6 +46,7 @@ BASIS = SimpleNamespace(
         "bestandteil_id": "problemstellung",
         "kategorie": "fachlich_unsicher",
         "begruendung": "Problemstellung fachlich prüfen.",
+        "anwenderhinweis": "Kontext aus Schritt 8 darf die Behandlung nicht stören.",
     }]},
     eingabefingerabdruck="a" * 64,
 )

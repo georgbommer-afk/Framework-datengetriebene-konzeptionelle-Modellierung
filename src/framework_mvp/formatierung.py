@@ -38,6 +38,17 @@ def formatiere_messwert(wert: Any, einheit: str = "") -> str:
     return f"{anzeige} {bereinigte_einheit}" if bereinigte_einheit else anzeige
 
 
+def formatiere_anteil_als_prozent(wert: Any) -> str:
+    """Formatiert einen Anteil als Prozentwert, ohne den gespeicherten Rohwert zu verändern."""
+    if isinstance(wert, bool) or not isinstance(wert, (Real, Decimal)):
+        return str(wert)
+    try:
+        prozentwert = Decimal(str(wert)) * Decimal(100)
+    except (InvalidOperation, ValueError):
+        return str(wert)
+    return formatiere_messwert(prozentwert, "%")
+
+
 def formatiere_zeitstempel(wert: Any) -> str:
     """Formatiert bekannte Datums-/Zeitwerte lesbar; unbekannte Texte bleiben unverändert."""
     zeitwert: datetime | date

@@ -60,7 +60,7 @@ from framework_mvp.domain.models import (
     SollmodellEntscheidung,
     Vorkommensregel,
 )
-from framework_mvp.formatierung import formatiere_messwert
+from framework_mvp.formatierung import formatiere_anteil_als_prozent, formatiere_messwert
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.ui.components.mathematische_formeln import (
     zeige_performance_formeln,
@@ -1488,7 +1488,10 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
         st.success("Token-Based Replay erfolgreich durchgeführt.")
         st.markdown("#### Sollprozess und Conformance Checking")
         zeige_token_fitness_formel()
-        st.metric("Fitness nach Gleichung 3.14", conformance.fitness)
+        st.metric(
+            "Fitness nach Gleichung 3.14",
+            formatiere_anteil_als_prozent(conformance.fitness),
+        )
         st.caption(
             "Fitness = 1 bedeutet vollständige Übereinstimmung im Token-Replay; "
             "niedrigere Werte zeigen Abweichungen zwischen E* und P_Soll."
@@ -1507,7 +1510,7 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
         if conformance.fitness_plausibilisierung_pm4py is not None:
             st.caption(
                 "PM4Py-Plausibilisierung: "
-                + formatiere_messwert(conformance.fitness_plausibilisierung_pm4py)
+                + formatiere_anteil_als_prozent(conformance.fitness_plausibilisierung_pm4py)
             )
             if (
                 conformance.fitness is not None
@@ -1807,7 +1810,11 @@ def _gespeicherte_conformance_anzeigen(details: object) -> None:
         return
     st.markdown("#### Token-Based Replay · gespeichertes Ergebnis")
     zeige_token_fitness_formel()
-    st.metric("Fitness nach Gleichung 3.14", ergebnis.get("fitness", "nicht berechenbar"))
+    fitness = ergebnis.get("fitness")
+    st.metric(
+        "Fitness nach Gleichung 3.14",
+        formatiere_anteil_als_prozent(fitness) if fitness is not None else "nicht berechenbar",
+    )
     tokens = st.columns(4)
     tokens[0].metric("pT · produzierte Tokens", ergebnis.get("produzierte_tokens", 0))
     tokens[1].metric("cT · konsumierte Tokens", ergebnis.get("konsumierte_tokens", 0))

@@ -370,7 +370,7 @@
         {% if conformance_ergebnis %}
             <h3 class="pdf-subheading">Conformance Checking · Gleichung 3.14</h3>
             <div class="pdf-kv-list">
-                <div class="pdf-kv-row"><div class="pdf-kv-label">Fitness</div><div class="pdf-kv-value">{{ conformance_ergebnis.get("fitness", "–") }}</div></div>
+                <div class="pdf-kv-row"><div class="pdf-kv-label">Fitness</div><div class="pdf-kv-value">{{ conformance_ergebnis.get("fitness_anzeige", conformance_ergebnis.get("fitness", "–")) }}</div></div>
                 <div class="pdf-kv-row"><div class="pdf-kv-label">Token pT / cT / mT / rT</div><div class="pdf-kv-value">{{ conformance_ergebnis.get("produzierte_tokens", "–") }} / {{ conformance_ergebnis.get("konsumierte_tokens", "–") }} / {{ conformance_ergebnis.get("fehlende_tokens", "–") }} / {{ conformance_ergebnis.get("verbleibende_tokens", "–") }}</div></div>
                 <div class="pdf-kv-row"><div class="pdf-kv-label">Fälle gesamt / konform / abweichend</div><div class="pdf-kv-value">{{ conformance_ergebnis.get("ausgewertete_faelle", "–") }} / {{ conformance_ergebnis.get("konforme_faelle", "–") }} / {{ conformance_ergebnis.get("abweichende_faelle", "–") }}</div></div>
             </div>

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from framework_mvp.formatierung import (
+    formatiere_anteil_als_prozent,
     formatiere_fachwert,
     formatiere_messwert,
     formatiere_zahl,
@@ -20,6 +21,9 @@ from framework_mvp.formatierung import (
         (360.0, "360"),
         (0.0, "0"),
         (-0.0, "0"),
+        (12.345, "12,35"),
+        (12.344, "12,34"),
+        (12.0, "12"),
         (3.333, "3,33"),
     ),
 )
@@ -30,6 +34,12 @@ def test_zahlenformatierung_entfernt_floatartefakte(rohwert: float, erwartet: st
 def test_messwertformatierung_verbindet_wert_und_einheit() -> None:
     assert formatiere_messwert(360.0, "s") == "360 s"
     assert formatiere_messwert(0.0333 * 100, "%") == "3,33 %"
+
+
+def test_fitness_wird_als_prozent_und_nicht_als_gerundeter_anteil_formatiert() -> None:
+    anzeige = formatiere_anteil_als_prozent(0.9975345167)
+    assert anzeige == "99,75 %"
+    assert anzeige != "1"
 
 
 def test_zeitstempel_werden_lesbar_und_mit_offset_formatiert() -> None:

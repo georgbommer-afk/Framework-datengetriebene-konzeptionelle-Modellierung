@@ -134,8 +134,8 @@ def _umgebung(tmp_path):  # type: ignore[no-untyped-def]
         )
     k = {
         "artefaktart": "vorlaeufiges_konzeptionelles_modell_k",
-        "artefaktversion": 1,
-        "mappingversion": 3,
+        "artefaktversion": 2,
+        "mappingversion": 4,
         "k_id": str(k_id),
         "modellableitungs_id": str(modellableitungs_id),
         "projekt_id": str(projekt_id),
@@ -152,6 +152,11 @@ def _umgebung(tmp_path):  # type: ignore[no-untyped-def]
                 else Offenheitskategorie.FACHLICH_UNSICHER.value
             ),
             "begruendung": f"Fachliche Prüfung {index} erforderlich.",
+            "anwenderhinweis": (
+                "Kontext aus Schritt 8; die Behandlung erfolgt weiterhin hier."
+                if index == 1
+                else ""
+            ),
             "status": "offen",
             "kennzeichnungsherkunft": "systematisch_erkannt",
             "belegreferenzen": [],
@@ -160,7 +165,8 @@ def _umgebung(tmp_path):  # type: ignore[no-untyped-def]
     ]
     o = {
         "artefaktart": "offene_modellbestandteile_o",
-        "artefaktversion": 1,
+        "artefaktversion": 2,
+        "mappingversion": 4,
         "o_id": str(o_id),
         "modellableitungs_id": str(modellableitungs_id),
         "projekt_id": str(projekt_id),
@@ -177,7 +183,7 @@ def _umgebung(tmp_path):  # type: ignore[no-untyped-def]
         uuid4(),
         uuid4(),
         "4" * 64,
-        3,
+        4,
         "5" * 64,
         "k.json",
         "6" * 64,
@@ -270,7 +276,7 @@ def test_k_stern_entsteht_idempotent_und_laesst_k_und_o_unveraendert(tmp_path) -
     assert len(repository.werte) == 1
     assert geladen.status is Modellvalidierungsstatus.FACHLICH_VALIDIERT
     assert k_stern["artefaktversion"] == 2
-    assert k_stern["mappingversion"] == 3
+    assert k_stern["mappingversion"] == 4
     assert [wert["bestandteil_id"] for wert in k_stern["modellbestandteile"]] == [
         wert.bestandteil_id.value for wert in MODELLBESTANDTEILE
     ]

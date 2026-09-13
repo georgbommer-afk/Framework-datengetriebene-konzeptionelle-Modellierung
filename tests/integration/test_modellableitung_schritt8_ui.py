@@ -1,10 +1,12 @@
-"""Streamlit-Vertrag von Schritt 8 ohne lokale Artefaktauswahl oder Ergänzungsfelder."""
+"""Streamlit-Vertrag der vereinfachten Gesamtbestätigung in Schritt 8."""
 
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
 APP = r"""
+import json
+from dataclasses import asdict
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import UUID
@@ -14,9 +16,13 @@ import streamlit as st
 
 from framework_mvp.domain.models import (
     AbgeleiteterModellbestandteil, Bestandteilstatus, Eingangsartefakt,
-    Projekt, Projektstatus, Systemtyp, Untersuchungsauftrag,
+    Informationseintrag, Kennzeichnungsherkunft, OffenerEintrag,
+    Offenheitskategorie, Projekt, Projektstatus, Systemtyp,
+    Uebernahmeart, Untersuchungsauftrag,
 )
-from framework_mvp.application.modellableitung import MODELLBESTANDTEILE
+from framework_mvp.application.modellableitung import (
+    MODELLBESTANDTEILE, wende_pruefhinweise_an,
+)
 from framework_mvp.application.modellableitung_service import (
     ModellableitungService, Modellableitungsvorschau,
 )
@@ -42,49 +48,108 @@ REFERENZEN = {
 }
 BASIS = SimpleNamespace(
     projekt=PROJEKT,
-    aggregation=SimpleNamespace(aggregations_id=AG, aggregations_sha256="a" * 64),
+    aggregation=SimpleNamespace(
+        aggregations_id=AG, aggregations_sha256="a" * 64,
+        analyse_id=A, event_log_id=E,
+    ),
     analyse=SimpleNamespace(analyse_id=A),
     freigabe=SimpleNamespace(freigabe_id=F, event_log_id=E, event_log_sha256="b" * 64),
     event_log=EVENTS,
     prozessnotation=SimpleNamespace(bezeichnung="Petrinetz"),
     discovery_ergebnisse={"svg_texte": {}},
     quellreferenzen=REFERENZEN,
-    lineage={
-        "artefakte": {wert.value: referenz for wert, referenz in REFERENZEN.items()}
-    },
-    a_g={"warnungen": []},
+    lineage={"artefakte": {wert.value: referenz for wert, referenz in REFERENZEN.items()}},
+    a_g={"strukturierte_ergebnisse": {"zeitbezogene_datenauswahl": {
+        "umfang_e_stern": {"ereignisanzahl": 2, "fallanzahl": 1, "aktivitaetsanzahl": 2}
+    }}},
     eingabefingerabdruck="c" * 64,
+)
+
+def information(definition):
+    return Informationseintrag(
+        f"{definition.bestandteil_id.value}:information:1",
+        definition.bestandteil_id, Eingangsartefakt.UNTERSUCHUNGSAUFTRAG_U,
+        "id-U", "a" * 64, "fachwert", f"Information für {definition.bezeichnung}",
+        Uebernahmeart.DIREKTE_UEBERNAHME,
+    )
+
+SYSTEMATISCH_OFFEN = (
+    OffenerEintrag(
+        "eingaben:offen:1", MODELLBESTANDTEILE[3].bestandteil_id,
+        Offenheitskategorie.FEHLEND,
+        "Keine konkreten experimentellen Faktoren mit Wertebereichen ableitbar.", (),
+        Kennzeichnungsherkunft.SYSTEMATISCH_ERKANNT,
+    ),
+    OffenerEintrag(
+        "ressourcen:offen:1", MODELLBESTANDTEILE[10].bestandteil_id,
+        Offenheitskategorie.NICHT_ABLEITBAR,
+        "Eine Ressourcenbeziehung ist fachlich offen.", (),
+        Kennzeichnungsherkunft.SYSTEMATISCH_ERKANNT,
+    ),
+)
+VORGESCHLAGEN = tuple(
+    AbgeleiteterModellbestandteil(
+        definition.bestandteil_id,
+        definition.bezeichnung,
+        Bestandteilstatus.OFFEN
+        if definition.bestandteil_id == MODELLBESTANDTEILE[3].bestandteil_id
+        else Bestandteilstatus.TEILWEISE_OFFEN
+        if definition.bestandteil_id == MODELLBESTANDTEILE[10].bestandteil_id
+        else Bestandteilstatus.VOLLSTAENDIG_ZUGEORDNET,
+        () if definition.bestandteil_id == MODELLBESTANDTEILE[3].bestandteil_id
+        else (Eingangsartefakt.UNTERSUCHUNGSAUFTRAG_U,),
+        () if definition.bestandteil_id == MODELLBESTANDTEILE[3].bestandteil_id
+        else (information(definition),),
+        tuple(
+            wert.offener_eintrag_id
+            for wert in SYSTEMATISCH_OFFEN
+            if wert.bestandteil_id == definition.bestandteil_id
+        ),
+    )
+    for definition in MODELLBESTANDTEILE
 )
 
 class Projekte:
     def projekt_laden(self, projekt_id): return PROJEKT if projekt_id == P else None
 
 class Service:
-    entscheidungsfingerabdruck = staticmethod(ModellableitungService.entscheidungsfingerabdruck)
+    prueffingerabdruck = staticmethod(ModellableitungService.prueffingerabdruck)
     def grundlage_laden(self, projekt_id, aggregations_id):
         assert (projekt_id, aggregations_id) == (P, AG)
         return BASIS
+    def vorherige_anwenderhinweise(self, projekt_id, aggregations_id, vorschau):
+        return {}
     def vorschau(self, **kwargs):
         st.session_state["vorschau_automatisch"] = True
-        entscheidungen = kwargs.get("entscheidungen", ())
-        st.session_state["aufgerufene_entscheidungen"] = len(entscheidungen)
-        bestandteile = tuple(
-            AbgeleiteterModellbestandteil(
-                definition.bestandteil_id, definition.bezeichnung,
-                Bestandteilstatus.VOLLSTAENDIG_ZUGEORDNET, (), (), (),
-            )
-            for definition in MODELLBESTANDTEILE
+        hinweise = kwargs.get("anwenderhinweise", ())
+        unsicherheiten = kwargs.get("unsicherheitskennzeichnungen", ())
+        bestandteile, offene = wende_pruefhinweise_an(
+            VORGESCHLAGEN, SYSTEMATISCH_OFFEN, hinweise, unsicherheiten
         )
+        fingerprint = self.prueffingerabdruck(hinweise, unsicherheiten)
+        bestaetigt_am = kwargs.get("bestaetigt_am")
+        k = {
+            "modellbestandteile": json.loads(json.dumps(
+                [asdict(wert) for wert in bestandteile], default=str
+            )),
+            "eingangslineage": BASIS.lineage,
+            "bestaetigt_am": str(bestaetigt_am) if bestaetigt_am else None,
+        }
+        o = {"offene_eintraege": json.loads(json.dumps(
+            [asdict(wert) for wert in offene], default=str
+        ))}
         return Modellableitungsvorschau(
-            BASIS,
-            kwargs["modellableitungs_id"], kwargs["k_id"], kwargs["o_id"],
-            bestandteile, (), entscheidungen, bestandteile, (),
-            self.entscheidungsfingerabdruck(entscheidungen),
-            {"k_id": str(kwargs["k_id"])}, {"o_id": str(kwargs["o_id"])},
-            b"{}", b"{}", "e" * 64, "f" * 64,
+            BASIS, kwargs["modellableitungs_id"], kwargs["k_id"], kwargs["o_id"],
+            VORGESCHLAGEN, SYSTEMATISCH_OFFEN, hinweise, unsicherheiten,
+            bestandteile, offene, fingerprint, bestaetigt_am,
+            k, o, b"{}", b"{}", "e" * 64, "f" * 64,
         )
-    def speichern(self, vorschau):
-        assert len(vorschau.entscheidungen) == 16
+    def speichern(self, vorschau, *, menschlich_bestaetigt=None):
+        assert menschlich_bestaetigt is True
+        assert vorschau.bestaetigt_am is not None
+        st.session_state["anzahl_gesamtbestaetigungen"] = 1
+        st.session_state["gespeichertes_k"] = vorschau.k
+        st.session_state["gespeichertes_o"] = vorschau.o
         return SimpleNamespace(
             modellableitungs_id=vorschau.modellableitungs_id,
             k_id=vorschau.k_id, o_id=vorschau.o_id, projekt_id=P,
@@ -95,10 +160,10 @@ class Service:
                 modellableitungs_id=ableitungs_id, projekt_id=P,
                 k_id=st.session_state["aktuelle_k_id"],
                 o_id=st.session_state["aktuelle_o_id"],
-                k_sha256="e" * 64, o_sha256="f" * 64,
+                k_sha256="e" * 64, o_sha256="f" * 64, mappingversion=4,
             ),
-            {"k_id": st.session_state["aktuelle_k_id"]},
-            {"o_id": st.session_state["aktuelle_o_id"]},
+            st.session_state["gespeichertes_k"],
+            st.session_state["gespeichertes_o"],
         )
     def k_download_laden(self, ableitungs_id): return b"{}"
     def o_download_laden(self, ableitungs_id): return b"{}"
@@ -122,28 +187,27 @@ def test_fehlende_aktive_aggregation_blockiert_und_verweist_auf_schritt_sieben()
     assert any(wert.label == "Zurück zu Schritt 7: Ergebnisse aggregieren" for wert in app.button)
 
 
-def test_haupttabelle_hat_sechzehn_bestandteile_und_fuenf_spalten() -> None:
+def test_haupttabelle_zeigt_vollstaendig_teilweise_offen_und_offen_ohne_pflichteingaben() -> None:
     app = _app()
     assert not app.exception
     assert app.session_state["vorschau_automatisch"] is True
     assert len(app.dataframe) == 1
     assert list(app.dataframe[0].value.columns) == [
-        "Bestandteil",
-        "Vorgeschlagene Information",
-        "Quelle/Schritt",
+        "Modellbestandteil",
+        "Zugeordnete Information",
+        "Quelle",
         "Status",
-        "Fachliche Entscheidung",
+        "Offene Punkte O",
     ]
     assert len(app.dataframe[0].value) == 16
-    assert len(app.expander) == 17
-    assert app.expander[0].label.startswith("1. Problemstellung")
-    assert app.expander[0].proto.expanded
-    assert app.expander[-2].label.startswith("16. Darstellung der Vorgänge des Systems")
-    assert app.expander[-1].label == "Technische Details"
+    assert {"Vollständig zugeordnet", "Teilweise offen", "Offen"} <= set(
+        app.dataframe[0].value["Status"]
+    )
     assert not app.checkbox
-    assert len(app.radio) == 16
-    assert all("Vorschlag übernehmen" not in radio.options for radio in app.radio)
+    assert not app.radio
     assert not app.text_area
+    assert len(app.multiselect) == 1
+    assert any(wert.label == "Grundlage der Modellableitung anzeigen" for wert in app.expander)
     assert not {
         "Projekt",
         "Aggregationslauf",
@@ -152,43 +216,55 @@ def test_haupttabelle_hat_sechzehn_bestandteile_und_fuenf_spalten() -> None:
     } & {wert.label for wert in app.selectbox}
 
 
-def test_vorschau_entsteht_ohne_vorschauknopf_und_speichern_ist_zunaechst_gesperrt() -> None:
+def test_anwenderhinweis_erscheint_erst_nach_sekundaeraktion_und_wird_in_o_gespeichert() -> None:
     app = _app()
-    assert app.session_state["aufgerufene_entscheidungen"] == 0
-    assert not any(wert.label == "Vorschau von K und O erzeugen" for wert in app.button)
-    speichern = next(
-        wert for wert in app.button if wert.label == "K und O speichern und zu Schritt 9"
+    hinzufuegen = [wert for wert in app.button if wert.label == "Hinweis für Schritt 9 hinzufügen"]
+    assert len(hinzufuegen) == 2
+    hinzufuegen[0].click().run()
+    assert len(app.text_area) == 1
+    app.text_area[0].set_value("Schichtmodell als Faktor prüfen.").run()
+    primary = next(
+        wert
+        for wert in app.button
+        if wert.label == "Zuordnungen bestätigen, K und O speichern und zu Schritt 9"
     )
-    assert speichern.disabled
-    assert any("Offene Entscheidungen" in wert.value for wert in app.warning)
+    assert not primary.disabled
+    primary.click().run()
 
-
-def test_speichern_setzt_k_o_ids_und_oeffnet_schritt_neun() -> None:
-    app = _app()
-    for radio in app.radio:
-        radio.set_value("Offen / fachlich unsicher")
-    app.run()
-    for feld in app.text_area:
-        feld.set_value("Bewusst fachlich offengehalten.")
-    app.run()
-    next(
-        wert for wert in app.button if wert.label == "K und O speichern und zu Schritt 9"
-    ).click().run()
-
-    assert app.session_state["aktuelle_modellableitungs_id"]
-    assert app.session_state["aktuelle_k_id"]
-    assert app.session_state["aktuelle_o_id"]
+    assert app.session_state["anzahl_gesamtbestaetigungen"] == 1
+    assert any(
+        wert["anwenderhinweis"] == "Schichtmodell als Faktor prüfen." and wert["status"] == "offen"
+        for wert in app.session_state["gespeichertes_o"]["offene_eintraege"]
+    )
     assert app.session_state["naechster_framework_bereich"] == ("9 Modell ergänzen und validieren")
 
 
-def test_seite_trennt_fachliche_und_technische_details_und_uebergibt_an_schritt_neun() -> None:
+def test_eine_gesamtbestaetigung_speichert_auch_ohne_hinweis_und_erneutes_oeffnen_ist_lesbar() -> (
+    None
+):
+    app = _app()
+    primary_buttons = [
+        wert
+        for wert in app.button
+        if wert.label == "Zuordnungen bestätigen, K und O speichern und zu Schritt 9"
+    ]
+    assert len(primary_buttons) == 1
+    primary_buttons[0].click().run()
+    assert app.session_state["aktuelle_modellableitungs_id"]
+    assert app.session_state["aktuelle_k_id"]
+    assert app.session_state["aktuelle_o_id"]
+    assert app.session_state["anzahl_gesamtbestaetigungen"] == 1
+    assert not app.exception
+    assert len(app.dataframe) == 1
+    assert len(app.dataframe[0].value) == 16
+    assert len(app.download_button) == 2
+    assert any("gespeichert und erneut validiert" in wert.value for wert in app.success)
+
+
+def test_seite_enthaelt_keine_fachliche_bearbeitung_von_o() -> None:
     quelle = Path("src/framework_mvp/ui/pages/modellableitung.py").read_text(encoding="utf-8")
-    for titel in (
-        "Zuordnung der Ergebnisse aus Schritt 1 bis 7",
-        "Fachliche Vorschläge und Übernahmeentscheidungen",
-        "Technische Details",
-    ):
-        assert titel in quelle
-    assert "Vorschlag nicht übernehmen" in quelle
+    assert "Vorschlag nicht übernehmen" not in quelle
+    assert "Fachliche Entscheidung" not in quelle
+    assert "Pflichtbegründung" not in quelle
     assert "Vorschau von K und O erzeugen" not in quelle
     assert "schritt_abschliessen_und_weiter(aktueller_schritt=8" in quelle

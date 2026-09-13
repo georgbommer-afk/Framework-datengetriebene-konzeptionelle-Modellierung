@@ -562,7 +562,7 @@
     {% if conformance_ergebnis %}
         <h2 class="subsection-title">Conformance Checking</h2>
         <div class="kv-table">
-            {{ kv("Fitness nach Gleichung 3.14", conformance_ergebnis.get("fitness")) }}
+            {{ kv("Fitness nach Gleichung 3.14", conformance_ergebnis.get("fitness_anzeige", conformance_ergebnis.get("fitness"))) }}
             {{ kv("Produzierte Tokens pT", conformance_ergebnis.get("produzierte_tokens")) }}
             {{ kv("Konsumierte Tokens cT", conformance_ergebnis.get("konsumierte_tokens")) }}
             {{ kv("Fehlende Tokens mT", conformance_ergebnis.get("fehlende_tokens")) }}
