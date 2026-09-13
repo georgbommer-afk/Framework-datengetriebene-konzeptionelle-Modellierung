@@ -1793,7 +1793,23 @@
             <!-- Technische Metadaten -->
     
             <div class="pdf-tech-meta">
-    
+
+                <div class="pdf-tech-row">
+
+                    <div class="pdf-tech-label">
+                        Softwareversion
+                    </div>
+
+                    <div class="pdf-tech-value">
+                        {% if dokument.get("softwareversion") %}
+                            V{{ dokument.get("softwareversion") }}
+                        {% else %}
+                            –
+                        {% endif %}
+                    </div>
+
+                </div>
+
                 <div class="pdf-tech-row">
     
                     <div class="pdf-tech-label">
