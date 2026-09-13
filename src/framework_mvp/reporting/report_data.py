@@ -297,7 +297,7 @@ def _fachliche_entscheidungen(
 def _fachliche_anpassungen(
     bestandteil: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    """Liefert nur echte zusätzliche Modellinhalte aus Schritt 9."""
+    """Liefert nur echte Modellinhalte; unbekannt/nicht anwendbar bleiben Entscheidungen."""
     roh = bestandteil.get("menschliche_eintraege", [])
     if not isinstance(roh, list):
         return []
@@ -306,16 +306,34 @@ def _fachliche_anpassungen(
     for eintrag in roh:
         if not isinstance(eintrag, Mapping):
             continue
-        if eintrag.get("eintragstyp") != "zusaetzliche_anpassung":
+        if eintrag.get("eintragstyp") == "zusaetzliche_anpassung":
+            ergebnis.append(
+                {
+                    "anpassungsnummer": eintrag.get("anpassungsnummer"),
+                    "fachlicher_inhalt": str(eintrag.get("fachlicher_inhalt", "")),
+                    "begruendung": str(eintrag.get("begruendung", "")),
+                    "menschliche_entscheidung": bool(eintrag.get("menschliche_entscheidung")),
+                }
+            )
             continue
-        ergebnis.append(
-            {
-                "anpassungsnummer": eintrag.get("anpassungsnummer"),
-                "fachlicher_inhalt": str(eintrag.get("fachlicher_inhalt", "")),
-                "begruendung": str(eintrag.get("begruendung", "")),
-                "menschliche_entscheidung": bool(eintrag.get("menschliche_entscheidung")),
-            }
-        )
+        struktur = eintrag.get("strukturierter_inhalt")
+        if (
+            eintrag.get("eintragstyp") == "behandlung_offener_eintrag"
+            and eintrag.get("modellinhalt_erzeugt") is True
+            and isinstance(struktur, Mapping)
+            and struktur
+        ):
+            ergebnis.append(
+                {
+                    "offener_eintrag_id": eintrag.get("offener_eintrag_id"),
+                    "fachlicher_inhalt": json.dumps(
+                        _normalisieren(struktur), ensure_ascii=False, sort_keys=True
+                    ),
+                    "strukturierter_inhalt": _normalisieren(struktur),
+                    "begruendung": str(eintrag.get("kommentar", eintrag.get("begruendung", ""))),
+                    "menschliche_entscheidung": bool(eintrag.get("menschliche_entscheidung")),
+                }
+            )
     return ergebnis
 
 

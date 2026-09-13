@@ -560,8 +560,13 @@ class DemoProjektService:
             (
                 Offenheitsentscheidung.BESTAETIGT
                 if ist_unsicher
-                else Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST
+                else Offenheitsentscheidung.NICHT_BEKANNT_ODER_BESTIMMBAR
             ),
-            "" if ist_unsicher else "Für das Demomodell fachlich plausibilisiert und ergänzt.",
-            "Im Rahmen des synthetischen Demonstrationsfalls bewusst entschieden.",
+            "",
+            (
+                "Im synthetischen Demonstrationsfall fachlich bestätigt."
+                if ist_unsicher
+                else "Im synthetischen Demonstrationsfall transparent als nicht bestimmbar "
+                "dokumentiert."
+            ),
         )

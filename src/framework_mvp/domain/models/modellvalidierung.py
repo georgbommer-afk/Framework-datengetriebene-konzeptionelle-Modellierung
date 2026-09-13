@@ -1,6 +1,7 @@
 """Domänenvertrag für Algorithmus 9: fachlich validiertes Modell K*."""
 
-from dataclasses import dataclass
+import copy
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID
@@ -14,6 +15,7 @@ class Offenheitsentscheidung(StrEnum):
 
     BESTAETIGT = "bestätigt"
     ERGAENZT_ODER_ANGEPASST = "ergänzt_oder_angepasst"
+    NICHT_BEKANNT_ODER_BESTIMMBAR = "nicht_bekannt_oder_bestimmbar"
     NICHT_ANWENDBAR = "nicht_anwendbar"
 
 
@@ -49,6 +51,7 @@ class BehandlungOffenerEintrag:
     fachlicher_inhalt: str = ""
     begruendung: str = ""
     menschliche_entscheidung: bool = True
+    strukturierter_inhalt: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.offener_eintrag_id.strip():
@@ -61,6 +64,7 @@ class BehandlungOffenerEintrag:
         )
         object.__setattr__(self, "fachlicher_inhalt", self.fachlicher_inhalt.strip())
         object.__setattr__(self, "begruendung", self.begruendung.strip())
+        object.__setattr__(self, "strukturierter_inhalt", copy.deepcopy(self.strukturierter_inhalt))
         if not self.menschliche_entscheidung:
             raise Domaenenfehler(
                 "Eine O-Behandlung muss als menschliche Entscheidung markiert sein."
@@ -73,22 +77,18 @@ class BehandlungOffenerEintrag:
                 "Nur ein fachlich unsicherer O-Eintrag darf fachlich bestätigt werden."
             )
         if self.entscheidung is Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST:
-            if not self.fachlicher_inhalt or not self.begruendung:
+            if not self.fachlicher_inhalt and not self.strukturierter_inhalt:
                 raise Domaenenfehler(
-                    "Eine Ergänzung oder Anpassung benötigt fachlichen Inhalt und Begründung."
+                    "Ergänzen oder konkretisieren benötigt einen strukturierten fachlichen Inhalt."
                 )
-        elif not self.begruendung:
-            raise Domaenenfehler("Die fachliche Entscheidung benötigt eine Begründung.")
-        if (
-            self.entscheidung
-            in {
-                Offenheitsentscheidung.BESTAETIGT,
-                Offenheitsentscheidung.NICHT_ANWENDBAR,
-            }
-            and self.fachlicher_inhalt
-        ):
+        if self.entscheidung in {
+            Offenheitsentscheidung.BESTAETIGT,
+            Offenheitsentscheidung.NICHT_BEKANNT_ODER_BESTIMMBAR,
+            Offenheitsentscheidung.NICHT_ANWENDBAR,
+        } and (self.fachlicher_inhalt or self.strukturierter_inhalt):
             raise Domaenenfehler(
-                "Bestätigung und Nichtanwendbarkeit dürfen keinen Modellinhalt ergänzen."
+                "Bestätigung, Nichtbekanntheit und Nichtanwendbarkeit dürfen keinen "
+                "Modellinhalt ergänzen."
             )
 
 

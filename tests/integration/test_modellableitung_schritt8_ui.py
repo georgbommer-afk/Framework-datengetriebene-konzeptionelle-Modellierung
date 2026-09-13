@@ -147,7 +147,12 @@ class Service:
     def speichern(self, vorschau, *, menschlich_bestaetigt=None):
         assert menschlich_bestaetigt is True
         assert vorschau.bestaetigt_am is not None
-        st.session_state["anzahl_gesamtbestaetigungen"] = 1
+        st.session_state["anzahl_gesamtbestaetigungen"] = int(
+            st.session_state.get("anzahl_gesamtbestaetigungen", 0)
+        ) + 1
+        generationen = list(st.session_state.get("modellableitungs_generationen", []))
+        generationen.append(str(vorschau.modellableitungs_id))
+        st.session_state["modellableitungs_generationen"] = generationen
         st.session_state["gespeichertes_k"] = vorschau.k
         st.session_state["gespeichertes_o"] = vorschau.o
         return SimpleNamespace(
@@ -161,6 +166,7 @@ class Service:
                 k_id=st.session_state["aktuelle_k_id"],
                 o_id=st.session_state["aktuelle_o_id"],
                 k_sha256="e" * 64, o_sha256="f" * 64, mappingversion=4,
+                eingabefingerabdruck=BASIS.eingabefingerabdruck,
             ),
             st.session_state["gespeichertes_k"],
             st.session_state["gespeichertes_o"],
@@ -200,7 +206,7 @@ def test_haupttabelle_zeigt_vollstaendig_teilweise_offen_und_offen_ohne_pflichte
         "Offene Punkte O",
     ]
     assert len(app.dataframe[0].value) == 16
-    assert {"Vollständig zugeordnet", "Teilweise offen", "Offen"} <= set(
+    assert {"✓ Vollständig zugeordnet", "◐ Teilweise offen", "○ Offen"} <= set(
         app.dataframe[0].value["Status"]
     )
     assert not app.checkbox
@@ -259,6 +265,65 @@ def test_eine_gesamtbestaetigung_speichert_auch_ohne_hinweis_und_erneutes_oeffne
     assert len(app.dataframe[0].value) == 16
     assert len(app.download_button) == 2
     assert any("gespeichert und erneut validiert" in wert.value for wert in app.success)
+
+
+def test_gespeicherte_hinweise_lassen_sich_als_neue_generation_bearbeiten() -> None:
+    app = _app()
+    next(
+        wert for wert in app.button if wert.label == "Hinweis für Schritt 9 hinzufügen"
+    ).click().run()
+    app.text_area[0].set_value("Pausenzeit prüfen.").run()
+    app.multiselect[0].select("problemstellung").run()
+    next(
+        wert for wert in app.text_area if wert.label == "Optionaler Hinweis zu Problemstellung"
+    ).set_value("Problemformulierung fachlich gegenprüfen.").run()
+    next(
+        wert
+        for wert in app.button
+        if wert.label == "Zuordnungen bestätigen, K und O speichern und zu Schritt 9"
+    ).click().run()
+    erste_generation = app.session_state["modellableitungs_generationen"][0]
+    app.session_state[f"schritt8_{'c' * 64}_unsicher"] = ["problemstellung"]
+    app.session_state[f"schritt8_{'c' * 64}_problemstellung_unsicherheitshinweis"] = (
+        "Problemformulierung fachlich gegenprüfen."
+    )
+
+    next(
+        wert for wert in app.button if wert.label == "Hinweise und Unsicherheiten bearbeiten"
+    ).click().run()
+    assert app.multiselect[0].value == ["problemstellung"]
+    assert any(wert.value == "Pausenzeit prüfen." for wert in app.text_area)
+    assert any(wert.value == "Problemformulierung fachlich gegenprüfen." for wert in app.text_area)
+    next(wert for wert in app.text_area if wert.value == "Pausenzeit prüfen.").set_value(
+        "Pausenzeit und Schichtmodell prüfen."
+    ).run()
+    next(
+        wert
+        for wert in app.button
+        if wert.label == "Zuordnungen bestätigen, K und O speichern und zu Schritt 9"
+    ).click().run()
+
+    assert app.session_state["anzahl_gesamtbestaetigungen"] == 2
+    assert len(app.session_state["modellableitungs_generationen"]) == 2
+    assert app.session_state["modellableitungs_generationen"][1] != erste_generation
+    assert any(
+        wert["anwenderhinweis"] == "Pausenzeit und Schichtmodell prüfen."
+        for wert in app.session_state["gespeichertes_o"]["offene_eintraege"]
+    )
+    assert any(
+        wert["bestandteil_id"] == "problemstellung"
+        and wert["kennzeichnungsherkunft"] == "menschlich_markiert"
+        and wert["anwenderhinweis"] == "Problemformulierung fachlich gegenprüfen."
+        for wert in app.session_state["gespeichertes_o"]["offene_eintraege"]
+    )
+
+
+def test_schritt_8_tabelle_verwendet_keine_festen_status_hintergrundfarben() -> None:
+    quelle = Path("src/framework_mvp/ui/pages/modellableitung.py").read_text(encoding="utf-8")
+    assert "background-color" not in quelle
+    assert "tabelle.style" not in quelle
+    assert "✓ Vollständig zugeordnet" in quelle
+    assert "⚠ Fachlich unsicher" in quelle
 
 
 def test_seite_enthaelt_keine_fachliche_bearbeitung_von_o() -> None:

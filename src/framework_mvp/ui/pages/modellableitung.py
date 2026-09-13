@@ -42,10 +42,10 @@ def _aktive_ids() -> tuple[UUID, UUID] | None:
 def _status_text(status: Bestandteilstatus | str) -> str:
     roh = status.value if isinstance(status, Bestandteilstatus) else str(status)
     return {
-        "vollstaendig_zugeordnet": "Vollständig zugeordnet",
-        "teilweise_offen": "Teilweise offen",
-        "offen": "Offen",
-        "fachlich_unsicher": "Fachlich unsicher",
+        "vollstaendig_zugeordnet": "✓ Vollständig zugeordnet",
+        "teilweise_offen": "◐ Teilweise offen",
+        "offen": "○ Offen",
+        "fachlich_unsicher": "⚠ Fachlich unsicher",
     }.get(roh, roh)
 
 
@@ -143,19 +143,8 @@ def _tabelle_anzeigen(zeilen: list[dict[str, str]]) -> None:
         ],
     )
 
-    def hervorheben(zeile: pd.Series) -> list[str]:
-        farbe = (
-            "background-color: #d1e7dd"
-            if zeile["Status"] == "Vollständig zugeordnet"
-            else "background-color: #fff3cd"
-            if zeile["Status"] == "Teilweise offen"
-            else "background-color: #f8d7da"
-            if zeile["Status"] in {"Offen", "Fachlich unsicher"}
-            else ""
-        )
-        return [farbe] * len(zeile)
-
-    st.dataframe(tabelle.style.apply(hervorheben, axis=1), hide_index=True, width="stretch")
+    # Keine festen Hintergrundfarben: Statussymbole bleiben in Light und Dark Mode lesbar.
+    st.dataframe(tabelle, hide_index=True, width="stretch")
 
 
 def _details_anzeigen(vorschau: Modellableitungsvorschau) -> None:
@@ -364,6 +353,34 @@ def _gespeicherte_ableitung(
         f"{ableitung.o_id}.o.json",
         "application/json",
     )
+    if st.button("Hinweise und Unsicherheiten bearbeiten", width="stretch"):
+        fingerabdruck = ableitung.eingabefingerabdruck
+        unsicher: list[str] = []
+        for eintrag in offene:
+            bestandteil_id = str(eintrag.get("bestandteil_id", ""))
+            hinweis = str(eintrag.get("anwenderhinweis", ""))
+            if eintrag.get("kennzeichnungsherkunft") == "systematisch_erkannt":
+                basis_key = f"schritt8_{fingerabdruck}_{eintrag.get('offener_eintrag_id', '')}"
+                st.session_state[f"{basis_key}_hinweis_sichtbar"] = bool(hinweis)
+                st.session_state[f"{basis_key}_anwenderhinweis"] = hinweis
+            elif eintrag.get("kennzeichnungsherkunft") == "menschlich_markiert":
+                unsicher.append(bestandteil_id)
+                st.session_state[
+                    f"schritt8_{fingerabdruck}_{bestandteil_id}_unsicherheitshinweis"
+                ] = hinweis
+        st.session_state[f"schritt8_{fingerabdruck}_unsicher"] = unsicher
+        for schluessel in (
+            "aktuelle_modellableitungs_id",
+            "aktuelle_k_id",
+            "aktuelle_o_id",
+            "aktuelle_validierungslauf_id",
+            "aktuelle_k_stern_id",
+            "schritt10_ausgabe",
+            "schritt10_ausgabe_signatur",
+            "schritt10_html_medienreferenz",
+        ):
+            st.session_state.pop(schluessel, None)
+        st.rerun()
     with st.expander("Technische Details", expanded=False):
         st.json(
             {
