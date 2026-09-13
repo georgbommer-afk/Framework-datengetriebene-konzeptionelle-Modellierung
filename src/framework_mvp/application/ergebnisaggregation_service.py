@@ -1194,9 +1194,7 @@ class ErgebnisaggregationService:
             self._transformationen, "regelbasierte_abstraktionen_laden", None
         )
         etl_abstraktionen = (
-            abstraktionen_laden(basis.zwischendatensatz)
-            if callable(abstraktionen_laden)
-            else ()
+            abstraktionen_laden(basis.zwischendatensatz) if callable(abstraktionen_laden) else ()
         )
         return {
             "artefaktversion": AG_ARTEFAKTVERSION,
@@ -1401,9 +1399,7 @@ class ErgebnisaggregationService:
             if not isinstance(referenz, dict) or not referenz.get("relativer_pfad"):
                 continue
             try:
-                details[name] = json.loads(
-                    self._artefakte.lesen(str(referenz["relativer_pfad"]))
-                )
+                details[name] = json.loads(self._artefakte.lesen(str(referenz["relativer_pfad"])))
             except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as fehler:
                 raise Importintegritaetsfehler(
                     f"Das gespeicherte Detailergebnis {schluessel} ist ungültig."

@@ -77,23 +77,21 @@ def _normalisieren(wert: Any) -> Any:
         return [_normalisieren(inhalt) for inhalt in wert]
     return wert
 
+
 REPORT_LIST_LIMIT = 20
+REPORT_RESSOURCEN_JE_AKTIVITAET_LIMIT = 10
+
 
 def _reportwert_begrenzen(wert: Any) -> Any:
     """Begrenzt große Listen ausschließlich für die Reportdarstellung."""
     if isinstance(wert, Mapping):
-        return {
-            str(name): _reportwert_begrenzen(inhalt)
-            for name, inhalt in wert.items()
-        }
+        return {str(name): _reportwert_begrenzen(inhalt) for name, inhalt in wert.items()}
 
     if isinstance(wert, (list, tuple, set, frozenset)):
-        return [
-            _reportwert_begrenzen(inhalt)
-            for inhalt in list(wert)[:REPORT_LIST_LIMIT]
-        ]
+        return [_reportwert_begrenzen(inhalt) for inhalt in list(wert)[:REPORT_LIST_LIMIT]]
 
     return _normalisieren(wert)
+
 
 def _anzeigetext(wert: Any) -> str:
     """Liefert nur für ausdrücklich bekannte Codes eine lesbare Bezeichnung."""
@@ -324,6 +322,23 @@ def _manuelle_ressourcenzuordnungen(
             for zuordnung in zuordnungen
             if isinstance(zuordnung, Mapping)
         )
+    return ergebnis
+
+
+def _ressourcenzuordnungen_fuer_anzeige(wert: Any) -> list[dict[str, Any]]:
+    """Verdichtet nur die Reportdarstellung, ohne die A_G-Zuordnung zu verändern."""
+    ergebnis: list[dict[str, Any]] = []
+    for zuordnung in _listenwert(wert):
+        if not isinstance(zuordnung, Mapping):
+            continue
+        normalisiert = cast(dict[str, Any], _normalisieren(zuordnung))
+        ressourcen = _listenwert(zuordnung.get("ressourcen", []))
+        normalisiert["ressourcen"] = ressourcen[:REPORT_RESSOURCEN_JE_AKTIVITAET_LIMIT]
+        normalisiert["weitere_ressourcen"] = max(
+            len(ressourcen) - REPORT_RESSOURCEN_JE_AKTIVITAET_LIMIT,
+            0,
+        )
+        ergebnis.append(normalisiert)
     return ergebnis
 
 
@@ -680,6 +695,13 @@ def build_report_data(
         gesamtvalidierung = {}
 
     status = gesamtvalidierung.get("status")
+    aktivitaet_ressourcen = _listenwert(
+        ressourcenanalyse.get(
+            "zuordnungen",
+            event_log_ressourcen.get("aktivitaet_ressourcen", []),
+        )
+    )[:REPORT_LIST_LIMIT]
+    manuelle_aktivitaet_ressourcen = _manuelle_ressourcenzuordnungen(ressourcen)
 
     return {
         "report_data_version": REPORT_DATA_VERSION,
@@ -814,35 +836,22 @@ def build_report_data(
         "ressourcen": {
             **_abschnitt_metadaten(k_stern, ressourcen),
             "systemressourcen": _normalisieren(systemressourcen),
-
             "event_log_ressourcen": _listenwert(
-                zugeordnete_ressourcen
-                or event_log_ressourcen.get("eindeutige_werte", [])
+                zugeordnete_ressourcen or event_log_ressourcen.get("eindeutige_werte", [])
             )[:REPORT_LIST_LIMIT],
-
             "ressourcenattribut": _normalisieren(
-                ressourcenanalyse.get("quellspalte")
-                or event_log_ressourcen.get("attribut")
+                ressourcenanalyse.get("quellspalte") or event_log_ressourcen.get("attribut")
             ),
-
-            "aktivitaet_ressourcen": _listenwert(
-                ressourcenanalyse.get(
-                    "zuordnungen",
-                    event_log_ressourcen.get("aktivitaet_ressourcen", []),
-                )
-            )[:REPORT_LIST_LIMIT],
-
-            "zuordnungsmodus": _normalisieren(
-                ressourcenanalyse.get("modus")
+            "aktivitaet_ressourcen": aktivitaet_ressourcen,
+            "aktivitaet_ressourcen_anzeige": _ressourcenzuordnungen_fuer_anzeige(
+                aktivitaet_ressourcen
             ),
-            "zuordnungsherkunft": _normalisieren(
-                ressourcenanalyse.get("herkunft")
-            ),
-            "zuordnungsbegruendung": _normalisieren(
-                ressourcenanalyse.get("begruendung")
-            ),
-            "manuelle_aktivitaet_ressourcen": _manuelle_ressourcenzuordnungen(
-                ressourcen
+            "zuordnungsmodus": _normalisieren(ressourcenanalyse.get("modus")),
+            "zuordnungsherkunft": _normalisieren(ressourcenanalyse.get("herkunft")),
+            "zuordnungsbegruendung": _normalisieren(ressourcenanalyse.get("begruendung")),
+            "manuelle_aktivitaet_ressourcen": manuelle_aktivitaet_ressourcen,
+            "manuelle_aktivitaet_ressourcen_anzeige": (
+                _ressourcenzuordnungen_fuer_anzeige(manuelle_aktivitaet_ressourcen)
             ),
             "ressourcenbezogene_kpis": [
                 _kpi_aufbereiten(wert)

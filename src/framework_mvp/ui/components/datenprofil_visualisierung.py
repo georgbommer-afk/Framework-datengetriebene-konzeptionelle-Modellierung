@@ -263,9 +263,7 @@ def _kategoriale_details(profil: Spaltenprofil, diagramm: SpaltenDiagrammdaten) 
     st.subheader("Häufigkeitsverteilung")
     kennzahlen = st.columns(3)
     kennzahlen[0].metric("Gültige reguläre Werte", kategorial.gueltige_werte)
-    kennzahlen[1].metric(
-        "Eindeutige reguläre Ausprägungen", kategorial.eindeutige_auspraegungen
-    )
+    kennzahlen[1].metric("Eindeutige reguläre Ausprägungen", kategorial.eindeutige_auspraegungen)
     kennzahlen[2].metric("Häufigster Wert (Modus)", kategorial.haeufigster_wert or "–")
     st.write(
         f"Gültige reguläre Werte: **{kategorial.gueltige_werte:,}** · "
@@ -442,13 +440,10 @@ def zeige_indikatorbedingungen(
                     f"{_operatorbezeichnung(auswertung.operator)} "
                     f"**{auswertung.vergleichswert}**"
                 )
-                inhalt.markdown(
-                    f"Ergebnis: **{auswertung.absolute_haeufigkeit:,} Beobachtungen**"
-                )
+                inhalt.markdown(f"Ergebnis: **{auswertung.absolute_haeufigkeit:,} Beobachtungen**")
                 inhalt.markdown(f"$n_B = {auswertung.absolute_haeufigkeit:,}$")
                 inhalt.caption(
-                    "Auswertbare reguläre Beobachtungen: "
-                    f"{auswertung.auswertbare_beobachtungen:,}"
+                    f"Auswertbare reguläre Beobachtungen: {auswertung.auswertbare_beobachtungen:,}"
                 )
                 if bearbeitbar and aktion.button(
                     "Entfernen",

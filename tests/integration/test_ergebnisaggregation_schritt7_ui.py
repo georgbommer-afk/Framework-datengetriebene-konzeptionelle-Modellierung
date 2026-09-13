@@ -162,7 +162,7 @@ def test_r_profilkennzahlen_werden_fachlich_statt_als_technische_ids_angezeigt()
     optionen = "\n".join(str(wert) for wert in auswahl.options)
     assert "Datensatz: Produktionsdaten" in optionen
     assert "Spalte: befriedigt" in optionen
-    assert "Absolute Häufigkeit eines Indikators" in optionen
+    assert "Summe der Indikatorfunktion (absolute Häufigkeit)" in optionen
     assert "befriedigt = ja" in optionen
     assert "Wert: 1" in optionen
     assert "profilkennzahl:befriedigt-ja" not in optionen
@@ -185,18 +185,14 @@ def test_unvollstaendige_ressourcen_zeigen_kompakte_manuelle_tabelle() -> None:
         "Offen / nicht bekannt",
     ]
     assert not next(
-        wert
-        for wert in app.button
-        if wert.label == "Ergebnisaggregation berechnen und speichern"
+        wert for wert in app.button if wert.label == "Ergebnisaggregation berechnen und speichern"
     ).disabled
 
 
 def test_a_g_speichern_setzt_id_uebergabe_und_zeigt_ergebnis() -> None:
     app = _app()
     next(
-        wert
-        for wert in app.button
-        if wert.label == "Ergebnisaggregation berechnen und speichern"
+        wert for wert in app.button if wert.label == "Ergebnisaggregation berechnen und speichern"
     ).click().run()
 
     assert app.session_state["aktuelle_aggregations_id"] == ("66666666-6666-6666-6666-666666666666")
@@ -218,9 +214,7 @@ def test_unveraenderte_a_g_konfiguration_bewahrt_aktive_folgeartefakte() -> None
     app = app.run()
 
     next(
-        wert
-        for wert in app.button
-        if wert.label == "Ergebnisaggregation berechnen und speichern"
+        wert for wert in app.button if wert.label == "Ergebnisaggregation berechnen und speichern"
     ).click().run()
 
     assert app.session_state["aktuelle_aggregations_id"] == alte_ag
@@ -247,9 +241,7 @@ def test_geaenderte_a_g_konfiguration_loest_folgeartefakte_ohne_auto_navigation(
     app = app.run()
 
     next(
-        wert
-        for wert in app.button
-        if wert.label == "Ergebnisaggregation berechnen und speichern"
+        wert for wert in app.button if wert.label == "Ergebnisaggregation berechnen und speichern"
     ).click().run()
 
     assert app.session_state["aktuelle_aggregations_id"] == ("66666666-6666-6666-6666-666666666666")

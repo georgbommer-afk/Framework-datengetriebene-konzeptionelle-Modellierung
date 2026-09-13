@@ -2,6 +2,7 @@
 
 from dataclasses import asdict
 from datetime import UTC, datetime
+from typing import cast
 from uuid import uuid4
 
 import pandas as pd
@@ -23,6 +24,7 @@ from framework_mvp.domain.models import (
     Transformationsplan,
     Transformationsschritt,
     Wertevergleichsart,
+    Zwischendatensatz,
 )
 
 
@@ -206,6 +208,56 @@ def test_regelbasierte_abstraktion_ueberschreibt_die_quellspalte(
     assert list(ergebnis.daten.columns) == ["ort"]
 
 
+def test_regelbasierte_abstraktion_ueberschreibt_mehrere_quellspalten_in_einem_schritt() -> None:
+    daten = pd.DataFrame(
+        {
+            "Von": ["HRL-04-A", "bleibt", "HRL-04-B"],
+            "Zu": ["HRL-04-X", "HRL-04-Y", "bleibt"],
+        }
+    )
+    schritt = _schritt(
+        Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN,
+        ("Von", "Zu"),
+        {
+            "vergleichsart": Wertevergleichsart.BEGINNT_MIT.value,
+            "suchwert": "HRL-04-",
+            "ersatzwert": "HRL-04",
+            "zielmodus": "Bestehende Spalte überschreiben",
+        },
+    )
+
+    ergebnis = fuehre_transformationsplan_aus(daten, _plan(schritt))
+
+    assert ergebnis.daten.to_dict("list") == {
+        "Von": ["HRL-04", "bleibt", "HRL-04"],
+        "Zu": ["HRL-04", "HRL-04", "bleibt"],
+    }
+    assert ergebnis.historie[0].betroffene_spalten == ("Von", "Zu")
+    assert ergebnis.historie[0].ergebnis_oder_warnung == (
+        "4 Werte regelbasiert abstrahiert (Von: 2 Treffer; Zu: 2 Treffer)"
+    )
+
+
+def test_mehrspaltige_abstraktion_darf_nicht_in_eine_einzelne_neue_spalte_schreiben() -> None:
+    schritt = _schritt(
+        Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN,
+        ("Von", "Zu"),
+        {
+            "vergleichsart": Wertevergleichsart.BEGINNT_MIT.value,
+            "suchwert": "HRL-04-",
+            "ersatzwert": "HRL-04",
+            "zielmodus": "Neue Spalte erstellen",
+            "zielspalte": "Lager_aggregiert",
+        },
+    )
+
+    with pytest.raises(Domaenenfehler, match="genau eine ausgewählte Quellspalte"):
+        fuehre_transformationsplan_aus(
+            pd.DataFrame({"Von": ["HRL-04-A"], "Zu": ["HRL-04-B"]}),
+            _plan(schritt),
+        )
+
+
 def test_regelbasierte_abstraktion_schreibt_in_neue_spalte_und_bewahrt_original() -> None:
     daten = pd.DataFrame({"Von": ["HRL-04-024-21-10", "SRM-01", None]})
     schritt = _schritt(
@@ -384,7 +436,7 @@ def test_t_dokumentiert_nur_ausgefuehrte_regelbasierte_abstraktionen(
     }
     monkeypatch.setattr(service, "_transformationsartefakt", lambda _: artefakt)
 
-    assert service.regelbasierte_abstraktionen_laden(object()) == (
+    assert service.regelbasierte_abstraktionen_laden(cast(Zwischendatensatz, object())) == (
         {
             "quellspalte": "Von",
             "vergleichsart": "Beginnt mit",
@@ -394,6 +446,54 @@ def test_t_dokumentiert_nur_ausgefuehrte_regelbasierte_abstraktionen(
             "zielspalte": "Von_aggregiert",
             "betroffene_beobachtungen": 185,
             "originalwerte_erhalten": True,
+        },
+    )
+
+
+def test_t_dokumentiert_mehrspaltige_abstraktion_mit_treffern_je_spalte(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = object.__new__(TransformationsService)
+    artefakt = {
+        "transformationsplan": {
+            "schritte": [
+                {
+                    "typ": Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN.value,
+                    "betroffene_spalten": ["Von", "Zu"],
+                    "parameter_json": (
+                        '{"vergleichsart":"Beginnt mit","suchwert":"HRL-04-",'
+                        '"ersatzwert":"HRL-04",'
+                        '"zielmodus":"Bestehende Spalte überschreiben"}'
+                    ),
+                    "reihenfolge": 1,
+                    "aktiviert": True,
+                }
+            ]
+        },
+        "transformationshistorie": [
+            {
+                "schritt": 1,
+                "ergebnis_oder_warnung": (
+                    "4 Werte regelbasiert abstrahiert (Von: 2 Treffer; Zu: 2 Treffer)"
+                ),
+            }
+        ],
+    }
+    monkeypatch.setattr(service, "_transformationsartefakt", lambda _: artefakt)
+
+    assert service.regelbasierte_abstraktionen_laden(cast(Zwischendatensatz, object())) == (
+        {
+            "quellspalte": "Von",
+            "vergleichsart": "Beginnt mit",
+            "suchwert_muster": "HRL-04-",
+            "vorher_muster": "HRL-04-*",
+            "abstraktionswert": "HRL-04",
+            "zielspalte": "Von",
+            "betroffene_beobachtungen": 4,
+            "originalwerte_erhalten": False,
+            "quellspalten": ["Von", "Zu"],
+            "zielspalten": ["Von", "Zu"],
+            "treffer_nach_spalte": {"Von": 2, "Zu": 2},
         },
     )
 

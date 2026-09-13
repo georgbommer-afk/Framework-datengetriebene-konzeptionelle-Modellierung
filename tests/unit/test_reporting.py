@@ -212,9 +212,9 @@ def test_build_report_data_projiziert_neue_felder_ohne_k_stern_mutation() -> Non
     assert report["ressourcen"]["zuordnungsmodus"] == "manuell"
     assert report["ressourcen"]["zuordnungsherkunft"].endswith("Schritt 7")
     assert (
-        report["daten"]["zeitbezogene_datenauswahl"]["zwischenankunftszeiten"][0][
-            "statistik"
-        ]["median_sekunden"]
+        report["daten"]["zeitbezogene_datenauswahl"]["zwischenankunftszeiten"][0]["statistik"][
+            "median_sekunden"
+        ]
         == 120.0
     )
     assert len(report["modellbestandteile"]) == 16
@@ -223,7 +223,22 @@ def test_build_report_data_projiziert_neue_felder_ohne_k_stern_mutation() -> Non
 def test_etl_abstraktionen_sind_strukturiert_und_in_html_und_pdf_ausgebbar(
     tmp_path: Path,
 ) -> None:
-    report = build_report_data(_k_stern())
+    k_stern = _k_stern()
+    bestandteile = cast(list[dict[str, Any]], k_stern["modellbestandteile"])
+    vereinfachungen = next(
+        wert for wert in bestandteile if wert["bestandteil_id"] == "vereinfachungen"
+    )
+    abstraktion = vereinfachungen["urspruenglicher_bestandteil"]["informationen"][0]["wert"][0]
+    abstraktion.update(
+        {
+            "quellspalten": ["Von", "Zu"],
+            "zielspalten": ["Von", "Zu"],
+            "treffer_nach_spalte": {"Von": 185, "Zu": 204},
+            "betroffene_beobachtungen": 389,
+            "originalwerte_erhalten": False,
+        }
+    )
+    report = build_report_data(k_stern)
 
     assert report["vereinfachungen"]["etl_abstraktionen"] == [
         {
@@ -233,27 +248,30 @@ def test_etl_abstraktionen_sind_strukturiert_und_in_html_und_pdf_ausgebbar(
             "vorher_muster": "HRL-04-*",
             "abstraktionswert": "HRL-04",
             "zielspalte": "Von_aggregiert",
-            "betroffene_beobachtungen": 185,
-            "originalwerte_erhalten": True,
+            "betroffene_beobachtungen": 389,
+            "originalwerte_erhalten": False,
+            "quellspalten": ["Von", "Zu"],
+            "zielspalten": ["Von", "Zu"],
+            "treffer_nach_spalte": {"Von": 185, "Zu": 204},
         }
     ]
     html = render_report_html(report)
     assert "Regelbasierte ETL-Abstraktionen" in html
     assert "HRL-04-*" in html
-    assert "185 Beobachtungen" in html
+    assert "Von, Zu" in html
+    assert "389 Beobachtungen" in html
+    assert "Von: 185" in html
+    assert "Zu: 204" in html
 
     ziel = render_report_pdf(report, tmp_path / "abstraktionen.pdf")
     assert ziel.read_bytes().startswith(b"%PDF-")
 
 
-def test_report_nutzt_potenzielle_wartezeiten_aus_datenauswahl_ohne_warteschlange(
-) -> None:
+def test_report_nutzt_potenzielle_wartezeiten_aus_datenauswahl_ohne_warteschlange() -> None:
     k_stern = _k_stern()
     bestandteile = cast(list[dict[str, Any]], k_stern["modellbestandteile"])
     warteschlangen = next(
-        wert
-        for wert in bestandteile
-        if wert["bestandteil_id"] == "warteschlangen"
+        wert for wert in bestandteile if wert["bestandteil_id"] == "warteschlangen"
     )
     warteschlangen["urspruenglicher_bestandteil"]["informationen"] = []
 
@@ -310,10 +328,13 @@ def test_xlsx_renderer_erzeugt_zehn_geordnete_lesbare_arbeitsblaetter() -> None:
     assert "Minimum" not in kopfwerte and "Maximum" not in kopfwerte
     statistikwerte = [
         zeile
-        for zeile in datenblatt.iter_rows(min_row=kopfzeile[0].row + 1, values_only=False)
+        for zeile in datenblatt.iter_rows(
+            min_row=cast(int, kopfzeile[0].row) + 1,
+            values_only=False,
+        )
         if zeile[0].value in {"Zwischenankunftszeit", "Bearbeitungszeit", "Wartezeit"}
     ]
-    assert {zeile[0].value for zeile in statistikwerte} == {
+    assert {cast(str, zeile[0].value) for zeile in statistikwerte} == {
         "Zwischenankunftszeit",
         "Bearbeitungszeit",
         "Wartezeit",
@@ -321,12 +342,15 @@ def test_xlsx_renderer_erzeugt_zehn_geordnete_lesbare_arbeitsblaetter() -> None:
     assert all(isinstance(zeile[2].value, int) for zeile in statistikwerte)
     assert all(isinstance(zeile[3].value, Real) for zeile in statistikwerte)
     assert all(zeile[3].number_format == "0.00" for zeile in statistikwerte)
-    assert len(
-        {
-            datenblatt.column_dimensions[spalte].width
-            for spalte in ("A", "B", "C", "D", "E", "F", "G")
-        }
-    ) > 2
+    assert (
+        len(
+            {
+                cast(float, datenblatt.column_dimensions[spalte].width)
+                for spalte in ("A", "B", "C", "D", "E", "F", "G")
+            }
+        )
+        > 2
+    )
 
 
 def test_xlsx_renderer_bettet_prozessgrafik_als_png_ein(
@@ -352,7 +376,7 @@ def test_xlsx_renderer_bettet_prozessgrafik_als_png_ein(
     inhalt = render_report_xlsx(resolve_report_assets(report, workspace_root=tmp_path))
     arbeitsmappe = load_workbook(BytesIO(inhalt))
 
-    assert len(arbeitsmappe["Prozessmodell"]._images) == 1
+    assert len(arbeitsmappe["Prozessmodell"]._images) == 1  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_aelteres_k_stern_ohne_optionale_felder_bleibt_renderbar(tmp_path: Path) -> None:
@@ -385,6 +409,48 @@ def test_automatische_und_manuelle_ressourcen_werden_gleichwertig_mit_ursprung_b
     )
     assert automatisch["ressourcen"]["zuordnungsmodus"] == "automatisch"
     assert automatisch["ressourcen"]["zuordnungsherkunft"].startswith("kanonische")
+
+
+def test_ressourcenanzeige_begrenzt_50_werte_ohne_die_a_g_projektion_zu_verkuerzen(
+    tmp_path: Path,
+) -> None:
+    k_stern = _k_stern()
+    ressourcennamen = [
+        f"Kapazitaet-{index:02d}-mit-sehr-langer-eindeutiger-Bezeichnung-{'x' * 48}"
+        for index in range(1, 51)
+    ]
+    bestandteile = cast(list[dict[str, Any]], k_stern["modellbestandteile"])
+    ressourcen = next(wert for wert in bestandteile if wert["bestandteil_id"] == "ressourcen")
+    information = ressourcen["urspruenglicher_bestandteil"]["informationen"][0]
+    information["wert"]["zuordnungen"] = [
+        {
+            "aktivitaet": "Aktivitaet-mit-sehr-langer-Bezeichnung",
+            "ressourcen": ressourcennamen,
+        }
+    ]
+    vorher = copy.deepcopy(k_stern)
+
+    report = build_report_data(k_stern)
+
+    assert k_stern == vorher
+    assert report["ressourcen"]["aktivitaet_ressourcen"][0]["ressourcen"] == ressourcennamen
+    anzeige = report["ressourcen"]["aktivitaet_ressourcen_anzeige"][0]
+    assert anzeige["ressourcen"] == ressourcennamen[:10]
+    assert anzeige["weitere_ressourcen"] == 40
+    html = render_report_html(report)
+    zuordnung_html = html.split("<h2>Aktivität-Ressourcen-Zuordnungen</h2>", 1)[1].split(
+        "</table>", 1
+    )[0]
+    assert ressourcennamen[9] in zuordnung_html
+    assert ressourcennamen[10] not in zuordnung_html
+    assert "+40 weitere" in zuordnung_html
+
+    ziel = render_report_pdf(report, tmp_path / "ressourcen-50.pdf")
+    css = (template_verzeichnis() / "report_pdf.css").read_text(encoding="utf-8")
+    assert ziel.read_bytes().startswith(b"%PDF-")
+    assert ".pdf-resource-names" in css
+    assert "overflow-wrap: anywhere" in css
+    assert "min-width: 0" in css
 
 
 def test_build_report_data_weist_unvollstaendige_struktur_kontrolliert_ab() -> None:

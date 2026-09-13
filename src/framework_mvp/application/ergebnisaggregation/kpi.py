@@ -362,7 +362,12 @@ _KOMPATIBLE_PROFILKENNZAHLEN: dict[Operandentyp, frozenset[Profilkennzahltyp]] =
             Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR,
         }
     ),
-    Operandentyp.SUMME: frozenset({Profilkennzahltyp.SUMME}),
+    Operandentyp.SUMME: frozenset(
+        {
+            Profilkennzahltyp.SUMME,
+            Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR,
+        }
+    ),
     Operandentyp.MITTELWERT: frozenset({Profilkennzahltyp.ARITHMETISCHES_MITTEL}),
     Operandentyp.MESSWERTE: frozenset(),
     Operandentyp.ZEITDIFFERENZ_SUMME: frozenset({Profilkennzahltyp.ZEITDIFFERENZ_SUMME}),

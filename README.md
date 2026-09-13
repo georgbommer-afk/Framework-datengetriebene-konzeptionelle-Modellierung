@@ -90,16 +90,24 @@ Transformationspläne unterstützen:
 
 - Datentyp konvertieren,
 - Werte ersetzen,
+- Werte regelbasiert abstrahieren, beim Überschreiben auch in mehreren Quellspalten,
 - exakte Tupel-Duplikate entfernen,
 - vollständig leere Spalten entfernen,
 - Zeilen anhand expliziter Text-, Leerwert-, Zahlen-, Zeit- oder Mengenbedingungen löschen,
 - ein festes Präfix oder Suffix entfernen,
 - Text zwischen zwei Begrenzern extrahieren.
 
+Jede Planänderung wird gespeichert und die Vorschau erneut aus Raw-Daten und dem vollständigen
+Plan berechnet. Einzelne Schritte können entfernt werden; die verbleibende Kette wird dabei neu
+nummeriert. Während dieser Bearbeitung entsteht kein physischer T-Snapshot und eine bereits
+aktive Folgeartefaktkette bleibt gültig. Erst der explizite Abschluss von Schritt 2 persistiert
+genau ein finales T. Ist dessen Datenprüfsumme unverändert, werden T und Folgeartefakte
+wiederverwendet; nur ein tatsächlich geändertes Ergebnis ersetzt T und invalidiert die bisherige
+Folgekette.
+
 Die Textbereinigung verwendet für Live-Vorschau und tatsächliche Transformation dieselbe reine
-Funktion. Die Vorschau zeigt unterschiedliche, nichtleere Original- und Ergebniswerte, verändert
-aber weder T noch den Transformationsplan. Nichttreffer bleiben unverändert. Lange Zellinhalte
-werden nur für die Darstellung gekürzt.
+Funktion. Die Vorschau zeigt unterschiedliche, nichtleere Original- und Ergebniswerte.
+Nichttreffer bleiben unverändert. Lange Zellinhalte werden nur für die Darstellung gekürzt.
 
 Mehrere separat aufbereitete Datensätze können kontrolliert per LEFT-, RIGHT-, INNER- oder
 OUTER-Join verknüpft werden. Vor der Ausführung werden Kardinalität, Trefferquote, erwartete

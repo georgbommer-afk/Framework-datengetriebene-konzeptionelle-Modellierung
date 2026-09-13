@@ -1,4 +1,4 @@
-"""Nachweise der sofort persistierten, inkrementellen Transformationskette."""
+"""Nachweise des persistierten Plans und genau eines finalen T aus Schritt 2."""
 
 import json
 from pathlib import Path
@@ -6,9 +6,14 @@ from uuid import uuid4
 
 import pandas as pd
 
+from framework_mvp.application.aktive_lineage_service import (
+    AktiveLineageService,
+    LineageEndpunkt,
+)
 from framework_mvp.application.datenimport_service import DatenimportService
 from framework_mvp.application.datenquelle_service import DatenquelleService
 from framework_mvp.application.importvorgang_service import ImportvorgangService
+from framework_mvp.application.loesch_service import LoeschService
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.application.transformations_service import TransformationsService
 from framework_mvp.domain.models import (
@@ -31,6 +36,9 @@ from framework_mvp.infrastructure.persistence.sqlite_etl_repository import SQLit
 from framework_mvp.infrastructure.persistence.sqlite_importvorgang_repository import (
     SQLiteImportvorgangRepository,
 )
+from framework_mvp.infrastructure.persistence.sqlite_loesch_repository import (
+    SQLiteLoeschRepository,
+)
 from framework_mvp.infrastructure.persistence.sqlite_projekt_repository import (
     SQLiteProjektRepository,
 )
@@ -42,7 +50,7 @@ def _vorbereiten(tmp_path: Path) -> tuple[TransformationsService, Transformation
     workspace = WorkspaceKonfiguration.ermitteln(tmp_path / "workspace")
     projekt_repository = SQLiteProjektRepository(datenbank)
     projekt = ProjektService(projekt_repository).projekt_anlegen(
-        bezeichnung="Inkrementelle ETL",
+        bezeichnung="Finale ETL",
         untersuchungsauftrag=Untersuchungsauftrag("", "", Systemtyp.KOMBINIERT, ""),
     )
     quellen_repository = SQLiteDatenquelleRepository(datenbank)
@@ -60,7 +68,7 @@ def _vorbereiten(tmp_path: Path) -> tuple[TransformationsService, Transformation
         quellen_repository,
         artefakte,
     )
-    dateiinhalt = b"id;status\n1;alt\n2;alt\n3;bleibt\n"
+    dateiinhalt = b"id;status;von;zu\n1;alt;HRL-04-A;HRL-04-X\n2;alt;B;HRL-04-Y\n3;bleibt;C;D\n"
     parameter = CsvImportparameter(trennzeichenwahl=Trennzeichenwahl.SEMIKOLON)
     metadaten = datenimport.datei_pruefen("status.csv", dateiinhalt)
     vorschau = datenimport.vorschau_erstellen(dateiinhalt, parameter)
@@ -75,162 +83,235 @@ def _vorbereiten(tmp_path: Path) -> tuple[TransformationsService, Transformation
         profil=datenimport.profil_erstellen(vorschau.vollstaendige_tabelle).profil,
     )
     service = TransformationsService(
-        SQLiteETLRepository(datenbank), importe, datenimport, artefakte
+        SQLiteETLRepository(datenbank),
+        importe,
+        datenimport,
+        artefakte,
+        AktiveLineageService(datenbank),
+        LoeschService(SQLiteLoeschRepository(datenbank), workspace),
     )
     return service, Transformationsplan.neu(projekt.projekt_id, (importvorgang.import_id,))
 
 
-def test_jede_aktion_baut_auf_letztem_zwischenstand_auf_und_speichert_lineage(
+def _schritt(
+    art: Transformationsart,
+    spalten: tuple[str, ...],
+    parameter: dict[str, object],
+    beschreibung: str,
+) -> Transformationsschritt:
+    return Transformationsschritt.neu(
+        typ=art,
+        betroffene_spalten=spalten,
+        parameter=parameter,
+        reihenfolge=1,
+        beschreibung=beschreibung,
+    )
+
+
+def test_drei_planoperationen_erzeugen_vorschau_aber_erst_beim_abschluss_ein_t(
     tmp_path: Path,
 ) -> None:
     service, plan = _vorbereiten(tmp_path)
-    ersetzen = Transformationsschritt.neu(
-        typ=Transformationsart.WERTE_ERSETZEN,
-        betroffene_spalten=("status",),
-        parameter={"gesuchte_werte": ["alt"], "ersatzwert": "neu"},
-        reihenfolge=1,
-        beschreibung="Status alt durch neu ersetzen",
-    )
-    plan, erstes_ergebnis, erster_datensatz = service.transformation_anwenden(
-        plan, ersetzen, uuid4()
-    )
-    assert erstes_ergebnis.daten["status"].tolist() == ["neu", "neu", "bleibt"]
-
-    rohzugriffe = 0
-    original_laden = service.import_dataframe_laden
-
-    def mit_zaehler(import_id):  # type: ignore[no-untyped-def]
-        nonlocal rohzugriffe
-        rohzugriffe += 1
-        return original_laden(import_id)
-
-    service.import_dataframe_laden = mit_zaehler  # type: ignore[method-assign]
-    loeschen = Transformationsschritt.neu(
-        typ=Transformationsart.ZEILEN_LOESCHEN,
-        betroffene_spalten=("status",),
-        parameter={"operator": "gleich", "wert": "neu"},
-        reihenfolge=2,
-        beschreibung="Zeilen mit Status neu löschen",
-    )
-    plan, zweites_ergebnis, zweiter_datensatz = service.transformation_anwenden(
-        plan, loeschen, uuid4()
+    schritte = (
+        _schritt(
+            Transformationsart.WERTE_ERSETZEN,
+            ("status",),
+            {"gesuchte_werte": ["alt"], "ersatzwert": "neu"},
+            "Status ersetzen",
+        ),
+        _schritt(
+            Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN,
+            ("von", "zu"),
+            {
+                "vergleichsart": Wertevergleichsart.BEGINNT_MIT.value,
+                "suchwert": "HRL-04",
+                "ersatzwert": "HRL",
+                "zielmodus": "Bestehende Spalte überschreiben",
+            },
+            "Von und Zu abstrahieren",
+        ),
+        _schritt(
+            Transformationsart.ZEILEN_LOESCHEN,
+            ("status",),
+            {"operator": "gleich", "wert": "neu"},
+            "Neue Statuszeilen löschen",
+        ),
     )
 
-    assert rohzugriffe == 0
-    assert zweites_ergebnis.daten.to_dict("records") == [{"id": 3, "status": "bleibt"}]
-    assert zweiter_datensatz.zeilenanzahl == 1
-    assert zweiter_datensatz.spaltenanzahl == 2
-    assert service.neuester_plan_fuer_import(plan.projekt_id, plan.import_ids[0]) == plan
-    assert service.arbeitsstand_laden(plan)[0] == zweiter_datensatz
+    for schritt in schritte:
+        plan, ergebnis, datensatz = service.transformation_anwenden(plan, schritt)
+        assert datensatz is None
 
-    historie = service.transformationshistorie(plan)
-    assert [wert["reihenfolge"] for wert in historie] == [1, 2]
-    assert [wert["zeilen_nachher"] for wert in historie] == [3, 1]
-    assert all("id" not in " ".join(wert) for wert in historie)
+    assert len(plan.schritte) == 3
+    assert service.datensaetze_fuer_projekt(plan.projekt_id) == []
+    assert ergebnis.daten.to_dict("records") == [
+        {"id": 3, "status": "bleibt", "von": "C", "zu": "D"}
+    ]
 
+    abschluss = service.zwischendatensatz_abschliessen(plan)
+
+    assert not abschluss.datensatz_wiederverwendet
+    assert len(service.datensaetze_fuer_projekt(plan.projekt_id)) == 1
+    assert abschluss.datensatz.zeilenanzahl == 1
     lineage = json.loads(
-        service._artefakte.lesen(zweiter_datensatz.relativer_transformation_pfad)  # noqa: SLF001
+        service._artefakte.lesen(  # noqa: SLF001
+            abschluss.datensatz.relativer_transformation_pfad
+        )
     )
-    assert lineage["inkrementelle_lineage"]["eingabe_zwischendatensatz_id"] == str(
-        erster_datensatz.zwischendatensatz_id
-    )
-    assert len(lineage["transformationshistorie"]) == 2
-    assert lineage["ergebnisprofil"]["zeilen"] == 1
+    assert len(lineage["transformationsplan"]["schritte"]) == 3
+    assert len(lineage["transformationshistorie"]) == 3
 
 
-def test_arbeitsstand_bleibt_ueber_neue_serviceinstanz_vollstaendig(tmp_path: Path) -> None:
+def test_schritt_entfernen_nummeriert_neu_und_persistiert_kein_t(tmp_path: Path) -> None:
     service, plan = _vorbereiten(tmp_path)
-    schritt = Transformationsschritt.neu(
-        typ=Transformationsart.ZEILEN_LOESCHEN,
-        betroffene_spalten=("status",),
-        parameter={"operator": "enthält", "wert": "alt"},
-        reihenfolge=1,
-        beschreibung="Status enthält alt",
+    erster = _schritt(
+        Transformationsart.WERTE_ERSETZEN,
+        ("status",),
+        {"gesuchte_werte": ["alt"], "ersatzwert": "neu"},
+        "Status ersetzen",
     )
-    plan, _, datensatz = service.transformation_anwenden(plan, schritt, uuid4())
-
-    neu_geladener_plan = service.plan_laden(plan.transformationsplan_id)
-    assert neu_geladener_plan == plan
-    assert neu_geladener_plan is not None
-    geladen, daten = service.arbeitsstand_laden(neu_geladener_plan)
-    assert geladen == datensatz
-    pd.testing.assert_frame_equal(
-        daten.reset_index(drop=True),
-        pd.DataFrame({"id": [3], "status": ["bleibt"]}),
-        check_dtype=False,
+    zweiter = _schritt(
+        Transformationsart.WERTE_ERSETZEN,
+        ("von",),
+        {"gesuchte_werte": ["B"], "ersatzwert": "entfernt"},
+        "Zwischenschritt",
     )
-    assert len(service.transformationshistorie(neu_geladener_plan)) == 1
+    dritter = _schritt(
+        Transformationsart.ZEILEN_LOESCHEN,
+        ("status",),
+        {"operator": "gleich", "wert": "bleibt"},
+        "Restzeile löschen",
+    )
+    for schritt in (erster, zweiter, dritter):
+        plan, _, _ = service.transformation_anwenden(plan, schritt)
+
+    plan, ergebnis = service.schritt_entfernen_und_vorschau(
+        plan, plan.schritte[1].transformationsschritt_id
+    )
+
+    assert [wert.reihenfolge for wert in plan.schritte] == [1, 2]
+    assert [wert.beschreibung for wert in plan.schritte] == [
+        "Status ersetzen",
+        "Restzeile löschen",
+    ]
+    assert ergebnis.daten["status"].tolist() == ["neu", "neu"]
+    assert service.datensaetze_fuer_projekt(plan.projekt_id) == []
 
 
-def test_regelbasierte_wertersetzung_wird_persistiert_und_identisch_neu_berechnet(
+def test_plan_und_vorschau_bleiben_ueber_neue_serviceinstanz_reproduzierbar(
     tmp_path: Path,
 ) -> None:
     service, plan = _vorbereiten(tmp_path)
-    schritt = Transformationsschritt.neu(
-        typ=Transformationsart.WERTE_ERSETZEN,
-        betroffene_spalten=("status",),
-        parameter={
-            "vergleichsart": Wertevergleichsart.BEGINNT_MIT.value,
-            "suchwert": "al",
-            "ersatzwert": "ALT",
-            "zielmodus": "Neue Spalte erstellen",
-            "zielspalte": "status_gruppe",
-        },
-        reihenfolge=1,
-        beschreibung="Statusgruppe regelbasiert ableiten",
+    plan, erwartet, _ = service.transformation_anwenden(
+        plan,
+        _schritt(
+            Transformationsart.ZEILEN_LOESCHEN,
+            ("status",),
+            {"operator": "enthält", "wert": "alt"},
+            "Status enthält alt",
+        ),
     )
 
-    plan, angewendet, datensatz = service.transformation_anwenden(plan, schritt, uuid4())
     geladen = service.plan_laden(plan.transformationsplan_id)
-
     assert geladen == plan
     assert geladen is not None
-    assert geladen.schritte[0].parameter == schritt.parameter
-    neu_berechnet = service.vorschau(geladen)
-    pd.testing.assert_frame_equal(neu_berechnet.daten, angewendet.daten)
-    assert neu_berechnet.daten.to_dict("records") == [
-        {"id": 1, "status": "alt", "status_gruppe": "ALT"},
-        {"id": 2, "status": "alt", "status_gruppe": "ALT"},
-        {"id": 3, "status": "bleibt", "status_gruppe": "bleibt"},
-    ]
-    lineage = json.loads(
-        service._artefakte.lesen(datensatz.relativer_transformation_pfad)  # noqa: SLF001
+    assert service.arbeitsstand_laden(geladen)[0] is None
+    pd.testing.assert_frame_equal(service.vorschau(geladen).daten, erwartet.daten)
+    assert len(service.transformationshistorie(geladen)) == 1
+
+
+def test_identisches_finales_ergebnis_behaelt_t_und_downstream_lineage(tmp_path: Path) -> None:
+    service, plan = _vorbereiten(tmp_path)
+    erster_abschluss = service.zwischendatensatz_abschliessen(plan)
+    historischer_plan = Transformationsplan.neu(plan.projekt_id, plan.import_ids)
+    historischer_datensatz = service.zwischendatensatz_erzeugen(
+        historischer_plan,
+        service.vorschau(historischer_plan),
+        uuid4(),
+        aktivieren=False,
     )
-    parameter_json = lineage["transformationsplan"]["schritte"][0]["parameter_json"]
-    assert json.loads(parameter_json) == schritt.parameter
+    assert service._aktive_lineage is not None  # noqa: SLF001
+    mapping_id = uuid4()
+    service._aktive_lineage.aktivieren(  # noqa: SLF001
+        plan.projekt_id,
+        LineageEndpunkt.M,
+        {"aktuelle_mappingtabelle_id": mapping_id},
+    )
+    plan, _, _ = service.transformation_anwenden(
+        plan,
+        _schritt(
+            Transformationsart.WERTE_ERSETZEN,
+            ("status",),
+            {"gesuchte_werte": ["kommt nicht vor"], "ersatzwert": "neu"},
+            "Wirkungslose Ersetzung",
+        ),
+    )
+
+    abschluss = service.zwischendatensatz_abschliessen(
+        plan,
+        bisheriger_datensatz_id=erster_abschluss.datensatz.zwischendatensatz_id,
+    )
+    checkpoint = service._aktive_lineage.laden(plan.projekt_id)  # noqa: SLF001
+
+    assert abschluss.datensatz_wiederverwendet
+    assert abschluss.datensatz.zwischendatensatz_id == (
+        erster_abschluss.datensatz.zwischendatensatz_id
+    )
+    assert len(service.datensaetze_fuer_projekt(plan.projekt_id)) == 1
+    assert checkpoint is not None and checkpoint.endpunkt is LineageEndpunkt.M
+    assert checkpoint.referenzen["aktuelle_mappingtabelle_id"] == str(mapping_id)
+    assert abschluss.datensatz.transformationsplan_id == plan.transformationsplan_id
+    assert not service._artefakte.pfad(  # noqa: SLF001
+        historischer_datensatz.relativer_daten_pfad
+    ).exists()
 
 
-def test_neuer_schritt_ergaenzt_auch_einen_legacy_gesamtstand_in_der_historie(
+def test_geaendertes_finales_ergebnis_ersetzt_t_und_invalidiert_downstream(
     tmp_path: Path,
 ) -> None:
     service, plan = _vorbereiten(tmp_path)
-    erster_schritt = Transformationsschritt.neu(
-        typ=Transformationsart.ZEILEN_LOESCHEN,
-        betroffene_spalten=("status",),
-        parameter={"operator": "gleich", "wert": "alt"},
-        reihenfolge=1,
-        beschreibung="Status ist alt",
+    erster_abschluss = service.zwischendatensatz_abschliessen(plan)
+    historischer_plan = Transformationsplan.neu(plan.projekt_id, plan.import_ids)
+    historischer_datensatz = service.zwischendatensatz_erzeugen(
+        historischer_plan,
+        service.vorschau(historischer_plan),
+        uuid4(),
+        aktivieren=False,
     )
-    plan = service.schritt_hinzufuegen(plan, erster_schritt)
-    legacy_ergebnis = service.vorschau(plan)
-    service.zwischendatensatz_erzeugen(plan, legacy_ergebnis, uuid4())
-
-    zweiter_schritt = Transformationsschritt.neu(
-        typ=Transformationsart.TEXT_BEREINIGEN,
-        betroffene_spalten=("status",),
-        parameter={
-            "art": "Festen Präfix entfernen",
-            "praefix": "b",
-            "nichttreffer": "Originalwert beibehalten",
-        },
-        reihenfolge=2,
-        beschreibung="Präfix aus Status entfernen",
+    assert service._aktive_lineage is not None  # noqa: SLF001
+    service._aktive_lineage.aktivieren(  # noqa: SLF001
+        plan.projekt_id,
+        LineageEndpunkt.M,
+        {"aktuelle_mappingtabelle_id": uuid4()},
     )
-    plan, _, _ = service.transformation_anwenden(plan, zweiter_schritt, uuid4())
+    plan, _, _ = service.transformation_anwenden(
+        plan,
+        _schritt(
+            Transformationsart.ZEILEN_LOESCHEN,
+            ("status",),
+            {"operator": "gleich", "wert": "alt"},
+            "Alte Statuszeilen löschen",
+        ),
+    )
 
-    historie = service.transformationshistorie(plan)
-    assert [eintrag["reihenfolge"] for eintrag in historie] == [1, 2]
-    assert [eintrag["transformationsart"] for eintrag in historie] == [
-        "Zeilen anhand einer Bedingung löschen",
-        "Text bereinigen oder extrahieren",
-    ]
+    abschluss = service.zwischendatensatz_abschliessen(
+        plan,
+        bisheriger_datensatz_id=erster_abschluss.datensatz.zwischendatensatz_id,
+    )
+    checkpoint = service._aktive_lineage.laden(plan.projekt_id)  # noqa: SLF001
+
+    assert abschluss.daten_geaendert
+    assert abschluss.datensatz.zwischendatensatz_id != (
+        erster_abschluss.datensatz.zwischendatensatz_id
+    )
+    assert [
+        wert.zwischendatensatz_id for wert in service.datensaetze_fuer_projekt(plan.projekt_id)
+    ] == [abschluss.datensatz.zwischendatensatz_id]
+    assert checkpoint is not None and checkpoint.endpunkt is LineageEndpunkt.T
+    assert "aktuelle_mappingtabelle_id" not in checkpoint.referenzen
+    assert not service._artefakte.pfad(  # noqa: SLF001
+        erster_abschluss.datensatz.relativer_daten_pfad
+    ).exists()
+    assert not service._artefakte.pfad(  # noqa: SLF001
+        historischer_datensatz.relativer_daten_pfad
+    ).exists()

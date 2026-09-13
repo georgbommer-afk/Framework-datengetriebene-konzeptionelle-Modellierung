@@ -340,22 +340,17 @@ def test_etl_abstraktion_wird_aus_a_g_als_vereinfachung_uebernommen(tmp_path: Pa
         "betroffene_beobachtungen": 185,
         "originalwerte_erhalten": True,
     }
-    basis.a_g["strukturierte_ergebnisse"]["vereinfachungen"] = {
-        "etl_abstraktionen": [abstraktion]
-    }
+    basis.a_g["strukturierte_ergebnisse"]["vereinfachungen"] = {"etl_abstraktionen": [abstraktion]}
 
     bestandteile, _ = leite_modellbestandteile_ab(basis)
 
     vereinfachungen = next(
-        wert
-        for wert in bestandteile
-        if wert.bestandteil_id is ModellbestandteilId.VEREINFACHUNGEN
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.VEREINFACHUNGEN
     )
     etl = next(
         wert
         for wert in vereinfachungen.informationen
-        if wert.strukturreferenz
-        == "strukturierte_ergebnisse.vereinfachungen.etl_abstraktionen"
+        if wert.strukturreferenz == "strukturierte_ergebnisse.vereinfachungen.etl_abstraktionen"
     )
     assert etl.herkunftsartefakt is Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G
     assert etl.wert == [abstraktion]
@@ -373,13 +368,11 @@ def test_menschliche_entscheidungen_steuern_k_und_o(tmp_path: Path) -> None:
             wert.bestandteil_id,
             (
                 FachlicheEntscheidungsart.OFFEN_UNSICHER
-                if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
-                or not wert.informationen
+                if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN or not wert.informationen
                 else FachlicheEntscheidungsart.UEBERNEHMEN
             ),
             "Aktivitäten müssen fachlich geprüft werden."
-            if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN
-            or not wert.informationen
+            if wert.bestandteil_id is ModellbestandteilId.AKTIVITAETEN or not wert.informationen
             else "",
             jetzt,
         )

@@ -636,9 +636,7 @@ def _annahmen_vereinfachungen(sammlung: _Sammlung) -> None:
     strukturierte = _strukturierte_ergebnisse(sammlung)
     vereinfachungen = strukturierte.get("vereinfachungen", {})
     etl_abstraktionen = (
-        vereinfachungen.get("etl_abstraktionen", [])
-        if isinstance(vereinfachungen, dict)
-        else []
+        vereinfachungen.get("etl_abstraktionen", []) if isinstance(vereinfachungen, dict) else []
     )
     if isinstance(etl_abstraktionen, list) and etl_abstraktionen:
         sammlung.info(

@@ -53,9 +53,7 @@ FRAMEWORKKONFORME_TRANSFORMATIONSARTEN = (
 TRANSFORMATIONSART_BEZEICHNUNGEN = {
     Transformationsart.DATENTYP_KONVERTIEREN: "Datentyp konvertieren",
     Transformationsart.WERTE_ERSETZEN: "Werte ersetzen",
-    Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN: (
-        "Werte regelbasiert abstrahieren"
-    ),
+    Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN: ("Werte regelbasiert abstrahieren"),
     Transformationsart.EXAKTE_TUPEL_DUPLIKATE_ENTFERNEN: ("Exakte Tupel-Duplikate entfernen"),
     Transformationsart.VOLLSTAENDIG_LEERE_SPALTEN_ENTFERNEN: (
         "Vollständig leere Spalten entfernen"

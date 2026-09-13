@@ -316,6 +316,7 @@ def erstelle_transformations_service(
         erstelle_datenimport_service(),
         ImportartefaktSpeicher(workspace_konfiguration),
         AktiveLineageService(pfad),
+        erstelle_loesch_service(pfad, workspace_konfiguration),
     )
 
 

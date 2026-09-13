@@ -301,9 +301,12 @@ def test_k_stern_entsteht_idempotent_und_laesst_k_und_o_unveraendert(tmp_path) -
         for wert in k_stern["modellbestandteile"]
         if wert["bestandteil_id"] == ModellbestandteilId.VEREINFACHUNGEN.value
     )
-    assert vereinfachungen["urspruenglicher_bestandteil"]["informationen"][0]["wert"][0][
-        "betroffene_beobachtungen"
-    ] == 185
+    assert (
+        vereinfachungen["urspruenglicher_bestandteil"]["informationen"][0]["wert"][0][
+            "betroffene_beobachtungen"
+        ]
+        == 185
+    )
     assert ableitungen.k == k_vorher
     assert ableitungen.o == o_vorher
 

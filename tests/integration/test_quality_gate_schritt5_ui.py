@@ -229,9 +229,7 @@ def test_erfolgreiche_freigabe_setzt_e_stern_kontext_und_erlaubt_schritt_sechs()
 
 def test_automatische_pruefung_verwendet_die_fachliche_ueberschrift() -> None:
     app = _app(schritt=2)
-    assert any(
-        "Qualitätsprüfung der erzeugten Artefakte" in wert.value for wert in app.markdown
-    )
+    assert any("Qualitätsprüfung der erzeugten Artefakte" in wert.value for wert in app.markdown)
     assert not any("Verbindliche Kriterien aus Tabelle 3.14" in wert.value for wert in app.markdown)
     assert list(app.dataframe[0].value.columns) == [
         "Artefakt",

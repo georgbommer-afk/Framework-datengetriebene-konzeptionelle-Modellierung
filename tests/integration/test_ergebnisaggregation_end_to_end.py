@@ -137,7 +137,11 @@ class _ProcessMining:
         return self.analyse, dict(self.a_d), bytes(self.modell)
 
 
-def _umgebung(tmp_path):  # type: ignore[no-untyped-def]
+def _umgebung(
+    tmp_path,  # type: ignore[no-untyped-def]
+    *,
+    ausgewaehlte_kpi_ids: tuple[str, ...] = ("servicegrad",),
+):  # type: ignore[no-untyped-def]
     jetzt = datetime.now(UTC)
     projekt_id, freigabe_id, event_log_id, t_id, import_id, analyse_id = (
         uuid4(),
@@ -152,8 +156,11 @@ def _umgebung(tmp_path):  # type: ignore[no-untyped-def]
         "Leistung bewerten",
         Systemtyp.KOMBINIERT,
         "Werk",
-        logistische_zielgroessen=(LogistischeZielgroesse.LIEFERFAEHIGKEIT,),
-        ausgewaehlte_kpi_ids=("servicegrad",),
+        logistische_zielgroessen=(
+            LogistischeZielgroesse.LIEFERFAEHIGKEIT,
+            LogistischeZielgroesse.NACHARBEIT,
+        ),
+        ausgewaehlte_kpi_ids=ausgewaehlte_kpi_ids,
     )
     projekt = Projekt(
         projekt_id,
@@ -463,6 +470,115 @@ def test_r_indikator_wird_als_strukturierte_kpi_rechengroesse_persistiert(tmp_pa
         "befriedigte_kundenauftragspositionen": 2.0,
         "kundenauftragspositionen": 3.0,
     }
+
+
+def test_r_indikator_wird_auch_als_summe_operand_e2e_persistiert(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    service, _, _, _, projekt, freigabe, analyse, _, _, _ = _umgebung(
+        tmp_path,
+        ausgewaehlte_kpi_ids=("nacharbeitsquote_rr",),
+    )
+    basis = service.grundlage_laden(
+        projekt.projekt_id,
+        freigabe.freigabe_id,
+        analyse.analyse_id,
+    )
+    indikator = next(
+        wert
+        for wert in basis.profilkennzahlen
+        if wert.kennzahltyp is Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR
+        and wert.spaltenname == "befriedigt"
+        and wert.operator == "gleich"
+    )
+    config = KpiKonfiguration(
+        "nacharbeitsquote_rr",
+        (
+            OperandZuordnung(
+                "nacharbeiten",
+                Datenartefakt.ZWISCHENDATENSATZ_T,
+                spalte="position",
+            ),
+            OperandZuordnung(
+                "verarbeitete_menge",
+                Datenartefakt.DATENPROFIL_R,
+                profilkennzahl=indikator,
+            ),
+        ),
+        "%",
+        "verarbeitete Menge",
+    )
+
+    vorschau = service.vorschau(
+        projekt_id=projekt.projekt_id,
+        freigabe_id=freigabe.freigabe_id,
+        analyse_id=analyse.analyse_id,
+        kpi_konfigurationen=(config,),
+    )
+    ergebnis = vorschau.kpi_ergebnisse[0]
+    assert ergebnis.status is KpiStatus.BERECHNET
+    assert ergebnis.zwischensummen == {"nacharbeiten": 3.0, "verarbeitete_menge": 2.0}
+    assert ergebnis.ergebnis == pytest.approx(150)
+    assert ergebnis.zugeordnete_operanden[1]["wert_aus_gespeichertem_r_uebernommen"] is True
+
+    aggregation = service.speichern(uuid4(), vorschau, menschlich_bestaetigt=True)
+    _, a_g = service.laden(aggregation.aggregations_id)
+    gespeichert = a_g["kpi_konfigurationen"][0]["zuordnungen"][1]["profilkennzahl"]
+    assert gespeichert["kennzahltyp"] == "absolute_haeufigkeit_indikator"
+    assert gespeichert["wert"] == 2
+
+
+def test_veralteter_r_indikator_wird_beim_summe_operand_e2e_abgelehnt(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    service, _, _, _, projekt, freigabe, analyse, _, _, _ = _umgebung(
+        tmp_path,
+        ausgewaehlte_kpi_ids=("nacharbeitsquote_rr",),
+    )
+    basis = service.grundlage_laden(
+        projekt.projekt_id,
+        freigabe.freigabe_id,
+        analyse.analyse_id,
+    )
+    indikator = next(
+        wert
+        for wert in basis.profilkennzahlen
+        if wert.kennzahltyp is Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR
+        and wert.operator == "gleich"
+    )
+    config = KpiKonfiguration(
+        "nacharbeitsquote_rr",
+        (
+            OperandZuordnung(
+                "nacharbeiten",
+                Datenartefakt.ZWISCHENDATENSATZ_T,
+                spalte="position",
+            ),
+            OperandZuordnung(
+                "verarbeitete_menge",
+                Datenartefakt.DATENPROFIL_R,
+                profilkennzahl=indikator,
+            ),
+        ),
+        "%",
+        "verarbeitete Menge",
+    )
+    transformationen = cast(Any, service._transformationen)
+    gesamtprofil = json.loads(json.dumps(transformationen.profil.gesamtprofil))
+    gesamtprofil["spaltenprofile"][0]["indikatorauswertungen"][0]["absolute_haeufigkeit"] = 1
+    transformationen.profil = replace(
+        transformationen.profil,
+        gesamtprofil=gesamtprofil,
+    )
+
+    vorschau = service.vorschau(
+        projekt_id=projekt.projekt_id,
+        freigabe_id=freigabe.freigabe_id,
+        analyse_id=analyse.analyse_id,
+        kpi_konfigurationen=(config,),
+    )
+
+    ergebnis = vorschau.kpi_ergebnisse[0]
+    assert ergebnis.status is KpiStatus.NICHT_BERECHENBAR
+    assert any(
+        "nicht mehr mit dem aktuellen R" in wert for wert in ergebnis.fehlende_voraussetzungen
+    )
 
 
 def test_indikatoraenderung_aendert_r_pruefsumme_und_eingabefingerabdruck(tmp_path) -> None:  # type: ignore[no-untyped-def]

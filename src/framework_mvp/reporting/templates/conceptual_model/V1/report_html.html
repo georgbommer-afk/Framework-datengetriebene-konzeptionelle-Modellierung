@@ -956,16 +956,21 @@
         {{ liste_oder_strich(ressourcen.event_log_ressourcen) }}
     </div>
 
-    {% if ressourcen.aktivitaet_ressourcen %}
+    {% if ressourcen.aktivitaet_ressourcen_anzeige %}
         <div class="content-card">
             <h2>Aktivität-Ressourcen-Zuordnungen</h2>
-            <table class="data-table">
+            <table class="data-table resource-assignment-table">
                 <thead><tr><th>Aktivität</th><th>Ressourcen</th></tr></thead>
                 <tbody>
-                    {% for zuordnung in ressourcen.aktivitaet_ressourcen %}
+                    {% for zuordnung in ressourcen.aktivitaet_ressourcen_anzeige %}
                         <tr>
                             <td>{{ zuordnung.get("aktivitaet", "–") }}</td>
-                            <td>{{ zuordnung.get("ressourcen", []) | join(", ") }}</td>
+                            <td class="resource-assignment-values">
+                                {{ zuordnung.get("ressourcen", []) | join(", ") }}
+                                {% if zuordnung.get("weitere_ressourcen", 0) %}
+                                    <strong>· +{{ zuordnung.get("weitere_ressourcen") }} weitere</strong>
+                                {% endif %}
+                            </td>
                         </tr>
                     {% endfor %}
                 </tbody>
@@ -973,14 +978,17 @@
         </div>
     {% endif %}
 
-    {% if ressourcen.manuelle_aktivitaet_ressourcen %}
+    {% if ressourcen.manuelle_aktivitaet_ressourcen_anzeige %}
         <div class="human-input">
             <div class="human-input-title">Ressourcenzuordnung aus älterem K*-Artefakt</div>
-            {% for zuordnung in ressourcen.manuelle_aktivitaet_ressourcen %}
+            {% for zuordnung in ressourcen.manuelle_aktivitaet_ressourcen_anzeige %}
                 <div class="human-input-entry">
                     <strong>{{ zuordnung.get("aktivitaet", "–") }}:</strong>
                     {% if zuordnung.get("ressourcen") %}
                         {{ zuordnung.get("ressourcen", []) | join(", ") }}
+                        {% if zuordnung.get("weitere_ressourcen", 0) %}
+                            <strong>· +{{ zuordnung.get("weitere_ressourcen") }} weitere</strong>
+                        {% endif %}
                     {% else %}
                         bewusst offen
                     {% endif %}
@@ -1081,7 +1089,7 @@
             {% for abstraktion in vereinfachungen.etl_abstraktionen %}
                 <div class="human-input-entry">
                     <strong>
-                        {{ abstraktion.quellspalte }} |
+                        {{ abstraktion.get("quellspalten", [abstraktion.quellspalte]) | join(", ") }} |
                         {{ abstraktion.vergleichsart }} „{{ abstraktion.suchwert_muster }}“
                         → „{{ abstraktion.abstraktionswert }}“ |
                         {{ abstraktion.betroffene_beobachtungen }} Beobachtungen
@@ -1090,6 +1098,12 @@
                         Vorher/Muster: {{ abstraktion.vorher_muster }} ·
                         Nachher: {{ abstraktion.abstraktionswert }} ·
                         Zielspalte: {{ abstraktion.zielspalte }}
+                        {% if abstraktion.get("treffer_nach_spalte") %}
+                            · Treffer je Spalte:
+                            {% for spalte, anzahl in abstraktion.treffer_nach_spalte.items() %}
+                                {{ spalte }}: {{ anzahl }}{% if not loop.last %} · {% endif %}
+                            {% endfor %}
+                        {% endif %}
                         {% if abstraktion.originalwerte_erhalten %}
                             · Originalwerte in der Quellspalte erhalten
                         {% endif %}

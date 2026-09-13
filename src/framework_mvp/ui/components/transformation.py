@@ -1,8 +1,6 @@
 """Fachlich begrenzter Transformationseditor gemäß Tabelle 3.11."""
 
-from collections.abc import MutableMapping
 from typing import Any, cast
-from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
@@ -25,7 +23,6 @@ from framework_mvp.domain.models import (
     Wertevergleichsart,
 )
 from framework_mvp.ui.helpers import fachliche_auswahl
-from framework_mvp.ui.session_cleanup import folgeartefakte_zustand_invalidieren
 
 TECHNISCHE_ZIELTYPEN = (
     "Text",
@@ -89,7 +86,13 @@ def _wertersetzung_formular(
     regelbasiert: bool = False,
 ) -> tuple[tuple[str, ...], dict[str, Any], str] | None:
     profile = _profil_spalten(profil)
-    spalte = fachliche_auswahl("Quellspalte", [str(name) for name in daten.columns])
+    spaltenoptionen = [str(name) for name in daten.columns]
+    if regelbasiert:
+        spalten = tuple(st.multiselect("Quellspalten", spaltenoptionen))
+        spalte = spalten[0] if spalten else None
+    else:
+        spalte = fachliche_auswahl("Quellspalte", spaltenoptionen)
+        spalten = (spalte,) if spalte is not None else ()
     vergleichsart = (
         fachliche_auswahl(
             "Vergleichsart",
@@ -104,7 +107,7 @@ def _wertersetzung_formular(
         else Wertevergleichsart.EXAKTER_WERT
     )
     if spalte is None or vergleichsart is None:
-        st.info("Wählen Sie eine Quellspalte und eine Vergleichsart aus.")
+        st.info("Wählen Sie mindestens eine Quellspalte und eine Vergleichsart aus.")
         return None
     spaltenprofil = profile.get(spalte, {})
     position = [str(name) for name in daten.columns].index(spalte)
@@ -194,13 +197,15 @@ def _wertersetzung_formular(
     )
     if zielmodus is None:
         st.info(
-            "Wählen Sie aus, ob die Quellspalte überschrieben oder eine neue Spalte "
-            "erstellt wird."
+            "Wählen Sie aus, ob die Quellspalte überschrieben oder eine neue Spalte erstellt wird."
         )
         return None
     parameter["zielmodus"] = zielmodus
     zielspalte = spalte
     if zielmodus == "Neue Spalte erstellen":
+        if len(spalten) != 1:
+            st.error("Eine neue Zielspalte benötigt genau eine ausgewählte Quellspalte.")
+            return None
         zielspalte = st.text_input("Name der Zielspalte").strip()
         if not zielspalte:
             st.info("Geben Sie einen Namen für die neue Zielspalte an.")
@@ -210,37 +215,58 @@ def _wertersetzung_formular(
             return None
         parameter["zielspalte"] = zielspalte
 
+    treffer_nach_spalte: dict[str, int] = {}
+    treffermasken: dict[str, pd.Series] = {}
     try:
-        treffermaske = ermittle_wertersetzungsmaske(serie, parameter)
+        for name in spalten:
+            aktuelle_serie = cast(pd.Series, daten[name])
+            maske = ermittle_wertersetzungsmaske(aktuelle_serie, parameter)
+            treffermasken[name] = maske
+            treffer_nach_spalte[name] = int(maske.sum())
     except Domaenenfehler as fehler:
         st.error(str(fehler))
         return None
-    anzahl = int(treffermaske.sum())
+    anzahl = sum(treffer_nach_spalte.values())
     parameter["betroffene_beobachtungen"] = anzahl
+    parameter["betroffene_beobachtungen_nach_spalte"] = treffer_nach_spalte
     st.info(
-        f"Quellspalte: {spalte} · Vergleichsart: {vergleichsart.value} · "
+        f"Quellspalten: {', '.join(spalten)} · Vergleichsart: {vergleichsart.value} · "
         f"Suchwert/Muster: {suchanzeige} · "
         f"{'Abstraktionswert' if regelbasiert else 'Ersatzwert'}: {ersatz!s} · "
-        f"Zielspalte: {zielspalte} · Betroffene Zeilen: {anzahl}"
+        f"Ziel: {zielspalte if len(spalten) == 1 else 'bestehende Spalten'} · "
+        f"Treffer gesamt: {anzahl}"
     )
+    if len(spalten) > 1:
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {"Quellspalte": name, "Treffer": treffer}
+                    for name, treffer in treffer_nach_spalte.items()
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
     if anzahl == 0:
         st.warning("Keine Treffer: Die Transformation kann so nicht angewendet werden.")
         return None
 
-    vorher = serie.loc[treffermaske].head(5).reset_index(drop=True)
-    nachher = pd.Series([ersatz] * len(vorher), dtype="object")
+    beispiele: list[dict[str, object]] = []
+    for name in spalten:
+        vorher = cast(pd.Series, daten[name]).loc[treffermasken[name]].head(5)
+        beispiele.extend({"Spalte": name, "Vorher": wert, "Nachher": ersatz} for wert in vorher)
     st.write("**Beispielhafte Änderungen (vorher → nachher)**")
     st.dataframe(
-        pd.DataFrame({"Vorher": vorher, "Nachher": nachher}),
+        pd.DataFrame(beispiele),
         hide_index=True,
         width="stretch",
     )
     return (
-        (spalte,),
+        spalten,
         parameter,
         (
-            f"{anzahl} Werte in {spalte} nach {vergleichsart.value} "
-            f"{'abstrahieren' if regelbasiert else 'ersetzen'} ({zielspalte})"
+            f"{', '.join(spalten)} · {vergleichsart.value} {suchanzeige!r} → {ersatz!s} "
+            f"({'abstrahieren' if regelbasiert else 'ersetzen'}; {anzahl} Treffer)"
         ),
     )
 
@@ -446,18 +472,36 @@ def zeige_transformationseditor(
     ausgangsdaten: pd.DataFrame,
     ausgangsprofil: dict[str, Any],
 ) -> Transformationsplan:
-    """Wendet genau eine konfigurierte Transformation auf den letzten Zwischenstand an."""
+    """Bearbeitet den persistierten Plan und berechnet Vorschauen ausschließlich im Speicher."""
     st.subheader("Transformationskette")
     st.caption(
-        "Jede angewendete Transformation erzeugt unmittelbar einen neuen, persistierten "
-        "Zwischenstand. Ein Durchlauf ohne Transformation ist weiterhin zulässig."
+        "Alle Schritte werden als Plan gespeichert und für die Vorschau aus den Raw-Daten neu "
+        "berechnet. Ein physischer Zwischendatensatz T entsteht erst beim Abschluss von Schritt 2."
     )
-    historie_laden = getattr(service, "transformationshistorie", None)
-    historie = historie_laden(plan) if callable(historie_laden) else []
-    if historie:
-        st.dataframe(historie, hide_index=True, width="stretch")
-    elif plan.schritte:
-        st.info("Der vorhandene Plan besitzt noch keinen persistierten Ausführungsstand.")
+    for schritt in sorted(plan.schritte, key=lambda wert: wert.reihenfolge):
+        inhalt, aktion = st.columns((8, 2))
+        with inhalt.container(border=True):
+            st.write(
+                f"**{schritt.reihenfolge} · "
+                f"{TRANSFORMATIONSART_BEZEICHNUNGEN.get(schritt.typ, schritt.typ.value)}**"
+            )
+            st.caption(
+                schritt.beschreibung
+                or ", ".join(schritt.betroffene_spalten)
+                or "Gesamter Datensatz"
+            )
+        if aktion.button(
+            "Entfernen",
+            key=f"transformation_entfernen_{schritt.transformationsschritt_id}",
+            width="stretch",
+        ):
+            plan, ergebnis = service.schritt_entfernen_und_vorschau(
+                plan, schritt.transformationsschritt_id
+            )
+            st.session_state.etl_transformationsanwendung = (plan, ergebnis, None)
+            st.rerun()
+    if not plan.schritte:
+        st.info("Der Transformationsplan enthält derzeit keine Schritte.")
 
     st.write("**Transformation hinzufügen**")
     art = fachliche_auswahl(
@@ -479,12 +523,7 @@ def zeige_transformationseditor(
         width="stretch",
     ):
         assert schritt is not None
-        plan, ergebnis, datensatz = service.transformation_anwenden(plan, schritt, uuid4())
+        plan, ergebnis, datensatz = service.transformation_anwenden(plan, schritt)
         st.session_state.etl_transformationsanwendung = (plan, ergebnis, datensatz)
-        folgeartefakte_zustand_invalidieren(
-            cast("MutableMapping[str, Any]", st.session_state),
-            plan.projekt_id,
-            datensatz.zwischendatensatz_id,
-        )
         st.rerun()
     return plan

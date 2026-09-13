@@ -839,6 +839,53 @@ body {
     font-size: 6.5pt;
 }
 
+/* Aktivität-Ressourcen-Zuordnungen besitzen bewusst ein eigenes, A4-sicheres Layout. */
+.pdf-resource-assignment-list {
+    width: 100%;
+    min-width: 0;
+}
+
+.pdf-resource-assignment-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 3mm;
+    min-width: 0;
+    padding: 2mm 0;
+    border-bottom: 0.2mm solid var(--border);
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+.pdf-resource-assignment-row:last-child {
+    border-bottom: none;
+}
+
+.pdf-resource-activity {
+    flex: 0 0 34mm;
+    min-width: 0;
+    font-size: 8pt;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.pdf-resource-names {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 100%;
+    color: var(--blue);
+    font-size: 8pt;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    white-space: normal;
+}
+
+.pdf-resource-more {
+    color: var(--muted);
+    white-space: nowrap;
+}
+
 /* ================================================================
    06 – Aktivitäten
    ================================================================ */

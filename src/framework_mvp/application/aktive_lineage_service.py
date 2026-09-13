@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -116,7 +117,7 @@ class AktiveLineageService:
         self,
         projekt_id: UUID | str,
         endpunkt: LineageEndpunkt,
-        referenzen: dict[str, UUID | str],
+        referenzen: Mapping[str, UUID | str],
     ) -> AktiveProjektlineage:
         """Aktiviert eine Generation und entfernt nur nachgelagerte aktive Referenzen."""
         projekt = kanonische_projekt_id(projekt_id)

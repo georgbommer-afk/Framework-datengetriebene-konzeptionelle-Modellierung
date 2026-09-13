@@ -184,6 +184,7 @@ def test_regulaerer_ablauf_bietet_nur_k_und_notation_und_uebergibt_p_und_a_d() -
     )
     _button(app, "Zurück").click().run()
     assert app.slider[0].value == 0.2
+    assert app.radio[0].value is not None
     assert app.radio[0].value.value == "bpmn"
     app.slider[0].set_value(0.3)
     _button(app, "DFG und Prozessmodell berechnen").click().run()
@@ -232,4 +233,5 @@ def test_persistierte_analyse_oeffnet_direkt_ergebnis_und_rehydriert_k_und_bpmn(
     assert zustand["prozessnotation"].value == "bpmn"
     _button(app, "Zurück").click().run()
     assert app.slider[0].value == 0.2
+    assert app.radio[0].value is not None
     assert app.radio[0].value.value == "bpmn"

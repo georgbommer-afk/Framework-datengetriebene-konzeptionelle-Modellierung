@@ -285,7 +285,7 @@ def test_strukturierte_profilkennzahl_wird_fachlich_lesbar_angezeigt() -> None:
 
     assert "Datensatz: Produktionsdaten" in referenz.anzeigetext
     assert "Spalte: Nacharbeit" in referenz.anzeigetext
-    assert "Absolute Häufigkeit eines Indikators" in referenz.anzeigetext
+    assert "Summe der Indikatorfunktion (absolute Häufigkeit)" in referenz.anzeigetext
     assert "Nacharbeit = Ja" in referenz.anzeigetext
     assert "Wert: 73" in referenz.anzeigetext
     assert "indikator-ja" not in referenz.anzeigetext
@@ -521,6 +521,102 @@ def test_nacharbeitsquote_verwendet_r_indikator_als_zaehler_und_t_summe_als_nenn
     assert ergebnis.formel == KPI_DEFINITIONEN["nacharbeitsquote_rr"].formel
     assert ergebnis.quellenreferenzen[0]["artefakt"] == "R"
     assert ergebnis.wertebedingungen[0]["in_schritt_7_ausgewertet"] is False
+
+
+def test_r_indikator_ist_auch_fuer_summe_operand_auswaehlbar_und_wird_uebernommen() -> None:
+    indikator = _profilkennzahl(
+        Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR,
+        4,
+        referenz_id="verarbeitete-menge-indikator",
+        spalte="Verarbeitet",
+        operator="gleich",
+        vergleichswert="Ja",
+        auswertbar=5,
+        gesamt=6,
+    )
+    summendefinition = KPI_DEFINITIONEN["nacharbeitsquote_rr"].operanden[1]
+    assert summendefinition.operandentyp is Operandentyp.SUMME
+    assert profilkennzahlen_fuer_operand(summendefinition, _basis(indikator)) == (indikator,)
+    konfiguration = KpiKonfiguration(
+        "nacharbeitsquote_rr",
+        (
+            OperandZuordnung(
+                "nacharbeiten",
+                Datenartefakt.ZWISCHENDATENSATZ_T,
+                spalte="Nacharbeit",
+            ),
+            OperandZuordnung(
+                "verarbeitete_menge",
+                Datenartefakt.DATENPROFIL_R,
+                profilkennzahl=indikator,
+            ),
+        ),
+        "%",
+        "verarbeitete Menge",
+    )
+    basis = _basis(
+        indikator,
+        tabelle=pd.DataFrame({"Nacharbeit": ["Ja", "Nein"]}),
+    )
+
+    (ergebnis,) = berechne_ausgewaehlte_kpis(
+        ("nacharbeitsquote_rr",),
+        (konfiguration,),
+        basis,
+    )
+
+    assert ergebnis.status is KpiStatus.BERECHNET
+    assert ergebnis.zwischensummen == {"nacharbeiten": 2.0, "verarbeitete_menge": 4.0}
+    assert ergebnis.ergebnis == pytest.approx(50)
+    assert ergebnis.zugeordnete_operanden[1]["wert_aus_gespeichertem_r_uebernommen"] is True
+    assert ergebnis.ausgeschlossene_werte == 1
+
+
+def test_veralteter_r_indikator_wird_auch_beim_summe_operand_abgelehnt() -> None:
+    gespeichert = _profilkennzahl(
+        Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR,
+        4,
+        referenz_id="verarbeitete-menge-indikator",
+        spalte="Verarbeitet",
+        operator="gleich",
+        vergleichswert="Ja",
+    )
+    aktuell = _profilkennzahl(
+        Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR,
+        5,
+        referenz_id="verarbeitete-menge-indikator",
+        spalte="Verarbeitet",
+        operator="gleich",
+        vergleichswert="Ja",
+    )
+    konfiguration = KpiKonfiguration(
+        "nacharbeitsquote_rr",
+        (
+            OperandZuordnung(
+                "nacharbeiten",
+                Datenartefakt.ZWISCHENDATENSATZ_T,
+                spalte="Nacharbeit",
+            ),
+            OperandZuordnung(
+                "verarbeitete_menge",
+                Datenartefakt.DATENPROFIL_R,
+                profilkennzahl=gespeichert,
+            ),
+        ),
+        "%",
+        "verarbeitete Menge",
+    )
+
+    (ergebnis,) = berechne_ausgewaehlte_kpis(
+        ("nacharbeitsquote_rr",),
+        (konfiguration,),
+        _basis(aktuell, tabelle=pd.DataFrame({"Nacharbeit": ["Ja"]})),
+    )
+
+    assert ergebnis.status is KpiStatus.NICHT_BERECHENBAR
+    assert any(
+        "nicht mehr mit dem aktuellen R" in wert for wert in ergebnis.fehlende_voraussetzungen
+    )
 
 
 def test_ungleich_zaehlt_fehlwert_in_t_nicht_als_treffer() -> None:

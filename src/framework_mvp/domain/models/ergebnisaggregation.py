@@ -180,7 +180,7 @@ class ProfilkennzahlReferenz:
             Profilkennzahltyp.ARITHMETISCHES_MITTEL: "Arithmetisches Mittel",
             Profilkennzahltyp.SUMME: "Summe",
             Profilkennzahltyp.ABSOLUTE_HAEUFIGKEIT_INDIKATOR: (
-                "Absolute Häufigkeit eines Indikators"
+                "Summe der Indikatorfunktion (absolute Häufigkeit)"
             ),
             Profilkennzahltyp.ZEITDIFFERENZ_SUMME: "Summe von Zeitdifferenzen",
         }[self.kennzahltyp]

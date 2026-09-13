@@ -266,9 +266,7 @@ class DemoProjektService:
         ressourcenimport = self._importieren(projekt, ressourcenquelle, "Ressourcenstamm", inhalt)
 
         ressourcenplan = Transformationsplan.neu(projekt.projekt_id, (ressourcenimport.import_id,))
-        ressourcen_t = self._transformationen.zwischendatensatz_erzeugen(
-            ressourcenplan, self._transformationen.vorschau(ressourcenplan), uuid4()
-        )
+        self._transformationen.plan_speichern(ressourcenplan)
         plan = Transformationsplan.neu(
             projekt.projekt_id, (ereignisimport.import_id, ressourcenimport.import_id)
         )
@@ -278,7 +276,7 @@ class DemoProjektService:
                 typ=Transformationsart.TABELLEN_JOIN,
                 betroffene_spalten=("Ressourcen_ID",),
                 parameter={
-                    "rechter_zwischendatensatz_id": str(ressourcen_t.zwischendatensatz_id),
+                    "rechter_transformationsplan_id": str(ressourcenplan.transformationsplan_id),
                     "linke_schluessel": ["Ressourcen_ID"],
                     "rechte_schluessel": ["Ressourcen_ID"],
                     "join_art": "LEFT",

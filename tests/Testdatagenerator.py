@@ -57,8 +57,8 @@ class GeneratorKonfiguration:
 
 # Konfigurationsblock für die lokale Ausführung in VS Code
 KONFIGURATION = GeneratorKonfiguration(
-    anzahl_faelle=100, #Zeilenanzahl
-    seed=20260819, #das Startdatum
+    anzahl_faelle=100,  # Zeilenanzahl
+    seed=20260819,  # das Startdatum
     fehlwerte_prozent=0.0,
     platzhalter_prozent=0.0,
     ausreisser_prozent=1.0,

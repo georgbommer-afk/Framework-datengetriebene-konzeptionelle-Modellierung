@@ -171,9 +171,7 @@ def _tabelle(
     if not datenzeilen:
         ws.merge_cells(start_row=zeile, start_column=1, end_row=zeile, end_column=len(spalten))
         ws.cell(zeile, 1, "Für dieses Projekt sind im finalen Modell keine Einträge vorhanden.")
-        ws.cell(zeile, 1).font = Font(
-            name=FONT_FAMILY, size=12, italic=True, color="666666"
-        )
+        ws.cell(zeile, 1).font = Font(name=FONT_FAMILY, size=12, italic=True, color="666666")
         zeile += 1
     else:
         for datensatz in datenzeilen:
@@ -346,10 +344,13 @@ def _prozessbild(ws: Worksheet, zeile: int, report: Mapping[str, Any]) -> int:
         )
     try:
         bild = Image(BytesIO(png))
-        verfuegbare_breite = sum(
-            float(ws.column_dimensions[get_column_letter(index)].width or 13.0) * 7.0
-            for index in range(1, 9)
-        ) - 24.0
+        verfuegbare_breite = (
+            sum(
+                float(ws.column_dimensions[get_column_letter(index)].width or 13.0) * 7.0
+                for index in range(1, 9)
+            )
+            - 24.0
+        )
         faktor = min(1.0, verfuegbare_breite / bild.width, 720 / bild.height)
         bild.width = int(bild.width * faktor)
         bild.height = int(bild.height * faktor)

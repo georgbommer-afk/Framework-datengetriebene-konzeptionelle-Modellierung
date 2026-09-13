@@ -1024,33 +1024,43 @@
         </div>
 
         {% set aktivitaet_ressourcen =
-            ressourcen.get("aktivitaet_ressourcen", [])
+            ressourcen.get("aktivitaet_ressourcen_anzeige", [])
         %}
         {% set manuelle_zuordnungen =
-            ressourcen.get("manuelle_aktivitaet_ressourcen", [])
+            ressourcen.get("manuelle_aktivitaet_ressourcen_anzeige", [])
         %}
 
         {% if aktivitaet_ressourcen or manuelle_zuordnungen %}
             <h3 class="pdf-subheading">Aktivität-Ressourcen-Zuordnungen</h3>
-            <div class="pdf-kpi-list">
+            <div class="pdf-resource-assignment-list">
                 {% for zuordnung in aktivitaet_ressourcen %}
-                    <div class="pdf-kpi-row">
-                        <div class="pdf-kpi-name">
+                    <div class="pdf-resource-assignment-row">
+                        <div class="pdf-resource-activity">
                             {{ zuordnung.get("aktivitaet", "–") }}
                         </div>
-                        <div class="pdf-kpi-value">
+                        <div class="pdf-resource-names">
                             {{ zuordnung.get("ressourcen", []) | join(", ") }}
+                            {% if zuordnung.get("weitere_ressourcen", 0) %}
+                                <span class="pdf-resource-more">
+                                    · +{{ zuordnung.get("weitere_ressourcen") }} weitere
+                                </span>
+                            {% endif %}
                         </div>
                     </div>
                 {% endfor %}
                 {% for zuordnung in manuelle_zuordnungen %}
-                    <div class="pdf-kpi-row">
-                        <div class="pdf-kpi-name">
+                    <div class="pdf-resource-assignment-row">
+                        <div class="pdf-resource-activity">
                             {{ zuordnung.get("aktivitaet", "–") }} · menschlich
                         </div>
-                        <div class="pdf-kpi-value">
+                        <div class="pdf-resource-names">
                             {% if zuordnung.get("ressourcen") %}
                                 {{ zuordnung.get("ressourcen", []) | join(", ") }}
+                                {% if zuordnung.get("weitere_ressourcen", 0) %}
+                                    <span class="pdf-resource-more">
+                                        · +{{ zuordnung.get("weitere_ressourcen") }} weitere
+                                    </span>
+                                {% endif %}
                             {% else %}
                                 bewusst offen
                             {% endif %}
@@ -1256,7 +1266,7 @@
                     <div class="pdf-compact-structure-row">
 
                         <div class="pdf-compact-structure-label">
-                            {{ abstraktion.get("quellspalte", "–") }}
+                            {{ abstraktion.get("quellspalten", [abstraktion.get("quellspalte", "–")]) | join(", ") }}
                         </div>
 
                         <div class="pdf-compact-structure-value">
@@ -1267,6 +1277,12 @@
                             Vorher/Muster: {{ abstraktion.get("vorher_muster", "–") }} ·
                             Nachher: {{ abstraktion.get("abstraktionswert", "–") }} ·
                             Zielspalte: {{ abstraktion.get("zielspalte", "–") }}
+                            {% if abstraktion.get("treffer_nach_spalte") %}
+                                <br>Treffer je Spalte:
+                                {% for spalte, anzahl in abstraktion.get("treffer_nach_spalte", {}).items() %}
+                                    {{ spalte }}: {{ anzahl }}{% if not loop.last %} · {% endif %}
+                                {% endfor %}
+                            {% endif %}
                             {% if abstraktion.get("originalwerte_erhalten", false) %}
                                 · Originalwerte in der Quellspalte erhalten
                             {% endif %}

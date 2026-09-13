@@ -5,7 +5,7 @@ import gzip
 import hashlib
 import json
 import re
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import PurePosixPath
@@ -19,6 +19,7 @@ from framework_mvp.application.datenimport_service import (
     Profilierungsergebnis,
 )
 from framework_mvp.application.importvorgang_service import GeladenerImport, ImportvorgangService
+from framework_mvp.application.loesch_service import LoeschService
 from framework_mvp.application.profiling.entscheidungsgrundlage import (
     ermittle_auffaelligkeiten,
 )
@@ -51,6 +52,16 @@ from framework_mvp.infrastructure.persistence.sqlite_etl_repository import SQLit
 TRANSFORMATIONS_ARTEFAKT_VERSION = 2
 
 
+@dataclass(frozen=True, slots=True)
+class Transformationsabschluss:
+    """Ergebnis der einzigen physischen Persistenzgrenze von Schritt 2."""
+
+    datensatz: Zwischendatensatz
+    ergebnis: Transformationsergebnis
+    daten_geaendert: bool
+    datensatz_wiederverwendet: bool
+
+
 class TransformationsService:
     """Orchestriert unveränderliche Pläne, Vorschauen und Interim-Artefakte."""
 
@@ -61,12 +72,14 @@ class TransformationsService:
         datenimport_service: DatenimportService,
         artefakte: ImportartefaktSpeicher,
         aktive_lineage: AktiveLineageService | None = None,
+        loesch_service: LoeschService | None = None,
     ) -> None:
         self._repository = repository
         self._import_service = import_service
         self._datenimport_service = datenimport_service
         self._artefakte = artefakte
         self._aktive_lineage = aktive_lineage
+        self._loesch_service = loesch_service
 
     @staticmethod
     def schritt_hinzufuegen(
@@ -132,6 +145,32 @@ class TransformationsService:
         """Persistiert die aktuelle Plankonfiguration."""
         self._repository.plan_speichern(plan)
 
+    def _plan_fuer_bearbeitung(self, plan: Transformationsplan) -> Transformationsplan:
+        """Forkt einen bereits finalisierten Plan, damit die aktive T-Lineage unverändert bleibt."""
+        if not self._repository.datensaetze_fuer_plan(plan.transformationsplan_id):
+            return plan
+        jetzt = datetime.now(UTC)
+        return Transformationsplan(
+            uuid4(),
+            plan.projekt_id,
+            plan.import_ids,
+            plan.schritte,
+            jetzt,
+            jetzt,
+        )
+
+    def schritt_entfernen_und_vorschau(
+        self, plan: Transformationsplan, schritt_id: UUID
+    ) -> tuple[Transformationsplan, Transformationsergebnis]:
+        """Entfernt einen Planschritt, persistiert nur den Plan und berechnet die Vorschau neu."""
+        bearbeitbar = self._plan_fuer_bearbeitung(plan)
+        aktualisiert = self.schritt_entfernen(bearbeitbar, schritt_id)
+        if len(aktualisiert.schritte) == len(bearbeitbar.schritte):
+            raise Domaenenfehler("Der Transformationsschritt wurde nicht gefunden.")
+        ergebnis = self.vorschau(aktualisiert)
+        self._repository.plan_speichern(aktualisiert)
+        return aktualisiert, ergebnis
+
     def plan_laden(self, plan_id: UUID) -> Transformationsplan | None:
         """Lädt einen persistierten Transformationsplan."""
         return self._repository.plan_laden(plan_id)
@@ -189,8 +228,8 @@ class TransformationsService:
         import_id: UUID | None = None,
         plan_id: UUID | None = None,
         datensatz_id: UUID | None = None,
-    ) -> tuple[Importvorgang, Transformationsplan, Zwischendatensatz, pd.DataFrame]:
-        """Bestätigt ein zweites Blatt und erzeugt ein nicht aktiviertes Hilfs-T für den Join."""
+    ) -> tuple[Importvorgang, Transformationsplan, None, pd.DataFrame]:
+        """Bestätigt ein zweites Blatt samt Plan, ohne dafür ein Hilfs-T zu materialisieren."""
         vorgang, inhalt = self._import_service.originaldatei_laden(basis_import_id)
         if vorgang.dateityp is not Dateityp.XLSX or not isinstance(
             vorgang.importparameter, ExcelImportparameter
@@ -224,10 +263,9 @@ class TransformationsService:
         if plan_id is not None:
             plan = replace(plan, transformationsplan_id=plan_id)
         ergebnis = self.vorschau(plan)
-        datensatz = self.zwischendatensatz_erzeugen(
-            plan, ergebnis, datensatz_id or uuid4(), aktivieren=False
-        )
-        return bestaetigt, plan, datensatz, ergebnis.daten
+        del datensatz_id
+        self._repository.plan_speichern(plan)
+        return bestaetigt, plan, None, ergebnis.daten
 
     def _importe_des_plans(self, plan: Transformationsplan) -> list[Importvorgang]:
         """Validiert den Projektbezug und liefert die Importe in Planreihenfolge."""
@@ -305,16 +343,26 @@ class TransformationsService:
                 ),
             )
         parameter = schritt.parameter
+        rechter_plan_id = parameter.get("rechter_transformationsplan_id")
         rechte_datensatz_id = parameter.get("rechter_zwischendatensatz_id")
-        if not rechte_datensatz_id:
+        if not rechter_plan_id and not rechte_datensatz_id:
             raise Domaenenfehler(
-                "Eine Verknüpfung benötigt einen aufbereiteten rechten Zwischendatensatz."
+                "Eine Verknüpfung benötigt einen rechten Transformationsplan oder "
+                "Zwischendatensatz."
             )
-        rechter_datensatz, rechte_daten = self.zwischendatensatz_laden(
-            UUID(str(rechte_datensatz_id))
-        )
-        if rechter_datensatz.projekt_id != plan.projekt_id:
-            raise Domaenenfehler("Die Join-Datensätze gehören nicht zum selben Projekt.")
+        if rechter_plan_id:
+            rechter_plan = self.plan_laden(UUID(str(rechter_plan_id)))
+            if rechter_plan is None or rechter_plan.projekt_id != plan.projekt_id:
+                raise Domaenenfehler("Der rechte Transformationsplan gehört nicht zum Projekt.")
+            if rechter_plan.transformationsplan_id == plan.transformationsplan_id:
+                raise Domaenenfehler("Ein Transformationsplan kann nicht mit sich selbst joinen.")
+            rechte_daten = self.vorschau(rechter_plan).daten
+        else:
+            rechter_datensatz, rechte_daten = self.zwischendatensatz_laden(
+                UUID(str(rechte_datensatz_id))
+            )
+            if rechter_datensatz.projekt_id != plan.projekt_id:
+                raise Domaenenfehler("Die Join-Datensätze gehören nicht zum selben Projekt.")
         suffixe_roh = parameter.get("suffixe", ["_links", "_rechts"])
         suffixe = (str(suffixe_roh[0]), str(suffixe_roh[1]))
         zeilen_vorher, spalten_vorher = daten.shape
@@ -368,8 +416,7 @@ class TransformationsService:
         wirkung_nach_schritt = {
             int(wert["schritt"]): str(wert.get("ergebnis_oder_warnung", ""))
             for wert in historie
-            if isinstance(wert, dict)
-            and isinstance(wert.get("schritt"), int)
+            if isinstance(wert, dict) and isinstance(wert.get("schritt"), int)
         }
         ergebnis: list[dict[str, object]] = []
         regelarten = {
@@ -390,8 +437,7 @@ class TransformationsService:
             vergleichsart = str(parameter.get("vergleichsart", ""))
             ist_neuer_typ = typ == Transformationsart.WERTE_REGELBASIERT_ABSTRAHIEREN.value
             ist_legacy = (
-                typ == Transformationsart.WERTE_ERSETZEN.value
-                and vergleichsart in regelarten
+                typ == Transformationsart.WERTE_ERSETZEN.value and vergleichsart in regelarten
             )
             if not (ist_neuer_typ or ist_legacy) or vergleichsart not in regelarten:
                 continue
@@ -408,10 +454,9 @@ class TransformationsService:
             spalten = schritt.get("betroffene_spalten", [])
             if not isinstance(spalten, list) or not spalten:
                 continue
-            quellspalte = str(spalten[0])
-            zielmodus = str(
-                parameter.get("zielmodus", "Bestehende Spalte überschreiben")
-            )
+            quellspalten = [str(spalte) for spalte in spalten]
+            quellspalte = quellspalten[0]
+            zielmodus = str(parameter.get("zielmodus", "Bestehende Spalte überschreiben"))
             suchwert = str(parameter.get("suchwert", parameter.get("gesuchter_wert", "")))
             vorher_muster = (
                 f"{suchwert}*"
@@ -420,22 +465,33 @@ class TransformationsService:
                 if vergleichsart == "Enthält"
                 else suchwert
             )
-            ergebnis.append(
-                {
-                    "quellspalte": quellspalte,
-                    "vergleichsart": vergleichsart,
-                    "suchwert_muster": suchwert,
-                    "vorher_muster": vorher_muster,
-                    "abstraktionswert": parameter.get("ersatzwert"),
-                    "zielspalte": (
-                        str(parameter.get("zielspalte", "")).strip()
-                        if zielmodus == "Neue Spalte erstellen"
-                        else quellspalte
-                    ),
-                    "betroffene_beobachtungen": int(treffer.group(1)),
-                    "originalwerte_erhalten": zielmodus == "Neue Spalte erstellen",
+            dokumentation: dict[str, object] = {
+                "quellspalte": quellspalte,
+                "vergleichsart": vergleichsart,
+                "suchwert_muster": suchwert,
+                "vorher_muster": vorher_muster,
+                "abstraktionswert": parameter.get("ersatzwert"),
+                "zielspalte": (
+                    str(parameter.get("zielspalte", "")).strip()
+                    if zielmodus == "Neue Spalte erstellen"
+                    else quellspalte
+                ),
+                "betroffene_beobachtungen": int(treffer.group(1)),
+                "originalwerte_erhalten": zielmodus == "Neue Spalte erstellen",
+            }
+            if len(quellspalten) > 1:
+                treffer_nach_spalte = {
+                    name.strip(): int(anzahl)
+                    for name, anzahl in re.findall(r"([^;():]+): (\d+) Treffer", wirkung)
                 }
-            )
+                dokumentation.update(
+                    {
+                        "quellspalten": quellspalten,
+                        "zielspalten": quellspalten,
+                        "treffer_nach_spalte": treffer_nach_spalte,
+                    }
+                )
+            ergebnis.append(dokumentation)
         return tuple(ergebnis)
 
     def _letzter_ausgefuehrter_stand(
@@ -491,13 +547,14 @@ class TransformationsService:
         self,
         plan: Transformationsplan,
         schritt: Transformationsschritt,
-        datensatz_id: UUID,
+        datensatz_id: UUID | None = None,
         *,
         zusaetzliche_import_ids: tuple[UUID, ...] = (),
-    ) -> tuple[Transformationsplan, Transformationsergebnis, Zwischendatensatz]:
-        """Validiert, hängt an, berechnet inkrementell und persistiert in einem Aufruf."""
-        vorgaenger, eingangsdaten, bisherige_historie = self._letzter_ausgefuehrter_stand(plan)
-        aktualisiert = self.schritt_hinzufuegen(plan, schritt)
+    ) -> tuple[Transformationsplan, Transformationsergebnis, None]:
+        """Persistiert einen Planschritt und seine Vorschau, aber ausdrücklich noch kein T."""
+        del datensatz_id  # Kompatibler Parameter; T entsteht ausschließlich beim Abschluss.
+        bearbeitbar = self._plan_fuer_bearbeitung(plan)
+        aktualisiert = self.schritt_hinzufuegen(bearbeitbar, schritt)
         if zusaetzliche_import_ids:
             aktualisiert = replace(
                 aktualisiert,
@@ -505,21 +562,9 @@ class TransformationsService:
                     dict.fromkeys((*aktualisiert.import_ids, *zusaetzliche_import_ids))
                 ),
             )
-        ergebnis = self._schritt_ausfuehren(aktualisiert, aktualisiert.schritte[-1], eingangsdaten)
-        vollstaendige_historie = (*bisherige_historie, *ergebnis.historie)
-        vollstaendiges_ergebnis = replace(ergebnis, historie=vollstaendige_historie)
-        try:
-            datensatz = self.zwischendatensatz_erzeugen(
-                aktualisiert,
-                vollstaendiges_ergebnis,
-                datensatz_id,
-                vorgaenger=vorgaenger,
-                angewendeter_schritt=aktualisiert.schritte[-1],
-            )
-        except Exception:
-            self._repository.plan_speichern(plan)
-            raise
-        return aktualisiert, vollstaendiges_ergebnis, datensatz
+        ergebnis = self.vorschau(aktualisiert)
+        self._repository.plan_speichern(aktualisiert)
+        return aktualisiert, ergebnis, None
 
     def zwischendatensatz_erzeugen(
         self,
@@ -554,10 +599,7 @@ class TransformationsService:
             return vorhanden
         self._repository.plan_speichern(plan)
         jetzt = datetime.now(UTC)
-        csv_text = ergebnis.daten.to_csv(
-            index=False, date_format="%Y-%m-%dT%H:%M:%S.%f%z", na_rep=""
-        )
-        csv_bytes = gzip.compress(csv_text.encode("utf-8"), mtime=0)
+        csv_bytes = self._daten_komprimieren(ergebnis.daten)
         pruefsumme = hashlib.sha256(csv_bytes).hexdigest()
         basis = PurePosixPath("projects") / str(plan.projekt_id) / "interim"
         daten_pfad = (basis / f"{datensatz_id}.csv.gz").as_posix()
@@ -633,7 +675,7 @@ class TransformationsService:
             "transformationshistorie": [asdict(wert) for wert in ergebnis.historie],
             "inkrementelle_lineage": {
                 "eingabedatensatz": (
-                    "Rohimport"
+                    "Raw + vollständiger Transformationsplan"
                     if vorgaenger is None
                     else f"Zwischendatensatz {max(1, len(ergebnis.historie) - 1)}"
                 ),
@@ -716,40 +758,251 @@ class TransformationsService:
                 self._artefakte.neu_erstelltes_artefakt_entfernen(artefakt)
             raise
 
+    @staticmethod
+    def _daten_komprimieren(daten: pd.DataFrame) -> bytes:
+        """Serialisiert Ergebnisdaten deterministisch für Vergleich und Persistenz."""
+        csv_text = daten.to_csv(index=False, date_format="%Y-%m-%dT%H:%M:%S.%f%z", na_rep="")
+        return gzip.compress(csv_text.encode("utf-8"), mtime=0)
+
+    def _aktiven_datensatz_laden(
+        self,
+        projekt_id: UUID,
+        explizite_id: UUID | None,
+    ) -> Zwischendatensatz | None:
+        datensatz_id = explizite_id
+        if datensatz_id is None and self._aktive_lineage is not None:
+            checkpoint = self._aktive_lineage.laden(projekt_id)
+            referenz = (
+                checkpoint.referenzen.get("aktueller_zwischendatensatz_id") if checkpoint else None
+            )
+            if referenz:
+                datensatz_id = UUID(referenz)
+        if datensatz_id is None:
+            return None
+        datensatz = self._repository.datensatz_laden(datensatz_id)
+        if datensatz is None or datensatz.projekt_id != projekt_id:
+            raise Domaenenfehler("Der bisher aktive Zwischendatensatz wurde nicht gefunden.")
+        return datensatz
+
+    def _identischen_datensatz_auf_plan_umstellen(
+        self,
+        datensatz: Zwischendatensatz,
+        plan: Transformationsplan,
+        ergebnis: Transformationsergebnis,
+    ) -> Zwischendatensatz:
+        """Aktualisiert nur Plan-, Schema- und Lineage-Metadaten eines unveränderten T."""
+        self._repository.plan_speichern(plan)
+        schema = json.loads(self._artefakte.lesen(datensatz.relativer_schema_pfad))
+        transformation = self._transformationsartefakt(datensatz)
+        ausgangsimporte = self._importe_des_plans(plan)
+        ausgangsprofile = [self.ausgangsprofil_laden(wert.import_id) for wert in ausgangsimporte]
+        ursprungsspalten = dict(schema.get("urspruengliche_quellspalten_nach_import", {}))
+        for importvorgang in ausgangsimporte:
+            ursprungsspalten.setdefault(
+                str(importvorgang.import_id),
+                [
+                    str(name)
+                    for name in self.import_dataframe_laden(importvorgang.import_id).columns
+                ],
+            )
+        schema.update(
+            {
+                "spalten": [
+                    {"name": str(name), "technischer_datentyp": str(ergebnis.daten[name].dtype)}
+                    for name in ergebnis.daten.columns
+                ],
+                "urspruengliche_quellspalten_nach_import": ursprungsspalten,
+                "zeilenanzahl": len(ergebnis.daten),
+                "spaltenanzahl": len(ergebnis.daten.columns),
+                "import_ids": [str(wert) for wert in plan.import_ids],
+            }
+        )
+        ergebnisprofil = self._datenimport_service.profil_erstellen(ergebnis.daten).profil
+        transformation.update(
+            {
+                "artefakt_version": TRANSFORMATIONS_ARTEFAKT_VERSION,
+                "ausgangsprofil_version": ausgangsprofile[0].profil_version,
+                "ausgangsimport_id": str(plan.import_ids[0]),
+                "ausgangsimporte": [
+                    {
+                        "import_id": str(importvorgang.import_id),
+                        "datenquellen_id": str(importvorgang.datenquellen_id),
+                        "originaldateiname": importvorgang.originaldateiname,
+                        "tabellenbezeichnung": importvorgang.tabellenbezeichnung,
+                        "dateiformat": importvorgang.dateityp.value,
+                        "datei_pruefsumme": importvorgang.sha256,
+                        "profil_version": profil.profil_version,
+                        "profil_pfad": importvorgang.relativer_profil_pfad,
+                    }
+                    for importvorgang, profil in zip(ausgangsimporte, ausgangsprofile, strict=True)
+                ],
+                "transformationsplan": asdict(plan),
+                "transformationshistorie": [asdict(wert) for wert in ergebnis.historie],
+                "inkrementelle_lineage": {
+                    "eingabedatensatz": "Raw + vollständiger Transformationsplan",
+                    "eingabe_zwischendatensatz_id": None,
+                    "ausgabe_zwischendatensatz_id": str(datensatz.zwischendatensatz_id),
+                    "angewendeter_transformationsschritt_id": None,
+                    "folgeartefakte_neu_zu_erzeugen": False,
+                },
+                "ergebnisprofil": asdict(ergebnisprofil),
+                "ergebniskennzahlen": {
+                    "zeilen": len(ergebnis.daten),
+                    "spalten": len(ergebnis.daten.columns),
+                },
+                "warnungen": list(ergebnis.warnungen),
+            }
+        )
+        transformation.pop("inkrementelle_ausfuehrung", None)
+        schema_bytes = json.dumps(schema, ensure_ascii=False, sort_keys=True, indent=2).encode()
+        transformation_bytes = json.dumps(
+            transformation, ensure_ascii=False, sort_keys=True, indent=2, default=str
+        ).encode()
+        altes_schema = self._artefakte.artefakt_ersetzen(
+            datensatz.relativer_schema_pfad, schema_bytes
+        )
+        alte_transformation: bytes | None = None
+        aktualisiert = replace(
+            datensatz,
+            transformationsplan_id=plan.transformationsplan_id,
+            import_ids=plan.import_ids,
+            zeilenanzahl=len(ergebnis.daten),
+            spaltenanzahl=len(ergebnis.daten.columns),
+        )
+        try:
+            alte_transformation = self._artefakte.artefakt_ersetzen(
+                datensatz.relativer_transformation_pfad, transformation_bytes
+            )
+            self._repository.datensatz_aktualisieren(aktualisiert)
+        except Exception:
+            if altes_schema is not None:
+                self._artefakte.artefakt_ersetzen(datensatz.relativer_schema_pfad, altes_schema)
+            if alte_transformation is not None:
+                self._artefakte.artefakt_ersetzen(
+                    datensatz.relativer_transformation_pfad, alte_transformation
+                )
+            raise
+        if datensatz.transformationsplan_id != plan.transformationsplan_id:
+            self._repository.plan_loeschen_wenn_ungenutzt(datensatz.transformationsplan_id)
+        return aktualisiert
+
+    def _referenzierte_hilfsdatensaetze(
+        self,
+        plan: Transformationsplan,
+        besuchte_plaene: set[UUID] | None = None,
+    ) -> set[UUID]:
+        """Schützt ausschließlich T-Artefakte, die alte Join-Pläne noch reproduzierbar machen."""
+        besucht = set() if besuchte_plaene is None else besuchte_plaene
+        if plan.transformationsplan_id in besucht:
+            return set()
+        besucht.add(plan.transformationsplan_id)
+        referenzen: set[UUID] = set()
+        for schritt in plan.schritte:
+            if not schritt.aktiviert or schritt.typ is not Transformationsart.TABELLEN_JOIN:
+                continue
+            datensatz_id = schritt.parameter.get("rechter_zwischendatensatz_id")
+            if datensatz_id:
+                referenzen.add(UUID(str(datensatz_id)))
+            rechter_plan_id = schritt.parameter.get("rechter_transformationsplan_id")
+            if not rechter_plan_id:
+                continue
+            rechter_plan = self.plan_laden(UUID(str(rechter_plan_id)))
+            if rechter_plan is not None:
+                referenzen.update(self._referenzierte_hilfsdatensaetze(rechter_plan, besucht))
+        return referenzen
+
+    def _veraltete_datensaetze_bereinigen(
+        self,
+        plan: Transformationsplan,
+        aktiver_datensatz_id: UUID,
+    ) -> None:
+        """Entfernt projektweit überholte T-Generationen, nicht aber nötige Legacy-Join-Eingaben."""
+        if self._loesch_service is None:
+            return
+        geschuetzt = {
+            aktiver_datensatz_id,
+            *self._referenzierte_hilfsdatensaetze(plan),
+        }
+        for datensatz in self._repository.datensaetze_fuer_projekt(plan.projekt_id):
+            if datensatz.zwischendatensatz_id not in geschuetzt:
+                self._loesch_service.zwischendatensatz_loeschen(
+                    plan.projekt_id,
+                    datensatz.zwischendatensatz_id,
+                )
+
+    def zwischendatensatz_abschliessen(
+        self,
+        plan: Transformationsplan,
+        *,
+        bisheriger_datensatz_id: UUID | None = None,
+        datensatz_id: UUID | None = None,
+    ) -> Transformationsabschluss:
+        """Persistiert am Schritt-2-Abschluss genau ein finales T oder verwendet es wieder."""
+        ergebnis = self.vorschau(plan)
+        kandidat_sha256 = hashlib.sha256(self._daten_komprimieren(ergebnis.daten)).hexdigest()
+        bisheriger = self._aktiven_datensatz_laden(plan.projekt_id, bisheriger_datensatz_id)
+        if bisheriger is not None and bisheriger.sha256 == kandidat_sha256:
+            aktualisiert = self._identischen_datensatz_auf_plan_umstellen(
+                bisheriger, plan, ergebnis
+            )
+            self._veraltete_datensaetze_bereinigen(
+                plan,
+                aktualisiert.zwischendatensatz_id,
+            )
+            return Transformationsabschluss(aktualisiert, ergebnis, False, True)
+
+        neuer_datensatz = self.zwischendatensatz_erzeugen(
+            plan,
+            ergebnis,
+            datensatz_id or uuid4(),
+            aktivieren=False,
+        )
+        if self._aktive_lineage is not None:
+            self._aktive_lineage.aktivieren(
+                plan.projekt_id,
+                LineageEndpunkt.T,
+                {"aktueller_zwischendatensatz_id": neuer_datensatz.zwischendatensatz_id},
+            )
+        self._veraltete_datensaetze_bereinigen(
+            plan,
+            neuer_datensatz.zwischendatensatz_id,
+        )
+        return Transformationsabschluss(neuer_datensatz, ergebnis, True, False)
+
     def join_schritt_ersetzen(
         self,
         plan: Transformationsplan,
         bisheriger_schritt_id: UUID,
         neuer_schritt: Transformationsschritt,
-        datensatz_id: UUID,
+        datensatz_id: UUID | None = None,
         *,
         zusaetzliche_import_ids: tuple[UUID, ...] = (),
-    ) -> tuple[Transformationsplan, Transformationsergebnis, Zwischendatensatz]:
-        """Ersetzt einen Join auf seiner Vorgängerbasis und erzeugt eine neue T-Generation."""
+    ) -> tuple[Transformationsplan, Transformationsergebnis, None]:
+        """Ersetzt einen Join im Plan und berechnet ausschließlich die neue Vorschau."""
+        del datensatz_id
         if not any(
             wert.transformationsschritt_id == bisheriger_schritt_id
             and wert.typ is Transformationsart.TABELLEN_JOIN
             for wert in plan.schritte
         ):
             raise Domaenenfehler("Der zu ersetzende Join-Schritt wurde nicht gefunden.")
+        bearbeitbar = self._plan_fuer_bearbeitung(plan)
         jetzt = datetime.now(UTC)
         schritte = tuple(
             replace(neuer_schritt, reihenfolge=wert.reihenfolge)
             if wert.transformationsschritt_id == bisheriger_schritt_id
             else wert
-            for wert in plan.schritte
+            for wert in bearbeitbar.schritte
         )
-        neuer_plan = Transformationsplan(
-            uuid4(),
-            plan.projekt_id,
-            tuple(dict.fromkeys((*plan.import_ids, *zusaetzliche_import_ids))),
-            schritte,
-            jetzt,
-            jetzt,
+        neuer_plan = replace(
+            bearbeitbar,
+            import_ids=tuple(dict.fromkeys((*bearbeitbar.import_ids, *zusaetzliche_import_ids))),
+            schritte=schritte,
+            geaendert_am=jetzt,
         )
         ergebnis = self.vorschau(neuer_plan)
-        datensatz = self.zwischendatensatz_erzeugen(neuer_plan, ergebnis, datensatz_id)
-        return neuer_plan, ergebnis, datensatz
+        self._repository.plan_speichern(neuer_plan)
+        return neuer_plan, ergebnis, None
 
     def zwischendatensatz_laden(self, datensatz_id: UUID) -> tuple[Zwischendatensatz, pd.DataFrame]:
         """Lädt CSV.GZ nach Prüfsummenprüfung und stellt technische Typen wieder her."""
@@ -802,48 +1055,27 @@ class TransformationsService:
         return self._repository.datensaetze_fuer_projekt(projekt_id)
 
     def transformationshistorie(self, plan: Transformationsplan) -> list[dict[str, object]]:
-        """Liefert die chronologische fachliche Historie ohne technische Primärdetails."""
-        datensaetze = self._repository.datensaetze_fuer_plan(plan.transformationsplan_id)
-        zeilen_nach_reihenfolge: dict[int, dict[str, object]] = {}
-        for datensatz in datensaetze:
-            artefakt = self._transformationsartefakt(datensatz)
-            ausfuehrung = artefakt.get("inkrementelle_ausfuehrung")
-            if isinstance(ausfuehrung, dict):
-                try:
-                    reihenfolge = int(ausfuehrung["reihenfolge"])
-                except (KeyError, TypeError, ValueError):
-                    continue
-                zeilen_nach_reihenfolge[reihenfolge] = dict(ausfuehrung)
-        if not datensaetze:
-            return []
-        artefakt = self._transformationsartefakt(datensaetze[-1])
-        historie = artefakt.get("transformationshistorie", [])
-        if not isinstance(historie, list):
-            historie = []
+        """Liefert die aktuelle In-Memory-Historie aus Raw-Daten und vollständigem Plan."""
+        historie = self.vorschau(plan).historie
         schritte = {wert.reihenfolge: wert for wert in plan.schritte}
-        for index, wirkung in enumerate(historie, 1):
-            if not isinstance(wirkung, dict):
-                continue
-            nummer = int(wirkung.get("schritt", index))
-            if nummer in zeilen_nach_reihenfolge:
-                continue
+        zeilen: list[dict[str, object]] = []
+        for wirkung in historie:
+            nummer = wirkung.schritt
             schritt = schritte.get(nummer)
-            zeilen_nach_reihenfolge[nummer] = {
-                "reihenfolge": nummer,
-                "transformationsart": (
-                    TRANSFORMATIONSART_BEZEICHNUNGEN.get(schritt.typ, schritt.typ.value)
-                    if schritt is not None
-                    else str(wirkung.get("aktion", "Transformation"))
-                ),
-                "betroffene_spalte_oder_bedingung": str(
-                    wirkung.get("aktion", "gesamter Datensatz")
-                ),
-                "eingabedatensatz": (
-                    "Rohimport" if index == 1 else f"Zwischendatensatz {index - 1}"
-                ),
-                "erzeugter_zwischendatensatz": f"Zwischendatensatz {index}",
-                "zeilen_vorher": int(wirkung.get("zeilen_vorher", 0)),
-                "zeilen_nachher": int(wirkung.get("zeilen_nachher", 0)),
-                "status": "Erfolgreich",
-            }
-        return [zeilen_nach_reihenfolge[nummer] for nummer in sorted(zeilen_nach_reihenfolge)]
+            zeilen.append(
+                {
+                    "reihenfolge": nummer,
+                    "transformationsart": (
+                        TRANSFORMATIONSART_BEZEICHNUNGEN.get(schritt.typ, schritt.typ.value)
+                        if schritt is not None
+                        else wirkung.aktion
+                    ),
+                    "betroffene_spalte_oder_bedingung": wirkung.aktion,
+                    "eingabedatensatz": "Raw + bisheriger Transformationsplan",
+                    "erzeugter_zwischendatensatz": "Vorschau (nicht persistiert)",
+                    "zeilen_vorher": wirkung.zeilen_vorher,
+                    "zeilen_nachher": wirkung.zeilen_nachher,
+                    "status": "Vorschau erfolgreich",
+                }
+            )
+        return zeilen

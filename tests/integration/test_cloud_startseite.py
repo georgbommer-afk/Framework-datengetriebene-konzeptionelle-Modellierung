@@ -6,6 +6,7 @@ import json
 import sqlite3
 import zipfile
 from pathlib import Path
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -458,8 +459,13 @@ def test_demo_ui_export_ueberlebt_neue_session_und_startseitenimport(
         }
 
     snapshot_unveraendert("unmittelbar_nach_export")
-    projekt_download = next(
-        wert for wert in app.get("download_button") if wert.label == "Projektarchiv herunterladen"
+    projekt_download = cast(
+        Any,
+        next(
+            wert
+            for wert in app.get("download_button")
+            if getattr(wert, "label", None) == "Projektarchiv herunterladen"
+        ),
     )
     assert projekt_download.proto.ignore_rerun
     projekt_download.click().run(timeout=120)

@@ -55,6 +55,14 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     demo_service = erstelle_demoprojekt_service(quell_db, quell_ws)
     demo = demo_service.erstellen(quell_kontext)
     projekt_id = demo.projekt.projekt_id
+    with sqlite3.connect(quell_db) as verbindung:
+        assert (
+            verbindung.execute(
+                "SELECT COUNT(*) FROM zwischendatensaetze WHERE projekt_id=?",
+                (str(projekt_id),),
+            ).fetchone()[0]
+            == 1
+        )
     wiederholt = demo_service.erstellen(quell_kontext)
     assert wiederholt.projekt.projekt_id == projekt_id
     assert wiederholt.report_html == demo.report_html
@@ -167,6 +175,7 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     archiv = erstelle_projektarchiv_service(quell_db, quell_ws).exportieren(
         quell_kontext, projekt_id
     )
+    assert quell_kontext.gast_geheimnis is not None
     assert quell_kontext.gast_geheimnis.encode() not in archiv
 
     ziel_db = tmp_path / "ziel.sqlite"
@@ -201,6 +210,13 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     assert importierte_ausgabe.report_xlsx == demo.report_xlsx
 
     with sqlite3.connect(ziel_db) as verbindung:
+        assert (
+            verbindung.execute(
+                "SELECT COUNT(*) FROM zwischendatensaetze WHERE projekt_id=?",
+                (str(projekt_id),),
+            ).fetchone()[0]
+            == 1
+        )
         for tabelle in (
             "datenquellen",
             "importvorgaenge",

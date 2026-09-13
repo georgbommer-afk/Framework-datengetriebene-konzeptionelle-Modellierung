@@ -128,6 +128,46 @@ class SQLiteETLRepository:
                 ),
             )
 
+    def datensatz_aktualisieren(self, datensatz: Zwischendatensatz) -> None:
+        """Aktualisiert die Plan-Lineage eines inhaltlich unveränderten T atomar."""
+        with self._verbindung() as verbindung, verbindung:
+            geaendert = verbindung.execute(
+                """
+                UPDATE zwischendatensaetze
+                SET transformationsplan_id=?, import_ids_json=?, relativer_schema_pfad=?,
+                    relativer_transformation_pfad=?, sha256=?, zeilenanzahl=?, spaltenanzahl=?
+                WHERE projekt_id=? AND zwischendatensatz_id=?
+                """,
+                (
+                    str(datensatz.transformationsplan_id),
+                    json.dumps([str(wert) for wert in datensatz.import_ids]),
+                    datensatz.relativer_schema_pfad,
+                    datensatz.relativer_transformation_pfad,
+                    datensatz.sha256,
+                    datensatz.zeilenanzahl,
+                    datensatz.spaltenanzahl,
+                    str(datensatz.projekt_id),
+                    str(datensatz.zwischendatensatz_id),
+                ),
+            ).rowcount
+            if geaendert != 1:
+                raise ValueError(
+                    "Der Zwischendatensatz konnte nicht eindeutig aktualisiert werden."
+                )
+
+    def plan_loeschen_wenn_ungenutzt(self, plan_id: UUID) -> None:
+        """Entfernt einen durch einen Plan-Fork verwaisten Transformationsplan."""
+        with self._verbindung() as verbindung, verbindung:
+            verwendet = verbindung.execute(
+                "SELECT 1 FROM zwischendatensaetze WHERE transformationsplan_id=? LIMIT 1",
+                (str(plan_id),),
+            ).fetchone()
+            if verwendet is None:
+                verbindung.execute(
+                    "DELETE FROM transformationsplaene WHERE transformationsplan_id=?",
+                    (str(plan_id),),
+                )
+
     def datensatz_laden(self, datensatz_id: UUID) -> Zwischendatensatz | None:
         """Lädt die Metadaten eines Zwischendatensatzes."""
         with self._verbindung() as verbindung:
