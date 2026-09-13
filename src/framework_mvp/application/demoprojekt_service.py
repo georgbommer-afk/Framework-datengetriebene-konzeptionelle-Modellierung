@@ -27,9 +27,7 @@ from framework_mvp.domain.models import (
     DiscoveryKonfiguration,
     Erzeugnisstrukturtyp,
     ExcelImportparameter,
-    FachlicheBestandteilentscheidung,
     FachlicheEntscheidung,
-    FachlicheEntscheidungsart,
     Gesamtvalidierungsstatus,
     GestaltDerGueter,
     KpiKonfiguration,
@@ -487,41 +485,16 @@ class DemoProjektService:
             uuid4(), aggregationsvorschau, menschlich_bestaetigt=True
         )
 
-        entscheidungszeitpunkt = datetime.now(UTC)
         modellableitungs_id = uuid4()
         k_id = uuid4()
         o_id = uuid4()
-        unentschiedene_vorschau = self._modellableitungen.vorschau(
-            projekt_id=projekt.projekt_id,
-            aggregations_id=aggregation.aggregations_id,
-            modellableitungs_id=modellableitungs_id,
-            k_id=k_id,
-            o_id=o_id,
-        )
-        bestandteilentscheidungen = tuple(
-            FachlicheBestandteilentscheidung(
-                bestandteil.bestandteil_id,
-                (
-                    FachlicheEntscheidungsart.UEBERNEHMEN
-                    if bestandteil.informationen
-                    else FachlicheEntscheidungsart.OFFEN_UNSICHER
-                ),
-                (
-                    "Der Vorschlag wird für das fachlich geprüfte Demomodell übernommen."
-                    if bestandteil.informationen
-                    else "Für diesen Bestandteil liegt im Demoprojekt kein Vorschlag vor."
-                ),
-                entscheidungszeitpunkt,
-            )
-            for bestandteil in unentschiedene_vorschau.vorgeschlagene_bestandteile
-        )
         ableitungsvorschau = self._modellableitungen.vorschau(
             projekt_id=projekt.projekt_id,
             aggregations_id=aggregation.aggregations_id,
             modellableitungs_id=modellableitungs_id,
             k_id=k_id,
             o_id=o_id,
-            entscheidungen=bestandteilentscheidungen,
+            bestaetigt_am=datetime.now(UTC),
         )
         ableitung = self._modellableitungen.speichern(
             ableitungsvorschau, menschlich_bestaetigt=True
@@ -587,8 +560,13 @@ class DemoProjektService:
             (
                 Offenheitsentscheidung.BESTAETIGT
                 if ist_unsicher
-                else Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST
+                else Offenheitsentscheidung.NICHT_BEKANNT_ODER_BESTIMMBAR
             ),
-            "" if ist_unsicher else "Für das Demomodell fachlich plausibilisiert und ergänzt.",
-            "Im Rahmen des synthetischen Demonstrationsfalls bewusst entschieden.",
+            "",
+            (
+                "Im synthetischen Demonstrationsfall fachlich bestätigt."
+                if ist_unsicher
+                else "Im synthetischen Demonstrationsfall transparent als nicht bestimmbar "
+                "dokumentiert."
+            ),
         )

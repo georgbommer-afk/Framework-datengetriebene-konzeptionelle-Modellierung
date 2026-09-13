@@ -44,7 +44,7 @@ class ModellbestandteilId(StrEnum):
 
 
 class FachlicheEntscheidungsart(StrEnum):
-    """Explizite Human-in-the-Loop-Entscheidung zu genau einem Vorschlag."""
+    """Historische Einzelentscheidung aus Artefaktversion 1."""
 
     UEBERNEHMEN = "vorschlag_uebernehmen"
     OFFEN_UNSICHER = "offen_fachlich_unsicher"
@@ -128,7 +128,7 @@ class Informationseintrag:
 
 @dataclass(frozen=True, slots=True)
 class FachlicheBestandteilentscheidung:
-    """Geprüfte Entscheidung der anwendenden Person ohne erfundene Benutzeridentität."""
+    """Historische Einzelentscheidung aus Artefaktversion 1."""
 
     bestandteil_id: ModellbestandteilId
     entscheidung: FachlicheEntscheidungsart
@@ -160,11 +160,14 @@ class OffenerEintrag:
     status: str = "offen"
     fachliche_entscheidung: FachlicheEntscheidungsart | None = None
     entschieden_am: datetime | None = None
+    anwenderhinweis: str = ""
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "begruendung", self.begruendung.strip())
+        object.__setattr__(self, "anwenderhinweis", self.anwenderhinweis.strip())
         if self.status != "offen":
             raise Domaenenfehler("Ein Eintrag in O muss in Schritt 8 offen bleiben.")
-        if not self.begruendung.strip():
+        if not self.begruendung:
             raise Domaenenfehler("Ein offener Eintrag benötigt eine konkrete Begründung.")
         if (self.fachliche_entscheidung is None) != (self.entschieden_am is None):
             raise Domaenenfehler(
@@ -175,6 +178,30 @@ class OffenerEintrag:
             if self.entschieden_am.utcoffset() is None:
                 raise Domaenenfehler("Ein Entscheidungszeitpunkt muss zeitzonenbewusst sein.")
             object.__setattr__(self, "entschieden_am", self.entschieden_am.astimezone(UTC))
+
+
+@dataclass(frozen=True, slots=True)
+class AnwenderhinweisFuerSchritt9:
+    """Optionaler Zusatz zu einem bereits systematisch erkannten O-Punkt."""
+
+    offener_eintrag_id: str
+    anwenderhinweis: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "anwenderhinweis", self.anwenderhinweis.strip())
+        if not self.offener_eintrag_id.strip() or not self.anwenderhinweis:
+            raise Domaenenfehler("Ein Anwenderhinweis benötigt O-Referenz und Inhalt.")
+
+
+@dataclass(frozen=True, slots=True)
+class FachlicheUnsicherheitskennzeichnung:
+    """Optionale Markierung sicher abgeleiteter Informationen als fachlich unsicher."""
+
+    bestandteil_id: ModellbestandteilId
+    anwenderhinweis: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "anwenderhinweis", self.anwenderhinweis.strip())
 
 
 @dataclass(frozen=True, slots=True)

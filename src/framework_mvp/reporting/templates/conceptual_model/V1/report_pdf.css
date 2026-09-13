@@ -88,6 +88,8 @@ body {
     line-height: 1.35;
 
     background: var(--white);
+    orphans: 3;
+    widows: 3;
 }
 
 
@@ -212,6 +214,31 @@ body {
     line-height: 1.1;
 
     white-space: nowrap;
+}
+
+.pdf-overview-validation {
+    margin: -2mm 0 4mm;
+    padding: 2.4mm 3mm;
+    background: var(--green-soft);
+    border-left: 0.8mm solid var(--green);
+    border-radius: 1.5mm;
+    color: var(--text);
+    font-size: 7.5pt;
+    line-height: 1.35;
+    break-inside: avoid;
+}
+
+.pdf-project-name {
+    margin: -2mm 0 3mm;
+    color: var(--blue);
+    font-size: 11pt;
+    font-weight: 700;
+}
+
+.pdf-overview-validation strong {
+    display: block;
+    margin-bottom: 0.6mm;
+    color: var(--green);
 }
 
 
@@ -847,6 +874,114 @@ body {
     font-size: 6.5pt;
 }
 
+.pdf-major-subheading {
+    margin-top: 4mm !important;
+    padding-top: 3mm;
+    border-top: 0.35mm solid var(--border);
+}
+
+.pdf-data-table {
+    width: 100%;
+    margin: 1.5mm 0 3mm;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 6.7pt;
+}
+
+.pdf-data-table thead {
+    display: table-header-group;
+}
+
+.pdf-data-table th {
+    padding: 1.4mm 1.5mm;
+    color: var(--blue);
+    background: var(--blue-soft);
+    border-bottom: 0.45mm solid var(--orange);
+    text-align: left;
+    font-size: 6.2pt;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.pdf-data-table td {
+    padding: 1.3mm 1.5mm;
+    border-bottom: 0.2mm solid var(--border);
+    vertical-align: top;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.25;
+}
+
+.pdf-data-table tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+.pdf-table-busy th:nth-child(1),
+.pdf-table-busy td:nth-child(1) {
+    width: 58%;
+}
+
+.pdf-table-factors th:nth-child(1),
+.pdf-table-factors td:nth-child(1),
+.pdf-table-factors th:nth-child(4),
+.pdf-table-factors td:nth-child(4) {
+    width: 16%;
+}
+
+.pdf-table-times th:nth-child(1),
+.pdf-table-times td:nth-child(1) {
+    width: 35%;
+}
+
+.pdf-table-sources th:nth-child(1),
+.pdf-table-sources td:nth-child(1) {
+    width: 27%;
+}
+
+.pdf-table-sources th:nth-child(2),
+.pdf-table-sources td:nth-child(2) {
+    width: 20%;
+}
+
+.pdf-table-sources th:nth-child(3),
+.pdf-table-sources td:nth-child(3) {
+    width: 13%;
+}
+
+.pdf-table-times th:nth-child(n+3),
+.pdf-table-times td:nth-child(n+3) {
+    white-space: nowrap;
+}
+
+.pdf-table-heading,
+.pdf-time-block h4 {
+    margin: 3mm 0 1.2mm;
+    color: var(--blue);
+    font-size: 8pt;
+    line-height: 1.2;
+    break-after: avoid;
+    page-break-after: avoid;
+}
+
+.pdf-time-block,
+.pdf-profile-name {
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+.pdf-time-summary {
+    margin-top: 1.1mm;
+    font-weight: 700;
+}
+
+.pdf-profile-name {
+    margin: 2mm 0 1mm;
+    color: var(--blue);
+    font-size: 7.5pt;
+    font-weight: 700;
+}
+
 /* Aktivität-Ressourcen-Zuordnungen besitzen bewusst ein eigenes, A4-sicheres Layout. */
 .pdf-resource-assignment-list {
     width: 100%;
@@ -1222,10 +1357,17 @@ body {
 
    .pdf-process-card {
     overflow: visible;
+    break-inside: avoid;
+    page-break-inside: avoid;
 }
 
 .pdf-process-heading {
     margin-top: 4mm !important;
+}
+
+.pdf-process-pair {
+    break-inside: avoid;
+    page-break-inside: avoid;
 }
 
 

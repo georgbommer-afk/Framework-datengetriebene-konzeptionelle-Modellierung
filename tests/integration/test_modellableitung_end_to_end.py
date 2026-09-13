@@ -2,6 +2,7 @@
 """End-to-End-Vertrag von Algorithmus 8 mit aktiver A_G-Lineage."""
 
 import copy
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -17,11 +18,11 @@ from framework_mvp.application.modellableitung_service import ModellableitungSer
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     Aggregationsstatus,
+    AnwenderhinweisFuerSchritt9,
     Datenquelle,
     Eingangsartefakt,
     Ergebnisaggregation,
-    FachlicheBestandteilentscheidung,
-    FachlicheEntscheidungsart,
+    FachlicheUnsicherheitskennzeichnung,
     LogistischeZielgroesse,
     ModellbestandteilId,
     Produktionsklassifikation,
@@ -288,34 +289,6 @@ def _umgebung(tmp_path):  # type: ignore[no-untyped-def]
     return service, repository, basis, aggregation, a_g, p, quelle
 
 
-def _entscheidungen(
-    *, unsicher: frozenset[ModellbestandteilId] = frozenset()
-) -> tuple[FachlicheBestandteilentscheidung, ...]:
-    jetzt = datetime(2026, 8, 31, tzinfo=UTC)
-    ohne_vorschlag = frozenset(
-        {
-            ModellbestandteilId.EINGABEN,
-            ModellbestandteilId.WARTESCHLANGEN,
-            ModellbestandteilId.ANNAHMEN,
-            ModellbestandteilId.VEREINFACHUNGEN,
-        }
-    )
-    bewusst_offen = unsicher | ohne_vorschlag
-    return tuple(
-        FachlicheBestandteilentscheidung(
-            definition.bestandteil_id,
-            FachlicheEntscheidungsart.OFFEN_UNSICHER
-            if definition.bestandteil_id in bewusst_offen
-            else FachlicheEntscheidungsart.UEBERNEHMEN,
-            "Fachliche Prüfung in Schritt 9 erforderlich."
-            if definition.bestandteil_id in bewusst_offen
-            else "",
-            jetzt,
-        )
-        for definition in MODELLBESTANDTEILE
-    )
-
-
 def test_k_und_o_werden_atomar_idempotent_gespeichert_und_validiert(tmp_path) -> None:  # type: ignore[no-untyped-def]
     service, repository, basis, aggregation, a_g, p, quelle = _umgebung(tmp_path)
     projekt_vorher = copy.deepcopy(basis.projekt)
@@ -324,23 +297,67 @@ def test_k_und_o_werden_atomar_idempotent_gespeichert_und_validiert(tmp_path) ->
     t_vorher = basis.zwischendaten.copy(deep=True)
     e_vorher = basis.event_log.copy(deep=True)
     ag_vorher = copy.deepcopy(a_g)
+    modellableitungs_id, k_id, o_id = uuid4(), uuid4(), uuid4()
+    automatisch = service.vorschau(
+        projekt_id=basis.projekt.projekt_id,
+        aggregations_id=aggregation.aggregations_id,
+        modellableitungs_id=modellableitungs_id,
+        k_id=k_id,
+        o_id=o_id,
+    )
+    eingaben_o = next(
+        wert
+        for wert in automatisch.systematische_offene_eintraege
+        if wert.bestandteil_id is ModellbestandteilId.EINGABEN
+    )
+    hinweise = (
+        AnwenderhinweisFuerSchritt9(
+            eingaben_o.offener_eintrag_id, "Schichtmodell als Faktor prüfen."
+        ),
+    )
+    unsicherheiten = (
+        FachlicheUnsicherheitskennzeichnung(
+            ModellbestandteilId.AKTIVITAETEN, "Bezeichnungen fachlich prüfen."
+        ),
+    )
     vorschau = service.vorschau(
         projekt_id=basis.projekt.projekt_id,
         aggregations_id=aggregation.aggregations_id,
-        modellableitungs_id=uuid4(),
-        k_id=uuid4(),
-        o_id=uuid4(),
-        entscheidungen=_entscheidungen(unsicher=frozenset({ModellbestandteilId.AKTIVITAETEN})),
+        modellableitungs_id=modellableitungs_id,
+        k_id=k_id,
+        o_id=o_id,
+        anwenderhinweise=hinweise,
+        unsicherheitskennzeichnungen=unsicherheiten,
+        bestaetigt_am=datetime(2026, 8, 31, tzinfo=UTC),
     )
-    gespeichert = service.speichern(vorschau)
+    gespeichert = service.speichern(vorschau, menschlich_bestaetigt=True)
     erneut, k, o = service.laden(gespeichert.modellableitungs_id)
     assert erneut == gespeichert
     assert len(k["modellbestandteile"]) == 16
-    assert k["mappingversion"] == MAPPINGVERSION == 3
+    assert k["mappingversion"] == MAPPINGVERSION == 4
+    assert k["artefaktversion"] == 2
+    assert o["artefaktversion"] == 2
     assert k["menschlich_bestaetigt"] is True
+    assert k["bestaetigt_am"] == "2026-08-31 00:00:00+00:00"
     assert all(wert["status"] == "offen" for wert in o["offene_eintraege"])
     assert o["k_referenz"]["datei_sha256"] == gespeichert.k_sha256
     assert "prozessmodell_p_soll" not in str(k)
+    gespeichertes_eingaben_o = next(
+        wert
+        for wert in o["offene_eintraege"]
+        if wert["offener_eintrag_id"] == eingaben_o.offener_eintrag_id
+    )
+    assert gespeichertes_eingaben_o["begruendung"] == eingaben_o.begruendung
+    assert gespeichertes_eingaben_o["anwenderhinweis"] == "Schichtmodell als Faktor prüfen."
+    aktivitaeten = next(
+        wert for wert in k["modellbestandteile"] if wert["bestandteil_id"] == "aktivitaeten"
+    )
+    assert aktivitaeten["informationen"]
+    assert any(
+        wert["bestandteil_id"] == "aktivitaeten"
+        and wert["kennzeichnungsherkunft"] == "menschlich_markiert"
+        for wert in o["offene_eintraege"]
+    )
     assert service.uebergabe_schritt9(
         gespeichert.modellableitungs_id, basis.projekt.projekt_id
     ) == (k, o)
@@ -350,9 +367,11 @@ def test_k_und_o_werden_atomar_idempotent_gespeichert_und_validiert(tmp_path) ->
         modellableitungs_id=uuid4(),
         k_id=uuid4(),
         o_id=uuid4(),
-        entscheidungen=_entscheidungen(unsicher=frozenset({ModellbestandteilId.AKTIVITAETEN})),
+        anwenderhinweise=hinweise,
+        unsicherheitskennzeichnungen=unsicherheiten,
+        bestaetigt_am=datetime(2026, 9, 1, tzinfo=UTC),
     )
-    assert service.speichern(zweite_vorschau) == gespeichert
+    assert service.speichern(zweite_vorschau, menschlich_bestaetigt=True) == gespeichert
     assert len(repository.werte) == 1
     pd.testing.assert_frame_equal(basis.zwischendaten, t_vorher, check_dtype=True)
     pd.testing.assert_frame_equal(basis.event_log, e_vorher, check_dtype=True)
@@ -372,26 +391,18 @@ def test_speicherung_benoetigt_bestaetigung_und_invalide_lineage_blockiert(tmp_p
         k_id=uuid4(),
         o_id=uuid4(),
     )
-    with pytest.raises(Domaenenfehler, match="alle 16"):
-        service.speichern(vorschau)
-    fast_vollstaendig = service.vorschau(
+    with pytest.raises(Domaenenfehler, match="Gesamtzuordnung"):
+        service.speichern(vorschau, menschlich_bestaetigt=True)
+    bestaetigt = service.vorschau(
         projekt_id=basis.projekt.projekt_id,
         aggregations_id=aggregation.aggregations_id,
         modellableitungs_id=uuid4(),
         k_id=uuid4(),
         o_id=uuid4(),
-        entscheidungen=_entscheidungen()[:-1],
+        bestaetigt_am=datetime.now(UTC),
     )
-    with pytest.raises(Domaenenfehler, match="alle 16"):
-        service.speichern(fast_vollstaendig, menschlich_bestaetigt=True)
-    vorschau = service.vorschau(
-        projekt_id=basis.projekt.projekt_id,
-        aggregations_id=aggregation.aggregations_id,
-        modellableitungs_id=uuid4(),
-        k_id=uuid4(),
-        o_id=uuid4(),
-        entscheidungen=_entscheidungen(),
-    )
+    with pytest.raises(Domaenenfehler, match="Gesamtzuordnung"):
+        service.speichern(bestaetigt, menschlich_bestaetigt=False)
     basis.projekt = basis.projekt.aktualisiert(
         bezeichnung=basis.projekt.bezeichnung,
         untersuchungsauftrag=Untersuchungsauftrag(
@@ -403,7 +414,7 @@ def test_speicherung_benoetigt_bestaetigung_und_invalide_lineage_blockiert(tmp_p
         status=Projektstatus.AKTIV,
     )
     with pytest.raises(Domaenenfehler, match="Neuberechnung"):
-        service.speichern(vorschau)
+        service.speichern(bestaetigt, menschlich_bestaetigt=True)
 
 
 def test_manipuliertes_k_wird_beim_laden_abgewiesen(tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -414,9 +425,9 @@ def test_manipuliertes_k_wird_beim_laden_abgewiesen(tmp_path) -> None:  # type: 
         modellableitungs_id=uuid4(),
         k_id=uuid4(),
         o_id=uuid4(),
-        entscheidungen=_entscheidungen(),
+        bestaetigt_am=datetime.now(UTC),
     )
-    gespeichert = service.speichern(vorschau)
+    gespeichert = service.speichern(vorschau, menschlich_bestaetigt=True)
     service._artefakte.artefakt_ersetzen(  # noqa: SLF001
         gespeichert.relativer_k_pfad,
         service._artefakte.lesen(gespeichert.relativer_k_pfad) + b" ",  # noqa: SLF001
@@ -450,15 +461,19 @@ def test_fehlende_q_referenz_der_aktiven_t_lineage_blockiert(tmp_path) -> None: 
         service.grundlage_laden(basis.projekt.projekt_id, aggregation.aggregations_id)
 
 
-def test_entscheidung_und_begruendung_aendern_den_fingerabdruck(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_hinweis_und_unsicherheit_aendern_den_prueffingerabdruck(tmp_path) -> None:  # type: ignore[no-untyped-def]
     service, _, basis, aggregation, _, _, _ = _umgebung(tmp_path)
-    akzeptiert = service.vorschau(
+    automatisch = service.vorschau(
         projekt_id=basis.projekt.projekt_id,
         aggregations_id=aggregation.aggregations_id,
         modellableitungs_id=uuid4(),
         k_id=uuid4(),
         o_id=uuid4(),
-        entscheidungen=_entscheidungen(),
+    )
+    eingaben_o = next(
+        wert
+        for wert in automatisch.systematische_offene_eintraege
+        if wert.bestandteil_id is ModellbestandteilId.EINGABEN
     )
     unsicher = service.vorschau(
         projekt_id=basis.projekt.projekt_id,
@@ -466,20 +481,48 @@ def test_entscheidung_und_begruendung_aendern_den_fingerabdruck(tmp_path) -> Non
         modellableitungs_id=uuid4(),
         k_id=uuid4(),
         o_id=uuid4(),
-        entscheidungen=_entscheidungen(unsicher=frozenset({ModellbestandteilId.RESSOURCEN})),
+        anwenderhinweise=(
+            AnwenderhinweisFuerSchritt9(eingaben_o.offener_eintrag_id, "Faktor prüfen."),
+        ),
+        unsicherheitskennzeichnungen=(
+            FachlicheUnsicherheitskennzeichnung(ModellbestandteilId.RESSOURCEN),
+        ),
     )
 
-    assert akzeptiert.entscheidungsfingerabdruck != unsicher.entscheidungsfingerabdruck
+    assert automatisch.prueffingerabdruck != unsicher.prueffingerabdruck
     ressourcen = next(
         wert
         for wert in unsicher.bestandteile
         if wert.bestandteil_id is ModellbestandteilId.RESSOURCEN
     )
-    assert not ressourcen.informationen
+    assert ressourcen.informationen
     assert any(
         wert.bestandteil_id is ModellbestandteilId.RESSOURCEN
         and wert.kennzeichnungsherkunft.value == "menschlich_markiert"
         for wert in unsicher.offene_eintraege
+    )
+
+
+def test_hinweiswiederverwendung_verlangt_fachlich_exakt_denselben_o_punkt(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    service, _, basis, aggregation, _, _, _ = _umgebung(tmp_path)
+    vorschau = service.vorschau(
+        projekt_id=basis.projekt.projekt_id,
+        aggregations_id=aggregation.aggregations_id,
+        modellableitungs_id=uuid4(),
+        k_id=uuid4(),
+        o_id=uuid4(),
+    )
+    punkt = vorschau.systematische_offene_eintraege[0]
+
+    assert service._offener_punkt_signatur(punkt) == service._offener_punkt_signatur(  # noqa: SLF001
+        replace(
+            punkt,
+            offener_eintrag_id="neue-generation:offen:1",
+            anwenderhinweis="Nur die ID und der Hinweis unterscheiden sich.",
+        )
+    )
+    assert service._offener_punkt_signatur(punkt) != service._offener_punkt_signatur(  # noqa: SLF001
+        replace(punkt, begruendung="Der fachliche Grund hat sich geändert.")
     )
 
 
@@ -499,10 +542,11 @@ def test_historische_elfteilige_ableitung_bleibt_kontrolliert_lesbar() -> None:
     ]
     ableitung = SimpleNamespace(mappingversion=2)
     k = {
+        "artefaktversion": 1,
         "mappingversion": 2,
         "modellbestandteile": [{"bestandteil_id": wert} for wert in alte_ids],
     }
-    o: dict[str, object] = {}
+    o: dict[str, object] = {"artefaktversion": 1, "mappingversion": 2}
 
     _, gelesenes_k, gelesenes_o = ModellableitungService._historische_ableitung_pruefen(  # noqa: SLF001
         ableitung, k, o
@@ -511,3 +555,22 @@ def test_historische_elfteilige_ableitung_bleibt_kontrolliert_lesbar() -> None:
     assert gelesenes_k["historische_darstellung"] is True
     assert gelesenes_o["historische_darstellung"] is True
     assert [wert["bestandteil_id"] for wert in gelesenes_k["modellbestandteile"]] == alte_ids
+
+
+def test_historische_sechzehnteilige_mappingversion_drei_bleibt_lesbar() -> None:
+    ableitung = SimpleNamespace(mappingversion=3)
+    k = {
+        "artefaktversion": 1,
+        "mappingversion": 3,
+        "modellbestandteile": [
+            {"bestandteil_id": wert.bestandteil_id.value} for wert in MODELLBESTANDTEILE
+        ],
+    }
+    o: dict[str, object] = {"artefaktversion": 1, "mappingversion": 3}
+
+    _, gelesenes_k, gelesenes_o = ModellableitungService._historische_ableitung_pruefen(  # noqa: SLF001
+        ableitung, k, o
+    )
+
+    assert gelesenes_k["historische_darstellung"] is True
+    assert gelesenes_o["historische_darstellung"] is True

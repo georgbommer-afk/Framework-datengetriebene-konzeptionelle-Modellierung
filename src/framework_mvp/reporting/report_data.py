@@ -8,9 +8,13 @@ from enum import Enum
 from typing import Any, cast
 from uuid import UUID
 
-from framework_mvp.formatierung import formatiere_messwert, formatiere_zeitstempel
+from framework_mvp.formatierung import (
+    formatiere_anteil_als_prozent,
+    formatiere_messwert,
+    formatiere_zeitstempel,
+)
 
-REPORT_DATA_VERSION = 1
+REPORT_DATA_VERSION = 2
 
 ERWARTETE_BESTANDTEIL_IDS = (
     "problemstellung",
@@ -57,6 +61,20 @@ _ANZEIGETEXTE = {
     "automatisch_berechnen": "Aus den Daten berechnen",
     "spaeter_manuell_berechnen": "Später manuell berechnen",
     "qualitaet_erhoehen": "Qualität erhöhen",
+    "liefertreue_erhoehen": "Liefertreue erhöhen",
+    "erp_system": "ERP-System",
+    "me_system": "MES",
+    "wm_system": "Lagerverwaltungssystem",
+    "datei_export": "Dateiexport",
+    "sonstiges_system": "Sonstiges System",
+    "excel": "XLSX",
+    "csv": "CSV",
+    "datenbank": "Datenbank",
+    "gesamtsystem": "Gesamtsystem",
+    "entitaet": "Entität",
+    "aktivitaet": "Aktivität",
+    "warteschlange": "Warteschlange",
+    "ressource": "Ressource",
     "petrinetz": "Petrinetz",
     "prozessbaum": "Prozessbaum",
     "bpmn": "BPMN",
@@ -85,6 +103,17 @@ def _normalisieren(wert: Any) -> Any:
     if isinstance(wert, (tuple, list, set, frozenset)):
         return [_normalisieren(inhalt) for inhalt in wert]
     return wert
+
+
+def _conformance_aufbereiten(wert: Mapping[str, Any]) -> dict[str, Any]:
+    """Ergänzt reine Anzeigewerte, während Fitness als Rohanteil erhalten bleibt."""
+    ergebnis = _normalisieren(wert)
+    if not isinstance(ergebnis, dict):
+        return {}
+    details = ergebnis.get("ergebnis")
+    if isinstance(details, dict) and details.get("fitness") is not None:
+        details["fitness_anzeige"] = formatiere_anteil_als_prozent(details["fitness"])
+    return ergebnis
 
 
 REPORT_LIST_LIMIT = 20
@@ -282,7 +311,7 @@ def _fachliche_entscheidungen(
 def _fachliche_anpassungen(
     bestandteil: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    """Liefert nur echte zusätzliche Modellinhalte aus Schritt 9."""
+    """Liefert nur echte Modellinhalte; unbekannt/nicht anwendbar bleiben Entscheidungen."""
     roh = bestandteil.get("menschliche_eintraege", [])
     if not isinstance(roh, list):
         return []
@@ -291,14 +320,165 @@ def _fachliche_anpassungen(
     for eintrag in roh:
         if not isinstance(eintrag, Mapping):
             continue
-        if eintrag.get("eintragstyp") != "zusaetzliche_anpassung":
+        if eintrag.get("eintragstyp") == "zusaetzliche_anpassung":
+            ergebnis.append(
+                {
+                    "anpassungsnummer": eintrag.get("anpassungsnummer"),
+                    "fachlicher_inhalt": str(eintrag.get("fachlicher_inhalt", "")),
+                    "begruendung": str(eintrag.get("begruendung", "")),
+                    "menschliche_entscheidung": bool(eintrag.get("menschliche_entscheidung")),
+                }
+            )
             continue
+        struktur = eintrag.get("strukturierter_inhalt")
+        if (
+            eintrag.get("eintragstyp") == "behandlung_offener_eintrag"
+            and eintrag.get("modellinhalt_erzeugt") is True
+            and isinstance(struktur, Mapping)
+            and struktur
+        ):
+            ergebnis.append(
+                {
+                    "offener_eintrag_id": eintrag.get("offener_eintrag_id"),
+                    "fachlicher_inhalt": json.dumps(
+                        _normalisieren(struktur), ensure_ascii=False, sort_keys=True
+                    ),
+                    "strukturierter_inhalt": _normalisieren(struktur),
+                    "begruendung": str(eintrag.get("kommentar", eintrag.get("begruendung", ""))),
+                    "menschliche_entscheidung": bool(eintrag.get("menschliche_entscheidung")),
+                }
+            )
+    return ergebnis
+
+
+def _strukturierte_menschliche_inhalte(
+    bestandteil: Mapping[str, Any],
+    strukturtyp: str,
+) -> list[dict[str, Any]]:
+    """Liest ausschließlich explizit in K* gespeicherte strukturierte Modellinhalte."""
+    roh = bestandteil.get("menschliche_eintraege", [])
+    if not isinstance(roh, list):
+        return []
+    ergebnis: list[dict[str, Any]] = []
+    for eintrag in roh:
+        if not isinstance(eintrag, Mapping) or eintrag.get("modellinhalt_erzeugt") is not True:
+            continue
+        inhalt = eintrag.get("strukturierter_inhalt")
+        if isinstance(inhalt, Mapping) and inhalt.get("strukturtyp") == strukturtyp:
+            ergebnis.append(cast(dict[str, Any], _normalisieren(inhalt)))
+    return ergebnis
+
+
+def _experimentelle_faktoren(bestandteil: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Bereitet nur in Schritt 9 ausdrücklich festgelegte experimentelle Faktoren auf."""
+    ergebnis: list[dict[str, Any]] = []
+    for faktor in _strukturierte_menschliche_inhalte(bestandteil, "experimenteller_faktor"):
+        art = str(faktor.get("art", ""))
+        auspraegungen = _listenwert(faktor.get("auspraegungen", []))
+        if art == "quantitativer_parameter":
+            unterer_wert = faktor.get("unterer_wert")
+            oberer_wert = faktor.get("oberer_wert")
+            einheit = str(faktor.get("einheit", "") or "")
+            wertebereich = (
+                f"{formatiere_messwert(unterer_wert)} bis "
+                f"{formatiere_messwert(oberer_wert)}"
+                f"{f' {einheit}' if einheit else ''}"
+            )
+        else:
+            unterer_wert = oberer_wert = None
+            einheit = ""
+            wertebereich = ", ".join(str(wert) for wert in auspraegungen)
         ergebnis.append(
             {
-                "anpassungsnummer": eintrag.get("anpassungsnummer"),
-                "fachlicher_inhalt": str(eintrag.get("fachlicher_inhalt", "")),
-                "begruendung": str(eintrag.get("begruendung", "")),
-                "menschliche_entscheidung": bool(eintrag.get("menschliche_entscheidung")),
+                **faktor,
+                "bezugstyp_anzeige": _anzeigetext(faktor.get("bezugstyp")),
+                "art_anzeige": {
+                    "quantitativer_parameter": "Quantitativer Parameter",
+                    "qualitative_regel": "Qualitative Regel",
+                }.get(art, _anzeigetext(art)),
+                "unterer_wert": unterer_wert,
+                "oberer_wert": oberer_wert,
+                "einheit": einheit,
+                "auspraegungen": auspraegungen,
+                "wertebereich_anzeige": wertebereich,
+            }
+        )
+    return ergebnis
+
+
+def _bestaetigte_warteschlangen(
+    bestandteil: Mapping[str, Any],
+    automatisch: Any,
+) -> list[dict[str, Any]]:
+    """Vereinigt bestätigte K-Inhalte und menschliche Schritt-9-Ergänzungen."""
+    kandidaten: list[dict[str, Any]] = []
+    for eintrag in _listenwert(automatisch):
+        if isinstance(eintrag, Mapping):
+            kandidaten.append(cast(dict[str, Any], _normalisieren(eintrag)))
+    kandidaten.extend(
+        eintrag
+        for eintrag in _strukturierte_menschliche_inhalte(bestandteil, "warteschlangenergaenzung")
+        if eintrag.get("fachlich_bestaetigt") is True
+    )
+    ergebnis: list[dict[str, Any]] = []
+    bekannte: set[tuple[str, str, str]] = set()
+    for eintrag in kandidaten:
+        von = str(eintrag.get("vorgaengeraktivitaet", eintrag.get("von_aktivitaet", "")) or "")
+        zu = str(eintrag.get("folgeaktivitaet", eintrag.get("zu_aktivitaet", "")) or "")
+        bezeichnung = str(eintrag.get("bezeichnung", "") or "")
+        schluessel = (von, zu, bezeichnung)
+        if not von or not zu or schluessel in bekannte:
+            continue
+        bekannte.add(schluessel)
+        ergebnis.append(
+            {
+                **eintrag,
+                "bezeichnung": bezeichnung or f"Warteschlange {von} → {zu}",
+                "vorgaengeraktivitaet": von,
+                "folgeaktivitaet": zu,
+            }
+        )
+    return ergebnis
+
+
+def _datenquellen_aufbereiten(werte: list[Any]) -> list[dict[str, Any]]:
+    """Dedupliziert Q-Einträge über ihre stabile Identität und übersetzt bekannte Codes."""
+    zusammengefuehrt: dict[tuple[str, ...], dict[str, Any]] = {}
+    reihenfolge: list[tuple[str, ...]] = []
+    for wert in werte:
+        if not isinstance(wert, Mapping):
+            continue
+        normalisiert = cast(dict[str, Any], _normalisieren(wert))
+        identitaet = str(normalisiert.get("datenquellen_id", "") or "")
+        schluessel = (
+            ("id", identitaet)
+            if identitaet
+            else (
+                "fachlich",
+                str(normalisiert.get("bezeichnung", "")),
+                str(normalisiert.get("konkretes_quellsystem", "")),
+                str(normalisiert.get("quellenart", "")),
+            )
+        )
+        if schluessel not in zusammengefuehrt:
+            zusammengefuehrt[schluessel] = {}
+            reihenfolge.append(schluessel)
+        ziel = zusammengefuehrt[schluessel]
+        for name, inhalt in normalisiert.items():
+            if inhalt not in (None, "", [], {}) or name not in ziel:
+                ziel[name] = inhalt
+
+    ergebnis: list[dict[str, Any]] = []
+    for schluessel in reihenfolge:
+        quelle = zusammengefuehrt[schluessel]
+        konkretes_system = str(quelle.get("konkretes_quellsystem", "") or "")
+        ergebnis.append(
+            {
+                **quelle,
+                "quellsystem_anzeige": konkretes_system
+                or _anzeigetext(quelle.get("quellsystemtyp")),
+                "format_anzeige": _anzeigetext(quelle.get("quellenart")),
+                "verwendung": str(quelle.get("fachliche_beschreibung", "") or ""),
             }
         )
     return ergebnis
@@ -463,6 +643,10 @@ def _profil_aufbereiten(wert: Any) -> dict[str, Any]:
 
     return {
         "import_id": _normalisieren(wert.get("import_id")),
+        "datenquellen_id": _normalisieren(wert.get("datenquellen_id")),
+        "datenquelle_bezeichnung": _normalisieren(wert.get("datenquelle_bezeichnung")),
+        "originaldateiname": _normalisieren(wert.get("originaldateiname")),
+        "tabellenbezeichnung": _normalisieren(wert.get("tabellenbezeichnung")),
         "profil_version": _normalisieren(wert.get("profil_version")),
         "profil_sha256": _normalisieren(wert.get("profil_sha256")),
         "raw_sha256": _normalisieren(wert.get("raw_sha256")),
@@ -475,6 +659,132 @@ def _profil_aufbereiten(wert: Any) -> dict[str, Any]:
         "vollstaendig_leere_spalten": _normalisieren(gesamt.get("vollstaendig_leere_spalten")),
         "spaltenprofile": _normalisieren(spaltenprofile),
     }
+
+
+def _profile_aufbereiten(
+    werte: list[Any], datenquellen: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Ordnet jedes Profil über die gespeicherte Datenquellen-ID fachlich sichtbar zu."""
+    quellen_nach_id = {
+        str(wert.get("datenquellen_id")): str(wert.get("bezeichnung", ""))
+        for wert in datenquellen
+        if wert.get("datenquellen_id")
+    }
+    ergebnis: list[dict[str, Any]] = []
+    bekannte: set[tuple[str, str]] = set()
+    for index, wert in enumerate(werte, 1):
+        profil = _profil_aufbereiten(wert)
+        import_id = str(profil.get("import_id", "") or "")
+        profil_sha256 = str(profil.get("profil_sha256", "") or "")
+        schluessel = (
+            import_id or f"legacy-{index}",
+            profil_sha256 or str(profil.get("originaldateiname", "") or index),
+        )
+        if schluessel in bekannte:
+            continue
+        bekannte.add(schluessel)
+        bezeichnung = str(profil.get("datenquelle_bezeichnung", "") or "")
+        if not bezeichnung:
+            bezeichnung = quellen_nach_id.get(str(profil.get("datenquellen_id", "")), "")
+        if not bezeichnung:
+            bezeichnung = str(profil.get("originaldateiname", "") or f"Datenprofil {index}")
+        profil["anzeigebezeichnung"] = bezeichnung
+        ergebnis.append(profil)
+    return ergebnis
+
+
+def _fachlicher_zeitstempel(wert: Any) -> str:
+    """Formatiert den Berichtszeitraum kompakt; K* und technische Rohwerte bleiben unverändert."""
+    formatiert = formatiere_zeitstempel(wert)
+    return formatiert.removesuffix(" +00:00")
+
+
+def _zeitstatistikzeile(wert: Mapping[str, Any]) -> dict[str, Any]:
+    statistik = wert.get("statistik", {})
+    if not isinstance(statistik, Mapping):
+        statistik = {}
+    return {
+        "anzahl": statistik.get("anzahl"),
+        "mittelwert_sekunden": statistik.get("mittelwert_sekunden"),
+        "median_sekunden": statistik.get("median_sekunden"),
+    }
+
+
+def _zeitbezogene_datenauswahl_aufbereiten(
+    wert: Mapping[str, Any],
+    bestaetigte_warteschlangen: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Erzeugt gemeinsame Tabellenzeilen ohne neue zeitbezogene Berechnungen."""
+    ergebnis = cast(dict[str, Any], _normalisieren(wert))
+
+    bearbeitungszeiten: list[dict[str, Any]] = []
+    bekannte_bearbeitungszeiten: set[tuple[str, str, str]] = set()
+    for schluessel in ("bearbeitungszeiten", "ressourcenbezogene_bearbeitungszeiten"):
+        for eintrag in _listenwert(wert.get(schluessel)):
+            if not isinstance(eintrag, Mapping):
+                continue
+            aktivitaet = str(eintrag.get("aktivitaet", "") or "")
+            ressource = str(eintrag.get("ressource", "") or "")
+            statistik = eintrag.get("statistik", eintrag)
+            identitaet = (
+                aktivitaet,
+                ressource,
+                json.dumps(_normalisieren(statistik), sort_keys=True),
+            )
+            if identitaet in bekannte_bearbeitungszeiten:
+                continue
+            bekannte_bearbeitungszeiten.add(identitaet)
+            bearbeitungszeiten.append(
+                {
+                    "aktivitaet": aktivitaet,
+                    "ressource": ressource,
+                    **_zeitstatistikzeile({"statistik": statistik}),
+                }
+            )
+
+    bestaetigte_uebergaenge = {
+        (
+            str(eintrag.get("vorgaengeraktivitaet", "")),
+            str(eintrag.get("folgeaktivitaet", "")),
+        )
+        for eintrag in bestaetigte_warteschlangen
+    }
+    potenzielle_wartezeiten: list[dict[str, Any]] = []
+    for eintrag in _listenwert(wert.get("potenzielle_wartezeiten")):
+        if not isinstance(eintrag, Mapping):
+            continue
+        von = str(eintrag.get("von_aktivitaet", "") or "")
+        zu = str(eintrag.get("zu_aktivitaet", "") or "")
+        potenzielle_wartezeiten.append(
+            {
+                "uebergang": f"{von} → {zu}",
+                "von_aktivitaet": von,
+                "zu_aktivitaet": zu,
+                **_zeitstatistikzeile(eintrag),
+                "status": "Bestätigt" if (von, zu) in bestaetigte_uebergaenge else "Hinweis",
+            }
+        )
+
+    vereinfachte_zeitspannen = [
+        {
+            "uebergang": (
+                f"{eintrag.get('von_aktivitaet', '')} → {eintrag.get('zu_aktivitaet', '')}"
+            ),
+            "von_aktivitaet": eintrag.get("von_aktivitaet"),
+            "zu_aktivitaet": eintrag.get("zu_aktivitaet"),
+            **_zeitstatistikzeile(eintrag),
+        }
+        for eintrag in _listenwert(wert.get("vereinfachte_zeitspannen"))
+        if isinstance(eintrag, Mapping)
+    ]
+    ergebnis.update(
+        {
+            "bearbeitungszeiten_tabelle": bearbeitungszeiten,
+            "potenzielle_wartezeiten_tabelle": potenzielle_wartezeiten,
+            "vereinfachte_zeitspannen_tabelle": vereinfachte_zeitspannen,
+        }
+    )
+    return ergebnis
 
 
 def _lineage_informationen(
@@ -495,6 +805,7 @@ def _lineage_informationen(
                         information.get("herkunftsartefakt_sha256")
                     ),
                     "uebernahmeart": _normalisieren(information.get("uebernahmeart")),
+                    "uebernahmeart_anzeige": _anzeigetext(information.get("uebernahmeart")),
                 }
             )
     return ergebnis
@@ -538,8 +849,10 @@ def build_report_data(
     problemstellung = bestandteile["problemstellung"]
     zielsetzung = bestandteile["zielsetzung"]
     ist_v3 = "ausgaben" in bestandteile
+    ausgaben = bestandteile["ausgaben"] if ist_v3 else bestandteile["ausgaben_und_eingaben"]
+    eingaben = bestandteile["eingaben"] if ist_v3 else bestandteile["ausgaben_und_eingaben"]
     ausgaben_eingaben = (
-        _kombiniere_bestandteile(bestandteile["ausgaben"], bestandteile["eingaben"])
+        _kombiniere_bestandteile(ausgaben, eingaben)
         if ist_v3
         else bestandteile["ausgaben_und_eingaben"]
     )
@@ -665,8 +978,8 @@ def build_report_data(
         _normalisieren(wert) for wert in etl_abstraktionen if isinstance(wert, Mapping)
     ]
 
-    datenquellen = _info_werte_mit_praefix(daten, "datenquellen[")
-    profile = [_profil_aufbereiten(wert) for wert in _info_werte_mit_praefix(daten, "profile[")]
+    datenquellen = _datenquellen_aufbereiten(_info_werte_mit_praefix(daten, "datenquellen["))
+    profile = _profile_aufbereiten(_info_werte_mit_praefix(daten, "profile["), datenquellen)
 
     zwischendatensatz = _info_wert(daten, "schema_und_referenz", {})
     if not isinstance(zwischendatensatz, Mapping):
@@ -697,6 +1010,18 @@ def build_report_data(
     )
     if not isinstance(performance_ausgabe, Mapping):
         performance_ausgabe = {}
+    automatisch_bestaetigte_warteschlangen = _info_wert(
+        warteschlangen,
+        "strukturierte_ergebnisse.warteschlangen_und_wartezeiten.bestaetigte_warteschlangen",
+        warteschlangenanalyse.get("bestaetigte_warteschlangen", []),
+    )
+    bestaetigte_warteschlangen = _bestaetigte_warteschlangen(
+        warteschlangen, automatisch_bestaetigte_warteschlangen
+    )
+    zeitbezogene_datenauswahl = _zeitbezogene_datenauswahl_aufbereiten(
+        zeitbezogene_datenauswahl,
+        bestaetigte_warteschlangen,
+    )
     vereinfachte_zeitspannen = _listenwert(
         zeitbezogene_datenauswahl.get("vereinfachte_zeitspannen")
     )
@@ -747,6 +1072,24 @@ def build_report_data(
         )
     )[:REPORT_LIST_LIMIT]
     manuelle_aktivitaet_ressourcen = _manuelle_ressourcenzuordnungen(ressourcen)
+    experimentelle_faktoren = _experimentelle_faktoren(eingaben)
+    event_log_anzeige = cast(dict[str, Any], _normalisieren(event_log))
+    if event_log.get("zeitraum_von"):
+        event_log_anzeige["zeitraum_von_anzeige"] = _fachlicher_zeitstempel(
+            event_log.get("zeitraum_von")
+        )
+    if event_log.get("zeitraum_bis"):
+        event_log_anzeige["zeitraum_bis_anzeige"] = _fachlicher_zeitstempel(
+            event_log.get("zeitraum_bis")
+        )
+    fallidentifikation = next(
+        (
+            str(wert)
+            for wert in _listenwert(_info_wert(entitaeten, "systemprofil.objekte_gueter"))
+            if str(wert).strip()
+        ),
+        "",
+    )
 
     return {
         "report_data_version": REPORT_DATA_VERSION,
@@ -805,23 +1148,42 @@ def build_report_data(
                 )
             ),
         },
-        "ausgaben_und_eingaben": {
-            **_abschnitt_metadaten(k_stern, ausgaben_eingaben),
+        "ausgaben": {
+            **_abschnitt_metadaten(k_stern, ausgaben),
             "ausgewaehlte_kpis": _code_liste(
                 _info_wert(
-                    ausgaben_eingaben,
+                    ausgaben,
                     "untersuchungsauftrag.ausgewaehlte_kpi_ids",
                 )
             ),
             "kpi_ergebnisse": [
                 _kpi_aufbereiten(wert)
                 for wert in _info_werte_mit_praefix(
-                    ausgaben_eingaben,
+                    ausgaben,
                     "kpi_ergebnisse[",
                 )
             ],
-            "conformance_checking": _normalisieren(conformance_ausgabe),
+            "conformance_checking": _conformance_aufbereiten(conformance_ausgabe),
             "performance_und_engpassanalyse": _normalisieren(performance_ausgabe),
+        },
+        "eingaben": {
+            **_abschnitt_metadaten(k_stern, eingaben),
+            "experimentelle_faktoren": experimentelle_faktoren,
+        },
+        # Kompatibler Sammelzugriff für bestehende Integrationen; neue Renderer verwenden
+        # die fachlich getrennten Abschnitte ``ausgaben`` und ``eingaben``.
+        "ausgaben_und_eingaben": {
+            **_abschnitt_metadaten(k_stern, ausgaben_eingaben),
+            "ausgewaehlte_kpis": _code_liste(
+                _info_wert(ausgaben, "untersuchungsauftrag.ausgewaehlte_kpi_ids")
+            ),
+            "kpi_ergebnisse": [
+                _kpi_aufbereiten(wert)
+                for wert in _info_werte_mit_praefix(ausgaben, "kpi_ergebnisse[")
+            ],
+            "conformance_checking": _conformance_aufbereiten(conformance_ausgabe),
+            "performance_und_engpassanalyse": _normalisieren(performance_ausgabe),
+            "experimentelle_faktoren": experimentelle_faktoren,
         },
         "modellumfang": {
             **_abschnitt_metadaten(k_stern, umfang),
@@ -850,6 +1212,7 @@ def build_report_data(
             **_abschnitt_metadaten(k_stern, entitaeten),
             "objekte_gueter": _listenwert(_info_wert(entitaeten, "systemprofil.objekte_gueter")),
             "kanonisches_fallattribut": _normalisieren(case_id.get("kanonisches_attribut")),
+            "fallidentifikation": fallidentifikation,
             "fallanzahl": _normalisieren(case_id.get("fallanzahl")),
         },
         "aktivitaeten": {
@@ -869,6 +1232,7 @@ def build_report_data(
                 )
             ],
             "wartestellenhinweise": wartestellenhinweise,
+            "bestaetigte_warteschlangen": bestaetigte_warteschlangen,
             "berechnungsregel": _normalisieren(warteschlangenanalyse.get("berechnungsregel")),
             "ausgeschlossene_negative_werte": _normalisieren(
                 warteschlangenanalyse.get(
@@ -900,6 +1264,9 @@ def build_report_data(
             "manuelle_aktivitaet_ressourcen_anzeige": (
                 _ressourcenzuordnungen_fuer_anzeige(manuelle_aktivitaet_ressourcen)
             ),
+            "fachliche_ressourcenergaenzungen": _strukturierte_menschliche_inhalte(
+                ressourcen, "ressourcenergaenzung"
+            ),
             "ressourcenbezogene_kpis": [
                 _kpi_aufbereiten(wert)
                 for wert in _listenwert(
@@ -920,19 +1287,33 @@ def build_report_data(
             ),
             "prozessnotation_anzeige": _anzeigetext(_info_wert(annahmen, "prozessnotation")),
             "schwellwert_auswirkung": _normalisieren(schwellwert_auswirkung),
+            "explizite_annahmen": _strukturierte_menschliche_inhalte(annahmen, "annahme"),
         },
         "vereinfachungen": {
             "etl_abstraktionen": etl_abstraktionen,
             "vereinfachte_zeitspannen": _normalisieren(zeitvereinfachung),
+            "explizite_vereinfachungen": _strukturierte_menschliche_inhalte(
+                annahmen, "vereinfachung"
+            ),
         },
         "daten": {
             **_abschnitt_metadaten(k_stern, daten),
             "datenquellen": _normalisieren(datenquellen),
             "profile": profile,
             "zwischendatensatz": _normalisieren(zwischendatensatz),
-            "event_log": _normalisieren(event_log),
-            "zeitbezogene_datenauswahl": _normalisieren(zeitbezogene_datenauswahl),
+            "event_log": event_log_anzeige,
+            "zeitbezogene_datenauswahl": zeitbezogene_datenauswahl,
             "datenaufbereitung": _normalisieren(datenaufbereitung),
+            "fachliche_datenanforderungen": [
+                *_strukturierte_menschliche_inhalte(
+                    bestandteile["datenauswahl"] if ist_v3 else daten,
+                    "datenanforderung",
+                ),
+                *_strukturierte_menschliche_inhalte(
+                    bestandteile["daten"] if ist_v3 else daten,
+                    "datenanforderung",
+                ),
+            ],
         },
         "prozessdarstellung": {
             **_abschnitt_metadaten(k_stern, darstellung),

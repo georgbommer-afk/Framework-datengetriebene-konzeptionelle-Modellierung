@@ -314,6 +314,13 @@
         <h1>Modellübersicht</h1>
     </header>
 
+    {% if validierung.validierungsvermerk %}
+        <div class="validation-note">
+            <strong>Fachliche Validierung</strong><br>
+            {{ validierung.validierungsvermerk }}
+        </div>
+    {% endif %}
+
     <div class="metric-grid">
 
         <div class="metric-card">
@@ -475,7 +482,7 @@
     {{ modellbestandteil_kopf(
         "3",
         "Ausgaben und Eingaben",
-        ausgaben_und_eingaben
+        ausgaben
     ) }}
 
     <div class="section-intro">
@@ -483,22 +490,19 @@
         Ergebnisgrößen und dokumentierten Eingaben.
     </div>
 
+    <h2 class="subsection-title">Ausgaben</h2>
+
     <h2 class="subsection-title">KPI-Ergebnisse</h2>
 
-    {% if ausgaben_und_eingaben.kpi_ergebnisse %}
+    {% if ausgaben.kpi_ergebnisse %}
 
-        {% for kpi in ausgaben_und_eingaben.kpi_ergebnisse %}
+        {% for kpi in ausgaben.kpi_ergebnisse %}
 
             <article class="kpi-card">
 
                 <div class="kpi-header">
                     <div>
-                        <h3>{{ kpi.bezeichnung or kpi.kpi_id }}</h3>
-                        {% if kpi.kpi_id %}
-                            <div class="technical-value">
-                                {{ kpi.kpi_id }}
-                            </div>
-                        {% endif %}
+                        <h3>{{ kpi.bezeichnung or "KPI-Ergebnis" }}</h3>
                     </div>
 
                     {{ status(kpi.status, kpi.status_anzeige) }}
@@ -557,12 +561,12 @@
         </div>
     {% endif %}
 
-    {% set conformance = ausgaben_und_eingaben.get("conformance_checking", {}) %}
+    {% set conformance = ausgaben.get("conformance_checking", {}) %}
     {% set conformance_ergebnis = conformance.get("ergebnis", {}) if conformance else {} %}
     {% if conformance_ergebnis %}
         <h2 class="subsection-title">Conformance Checking</h2>
         <div class="kv-table">
-            {{ kv("Fitness nach Gleichung 3.14", conformance_ergebnis.get("fitness")) }}
+            {{ kv("Fitness nach Gleichung 3.14", conformance_ergebnis.get("fitness_anzeige", conformance_ergebnis.get("fitness"))) }}
             {{ kv("Produzierte Tokens pT", conformance_ergebnis.get("produzierte_tokens")) }}
             {{ kv("Konsumierte Tokens cT", conformance_ergebnis.get("konsumierte_tokens")) }}
             {{ kv("Fehlende Tokens mT", conformance_ergebnis.get("fehlende_tokens")) }}
@@ -573,7 +577,7 @@
         </div>
     {% endif %}
 
-    {% set performance = ausgaben_und_eingaben.get("performance_und_engpassanalyse", {}) %}
+    {% set performance = ausgaben.get("performance_und_engpassanalyse", {}) %}
     {% set dt_db = performance.get("dt_db_ergebnis", {}) if performance else {} %}
     {% if dt_db and (dt_db.get("dt_statistik") or dt_db.get("db_statistik")) %}
         <h2 class="subsection-title">Soll-/Ist-Abweichungen</h2>
@@ -611,7 +615,36 @@
         {% endif %}
     {% endif %}
 
-    {{ fachliche_anpassungen(ausgaben_und_eingaben) }}
+    {{ fachliche_anpassungen(ausgaben) }}
+
+    <h2 class="subsection-title">Eingaben</h2>
+
+    {% if eingaben.experimentelle_faktoren %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Bezugstyp</th>
+                    <th>Konkreter Bezug</th>
+                    <th>Experimenteller Faktor</th>
+                    <th>Art</th>
+                    <th>Wertebereich / Ausprägungen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for faktor in eingaben.experimentelle_faktoren %}
+                    <tr>
+                        <td>{{ faktor.get("bezugstyp_anzeige", "–") }}</td>
+                        <td>{{ faktor.get("konkreter_bezug", "–") }}</td>
+                        <td>{{ faktor.get("bezeichnung", "–") }}</td>
+                        <td>{{ faktor.get("art_anzeige", "–") }}</td>
+                        <td>{{ faktor.get("wertebereich_anzeige", "–") }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <div class="empty-block">Keine experimentellen Faktoren festgelegt.</div>
+    {% endif %}
 
 </section>
 
@@ -818,8 +851,8 @@
 
             <div class="kv-table">
                 {{ kv(
-                    "Kanonisches Fallattribut",
-                    entitaeten.kanonisches_fallattribut
+                    "Fallidentifikation",
+                    entitaeten.fallidentifikation
                 ) }}
 
                 {{ kv(
@@ -894,63 +927,37 @@
         warteschlangen
     ) }}
 
-    {% if warteschlangen.wartezeit_kpis %}
-
-        {% for kpi in warteschlangen.wartezeit_kpis %}
-            <article class="kpi-card">
-
-                <div class="kpi-header">
-                    <h3>{{ kpi.bezeichnung or kpi.kpi_id }}</h3>
-                    {{ status(kpi.status, kpi.status_anzeige) }}
-                </div>
-
-                <div class="kpi-result">
-                    {{ wert_oder_strich(kpi.ergebnis_anzeige) }}
-                </div>
-
-            </article>
-        {% endfor %}
-
-    {% endif %}
-
-    {% if warteschlangen.wartestellenhinweise %}
+    {% if warteschlangen.bestaetigte_warteschlangen %}
         <div class="content-card">
-            <h2>Übergangswartezeiten aus Schritt 7</h2>
-            {% if warteschlangen.berechnungsregel %}
-                <p class="supporting-text">{{ warteschlangen.berechnungsregel }}</p>
-            {% endif %}
+            <h2>Fachlich bestätigte Warteschlangen</h2>
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th>Übergang</th>
-                        <th>Anzahl</th>
-                        <th>Mittelwert (s)</th>
-                        <th>Median (s)</th>
+                        <th>Warteschlange</th>
+                        <th>Vorgängeraktivität</th>
+                        <th>Folgeaktivität</th>
+                        <th>Kapazität</th>
+                        <th>Regel</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for hinweis in warteschlangen.wartestellenhinweise %}
+                    {% for wert in warteschlangen.bestaetigte_warteschlangen %}
                         <tr>
-                            <td>
-                                {{ hinweis.get("uebergang", {}).get("von", "–") }}
-                                →
-                                {{ hinweis.get("uebergang", {}).get("zu", "–") }}
-                            </td>
-                            <td>{{ hinweis.get("anzahl", hinweis.get("positive_hinweise", "–")) }}</td>
-                            <td>{{ hinweis.get("mittlere_wartezeit_sekunden", "–") }}</td>
-                            <td>{{ hinweis.get("mediane_wartezeit_sekunden", "–") }}</td>
+                            <td>{{ wert.get("bezeichnung", "–") }}</td>
+                            <td>{{ wert.get("vorgaengeraktivitaet", "–") }}</td>
+                            <td>{{ wert.get("folgeaktivitaet", "–") }}</td>
+                            <td>{{ wert.get("kapazitaet", "–") }}</td>
+                            <td>{{ wert.get("regel", "–") }}</td>
                         </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
-    {% endif %}
-
-    {% if not warteschlangen.wartezeit_kpis
-          and not warteschlangen.wartestellenhinweise %}
+    {% else %}
         <div class="notice-block">
-            Aus den vorliegenden Artefakten wurde keine explizite
-            Warteschlangenstruktur als eigener Modellbestandteil abgeleitet.
+            <strong>Keine Warteschlange fachlich bestätigt.</strong><br>
+            Datenbasierte Hinweise auf potenzielle Wartezeiten sind unter
+            „Datenauswahl und Daten“ dokumentiert.
         </div>
     {% endif %}
 
@@ -996,21 +1003,9 @@
     <div class="content-card">
         <h2>In Schritt 7 zugeordnete Ressourcen</h2>
 
-        {% if ressourcen.zuordnungsmodus %}
+        {% if ressourcen.aktivitaet_ressourcen_anzeige %}
             <p class="supporting-text">
-                Modus: <strong>{{ ressourcen.zuordnungsmodus }}</strong>
-                {% if ressourcen.zuordnungsherkunft %}
-                    · Ursprung: {{ ressourcen.zuordnungsherkunft }}
-                {% endif %}
-            </p>
-        {% endif %}
-
-        {% if ressourcen.ressourcenattribut %}
-            <p class="supporting-text">
-                Attribut:
-                <span class="technical-value">
-                    {{ ressourcen.ressourcenattribut }}
-                </span>
+                Ressourcenzuordnung automatisch aus dem Event Log abgeleitet.
             </p>
         {% endif %}
 
@@ -1032,6 +1027,27 @@
                                     <strong>· +{{ zuordnung.get("weitere_ressourcen") }} weitere</strong>
                                 {% endif %}
                             </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+
+    {% if ressourcen.fachliche_ressourcenergaenzungen %}
+        <div class="human-input">
+            <div class="human-input-title">Fachlich ergänzte Ressourceninformationen</div>
+            <table class="data-table">
+                <thead>
+                    <tr><th>Ressource</th><th>Rolle</th><th>Anzahl</th><th>Kapazität</th></tr>
+                </thead>
+                <tbody>
+                    {% for wert in ressourcen.fachliche_ressourcenergaenzungen %}
+                        <tr>
+                            <td>{{ wert.get("ressource", "–") }}</td>
+                            <td>{{ wert.get("rolle", "–") }}</td>
+                            <td>{{ wert.get("verfuegbare_anzahl", "–") }}</td>
+                            <td>{{ wert.get("kapazitaet", "–") }}</td>
                         </tr>
                     {% endfor %}
                 </tbody>
@@ -1065,7 +1081,7 @@
         {% for kpi in ressourcen.ressourcenbezogene_kpis %}
             <article class="kpi-card">
                 <div class="kpi-header">
-                    <h3>{{ kpi.bezeichnung or kpi.kpi_id }}</h3>
+                    <h3>{{ kpi.bezeichnung or "Ressourcenbezogene KPI" }}</h3>
                     {{ status(kpi.status, kpi.status_anzeige) }}
                 </div>
 
@@ -1143,6 +1159,40 @@
         </div>
     {% endif %}
 
+    {% if annahmen.explizite_annahmen %}
+        <div class="content-card">
+            <h2>Explizite Annahmen</h2>
+            <table class="data-table">
+                <thead><tr><th>Annahme</th><th>Hintergrund</th></tr></thead>
+                <tbody>
+                    {% for wert in annahmen.explizite_annahmen %}
+                        <tr>
+                            <td>{{ wert.get("annahme", "–") }}</td>
+                            <td>{{ wert.get("hintergrund", "–") }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+
+    {% if vereinfachungen.explizite_vereinfachungen %}
+        <div class="content-card">
+            <h2>Explizite Vereinfachungen</h2>
+            <table class="data-table">
+                <thead><tr><th>Bezug</th><th>Vereinfachung</th></tr></thead>
+                <tbody>
+                    {% for wert in vereinfachungen.explizite_vereinfachungen %}
+                        <tr>
+                            <td>{{ wert.get("konkreter_bezug") or "Gesamtsystem" }}</td>
+                            <td>{{ wert.get("beschreibung", "–") }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+
     {% set zeitvereinfachung = vereinfachungen.get("vereinfachte_zeitspannen", {}) %}
     {% if zeitvereinfachung %}
         <div class="notice-block">
@@ -1155,8 +1205,6 @@
             </div>
         </div>
     {% endif %}
-
-    {{ fachliche_anpassungen(annahmen) }}
 
 </section>
 
@@ -1222,57 +1270,21 @@
     <h2 class="subsection-title">Datenquellen</h2>
 
     {% if daten.datenquellen %}
-
-        {% for quelle in daten.datenquellen %}
-            <article class="source-card">
-
-                <div class="source-card-header">
-                    <h3>
-                        {{ quelle.get("bezeichnung", "Datenquelle") }}
-                    </h3>
-                </div>
-
-                <div class="kv-table">
-
-                    {{ kv(
-                        "Quellsystemtyp",
-                        quelle.get("quellsystemtyp")
-                    ) }}
-
-                    {{ kv(
-                        "Quellenart",
-                        quelle.get("quellenart")
-                    ) }}
-
-                    {{ kv(
-                        "Konkretes Quellsystem",
-                        quelle.get("konkretes_quellsystem")
-                    ) }}
-
-                    {{ kv(
-                        "Verantwortungsbereich",
-                        quelle.get("herkunft_oder_verantwortungsbereich")
-                    ) }}
-
-                </div>
-
-                {% if quelle.get("fachliche_beschreibung") %}
-                    <div class="source-description">
-                        {{ quelle.get("fachliche_beschreibung") }}
-                    </div>
-                {% endif %}
-
-                {% if quelle.get("bekannte_schluesselattribute") %}
-                    <div class="source-keys">
-                        <strong>Bekannte Schlüsselattribute</strong>
-                        {{ liste_oder_strich(
-                            quelle.get("bekannte_schluesselattribute")
-                        ) }}
-                    </div>
-                {% endif %}
-
-            </article>
-        {% endfor %}
+        <table class="data-table">
+            <thead>
+                <tr><th>Datenquelle</th><th>Quellsystem</th><th>Format</th><th>Verwendung</th></tr>
+            </thead>
+            <tbody>
+                {% for quelle in daten.datenquellen %}
+                    <tr>
+                        <td>{{ quelle.get("bezeichnung", "Datenquelle") }}</td>
+                        <td>{{ quelle.get("quellsystem_anzeige") or "–" }}</td>
+                        <td>{{ quelle.get("format_anzeige") or "–" }}</td>
+                        <td>{{ quelle.get("verwendung") or "–" }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
 
     {% else %}
         <div class="empty-block">
@@ -1287,6 +1299,8 @@
 
         {% for profil in daten.profile %}
             <article class="profile-card">
+
+                <h3>{{ profil.anzeigebezeichnung }}</h3>
 
                 <div class="metric-grid profile-metrics">
 
@@ -1358,11 +1372,6 @@
 
             </div>
 
-            <h3>Schema</h3>
-            {{ schema_tabelle(
-                daten.zwischendatensatz.get("schema", [])
-            ) }}
-
         </div>
 
     {% else %}
@@ -1413,21 +1422,15 @@
 
                 {{ kv(
                     "Zeitraum von",
-                    daten.event_log.get("zeitraum_von")
+                    daten.event_log.get("zeitraum_von_anzeige", daten.event_log.get("zeitraum_von"))
                 ) }}
 
                 {{ kv(
                     "Zeitraum bis",
-                    daten.event_log.get("zeitraum_bis")
+                    daten.event_log.get("zeitraum_bis_anzeige", daten.event_log.get("zeitraum_bis"))
                 ) }}
 
             </div>
-
-            <h3>Event-Log-Schema</h3>
-
-            {{ schema_tabelle(
-                daten.event_log.get("schema", [])
-            ) }}
 
         </div>
 
@@ -1439,94 +1442,83 @@
 
     {% if daten.zeitbezogene_datenauswahl %}
         <div class="content-card">
-            <h2>Zeitbezogene Datenauswahl aus Schritt 7</h2>
+            <h2>Zeitbezogene Datenauswahl</h2>
             <div class="kv-table">
                 {{ kv("Datenbasis", daten.zeitbezogene_datenauswahl.get("bestaetigte_datenbasis", []) | join(", ")) }}
                 {{ kv("Bearbeitungszeit · Gl. 3.3", "Ist-Ende(A) − Ist-Start(A)") }}
                 {{ kv("Potenzielle Wartezeit · Gl. 3.15", "Start(B) − Ende(A), nur wenn > 0") }}
-                {{ kv("System-IAT · Gl. 3.16", "frühester Ist-Start genau einmal je Case") }}
+                {{ kv("Zwischenankunftszeit System · Gl. 3.16", "frühester Ist-Start genau einmal je Fall") }}
             </div>
             {% set system_iat = daten.zeitbezogene_datenauswahl.get("system_zwischenankunftszeit", {}) %}
             {% if system_iat and system_iat.get("statistik") %}
-                <h3>Zwischenankunftszeit am Systemeintritt · Gleichung 3.16</h3>
+                <h3>Zwischenankunftszeit System · Gl. 3.16</h3>
+                <p class="supporting-text">Systemeintritt: frühester Ist-Start je Fall.</p>
                 <div class="kv-table">
                     {{ kv("Entitäten", system_iat.get("anzahl_entitaeten")) }}
-                    {{ kv("IAT-Werte", system_iat.get("statistik", {}).get("anzahl")) }}
+                    {{ kv("Anzahl Zwischenankunftszeiten", system_iat.get("statistik", {}).get("anzahl")) }}
                     {{ kv("Mittelwert (s)", system_iat.get("statistik", {}).get("mittelwert_sekunden")) }}
                     {{ kv("Median (s)", system_iat.get("statistik", {}).get("median_sekunden")) }}
                 </div>
             {% elif system_iat %}
-                <div class="notice-block">{{ system_iat.get("begruendung", "System-IAT nicht eindeutig bestimmbar.") }}</div>
+                <div class="notice-block">{{ system_iat.get("begruendung", "Zwischenankunftszeit System nicht eindeutig bestimmbar.") }}</div>
             {% endif %}
-            {% set zwischenankuenfte = daten.zeitbezogene_datenauswahl.get("zwischenankunftszeiten", []) %}
-            {% if zwischenankuenfte %}
-                <h3>Historisch konfigurierte weitere Zwischenankunftszeiten</h3>
-                <table class="data-table">
-                    <thead><tr><th>Definition</th><th>Anzahl</th><th>Mittelwert (s)</th><th>Median (s)</th></tr></thead>
-                    <tbody>
-                        {% for wert in zwischenankuenfte %}
-                            <tr>
-                                <td>{{ wert.get("definition", {}).get("bezeichnung", "–") }}</td>
-                                <td>{{ wert.get("statistik", {}).get("anzahl", "–") }}</td>
-                                <td>{{ wert.get("statistik", {}).get("mittelwert_sekunden", "–") }}</td>
-                                <td>{{ wert.get("statistik", {}).get("median_sekunden", "–") }}</td>
-                            </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            {% endif %}
-            {% set bearbeitungszeiten = daten.zeitbezogene_datenauswahl.get("bearbeitungszeiten", []) %}
+            {% set bearbeitungszeiten = daten.zeitbezogene_datenauswahl.get("bearbeitungszeiten_tabelle", []) %}
             {% if bearbeitungszeiten %}
-                <h3>Bearbeitungszeiten · Gleichung 3.3</h3>
+                <h3>Bearbeitungszeit · Gl. 3.3</h3>
                 <table class="data-table">
-                    <thead><tr><th>Aktivität</th><th>Ressource</th><th>Anzahl</th><th>Mittelwert (s)</th><th>Median (s)</th></tr></thead>
+                    <thead><tr><th>Aktivität</th><th>Ressource</th><th>n</th><th>Mittelwert</th><th>Median</th></tr></thead>
                     <tbody>
                         {% for wert in bearbeitungszeiten %}
                             <tr>
                                 <td>{{ wert.get("aktivitaet", "–") }}</td>
-                                <td>{{ wert.get("ressource") or "kein Ressourcenbezug" }}</td>
-                                <td>{{ wert.get("statistik", {}).get("anzahl", "–") }}</td>
-                                <td>{{ wert.get("statistik", {}).get("mittelwert_sekunden", "–") }}</td>
-                                <td>{{ wert.get("statistik", {}).get("median_sekunden", "–") }}</td>
+                                <td>{{ wert.get("ressource") or "–" }}</td>
+                                <td>{{ wert.get("anzahl", "–") }}</td>
+                                <td>{{ wert.get("mittelwert_sekunden", "–") }} s</td>
+                                <td>{{ wert.get("median_sekunden", "–") }} s</td>
                             </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             {% endif %}
-            {% set vereinfachte = daten.zeitbezogene_datenauswahl.get("vereinfachte_zeitspannen", []) %}
+            {% set vereinfachte = daten.zeitbezogene_datenauswahl.get("vereinfachte_zeitspannen_tabelle", []) %}
             {% if vereinfachte %}
-                <h3>Vereinfachte Start-zu-Start-Zeitspannen</h3>
+                <h3>Vereinfachte Zeitspannen</h3>
                 <div class="notice-block">
-                    Bestätigte Vereinfachung: Start(B) − Start(A). Die Werte werden nicht als
-                    Bearbeitungszeit nach Gleichung 3.3 oder Wartezeit nach Gleichung 3.15 ausgegeben.
+                    Mangels separater Aktivitäts-Endzeitpunkte wurden bestätigte
+                    Start-zu-Start-Zeitspannen verwendet. Diese enthalten mögliche
+                    Bearbeitungs-, Transport- und Warteanteile gemeinsam.
                 </div>
                 <table class="data-table">
-                    <thead><tr><th>Übergang</th><th>Anzahl</th><th>Mittelwert (s)</th><th>Median (s)</th></tr></thead>
+                    <thead><tr><th>Übergang</th><th>n</th><th>Mittelwert</th><th>Median</th></tr></thead>
                     <tbody>
                         {% for wert in vereinfachte %}
                             <tr>
-                                <td>{{ wert.get("von_aktivitaet", "–") }} → {{ wert.get("zu_aktivitaet", "–") }}</td>
-                                <td>{{ wert.get("statistik", {}).get("anzahl", "–") }}</td>
-                                <td>{{ wert.get("statistik", {}).get("mittelwert_sekunden", "–") }}</td>
-                                <td>{{ wert.get("statistik", {}).get("median_sekunden", "–") }}</td>
+                                <td>{{ wert.get("uebergang", "–") }}</td>
+                                <td>{{ wert.get("anzahl", "–") }}</td>
+                                <td>{{ wert.get("mittelwert_sekunden", "–") }} s</td>
+                                <td>{{ wert.get("median_sekunden", "–") }} s</td>
                             </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             {% endif %}
-            {% set warten = daten.zeitbezogene_datenauswahl.get("potenzielle_wartezeiten", []) %}
+            {% set warten = daten.zeitbezogene_datenauswahl.get("potenzielle_wartezeiten_tabelle", []) %}
             {% if warten %}
-                <h3>Potenzielle Wartestellen · Gleichung 3.15</h3>
+                <h3>Potenzielle Wartezeit · Gl. 3.15</h3>
+                <div class="notice-block">
+                    Positive Zeitdifferenzen nach Gl. 3.15 werden als potenzielle Wartezeiten
+                    ausgewiesen. Sie stellen ohne fachliche Bestätigung keine Warteschlange dar.
+                </div>
                 <table class="data-table">
-                    <thead><tr><th>Übergang</th><th>Anzahl positiver Werte</th><th>Mittelwert (s)</th><th>Median (s)</th><th>Status</th></tr></thead>
+                    <thead><tr><th>Übergang</th><th>n</th><th>Mittelwert</th><th>Median</th><th>Status</th></tr></thead>
                     <tbody>
                         {% for wert in warten %}
                             <tr>
-                                <td>{{ wert.get("von_aktivitaet", "–") }} → {{ wert.get("zu_aktivitaet", "–") }}</td>
-                                <td>{{ wert.get("statistik", {}).get("anzahl", "–") }}</td>
-                                <td>{{ wert.get("statistik", {}).get("mittelwert_sekunden", "–") }}</td>
-                                <td>{{ wert.get("statistik", {}).get("median_sekunden", "–") }}</td>
-                                <td>Potenzielle Wartestelle; keine bestätigte Warteschlange</td>
+                                <td>{{ wert.get("uebergang", "–") }}</td>
+                                <td>{{ wert.get("anzahl", "–") }}</td>
+                                <td>{{ wert.get("mittelwert_sekunden", "–") }} s</td>
+                                <td>{{ wert.get("median_sekunden", "–") }} s</td>
+                                <td>{{ wert.get("status", "Hinweis") }}</td>
                             </tr>
                         {% endfor %}
                     </tbody>
@@ -1615,39 +1607,6 @@
 
 
 {# ================================================================ #}
-{# Validierungsvermerk                                               #}
-{# ================================================================ #}
-
-<section class="report-section validation-section">
-
-    <header class="section-header">
-        <div class="section-number">✓</div>
-        <div class="section-heading">
-            <h1>Validierung</h1>
-        </div>
-    </header>
-
-    <div class="validation-summary">
-
-        <div class="validation-status">
-            {{ status(
-                validierung.status,
-                validierung.status_anzeige
-            ) }}
-        </div>
-
-        {% if validierung.validierungsvermerk %}
-            <div class="validation-note">
-                {{ validierung.validierungsvermerk }}
-            </div>
-        {% endif %}
-
-    </div>
-
-</section>
-
-
-{# ================================================================ #}
 {# Technischer Anhang / Lineage                                      #}
 {# ================================================================ #}
 
@@ -1656,7 +1615,7 @@
     <header class="section-header">
         <div class="section-number">8</div>
         <div class="section-heading">
-            <h1>Technische Nachvollziehbarkeit</h1>
+            <h1>Technischer Anhang – Nachvollziehbarkeit</h1>
         </div>
     </header>
 
@@ -1688,6 +1647,18 @@
         ) }}
 
     </div>
+
+    {% if daten.zwischendatensatz.get("schema") or daten.event_log.get("schema") %}
+        <h2 class="subsection-title">Technische Datenschemata</h2>
+        {% if daten.zwischendatensatz.get("schema") %}
+            <h3>Aufbereiteter Zwischendatensatz</h3>
+            {{ schema_tabelle(daten.zwischendatensatz.get("schema", [])) }}
+        {% endif %}
+        {% if daten.event_log.get("schema") %}
+            <h3>Event Log</h3>
+            {{ schema_tabelle(daten.event_log.get("schema", [])) }}
+        {% endif %}
+    {% endif %}
 
 
     {% if lineage.informationen %}
@@ -1730,7 +1701,7 @@
 
                         <td>
                             {{ wert_oder_strich(
-                                eintrag.uebernahmeart
+                                eintrag.uebernahmeart_anzeige
                             ) }}
                         </td>
                     </tr>

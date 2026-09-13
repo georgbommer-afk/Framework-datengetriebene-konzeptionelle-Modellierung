@@ -19,7 +19,7 @@ from framework_mvp.application.modellableitung import (
     MAPPINGVERSION,
     MODELLBESTANDTEILE,
     leite_modellbestandteile_ab,
-    wende_fachliche_entscheidungen_an,
+    wende_pruefhinweise_an,
 )
 from framework_mvp.application.ports.modellableitung_repository import (
     ModellableitungRepository,
@@ -28,14 +28,13 @@ from framework_mvp.application.transformations_service import TransformationsSer
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     AbgeleiteterModellbestandteil,
+    AnwenderhinweisFuerSchritt9,
     Datenquelle,
     Eingangsartefakt,
     Ergebnisaggregation,
-    FachlicheBestandteilentscheidung,
-    FachlicheEntscheidungsart,
+    FachlicheUnsicherheitskennzeichnung,
     Modellableitung,
     Modellableitungsstatus,
-    ModellbestandteilId,
     OffenerEintrag,
     Projekt,
     Prozessnotation,
@@ -43,8 +42,8 @@ from framework_mvp.domain.models import (
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
 
-K_ARTEFAKTVERSION = 1
-O_ARTEFAKTVERSION = 1
+K_ARTEFAKTVERSION = 2
+O_ARTEFAKTVERSION = 2
 K_ARTEFAKTART = "vorlaeufiges_konzeptionelles_modell_k"
 O_ARTEFAKTART = "offene_modellbestandteile_o"
 
@@ -125,7 +124,7 @@ class Modellableitungsgrundlage:
 
 @dataclass(frozen=True, slots=True)
 class Modellableitungsvorschau:
-    """Ungespeichertes, an Lineage und fachliche Einzelentscheidungen gebundenes K/O-Paar."""
+    """Ungespeichertes, an Lineage und optionale Prüfhinweise gebundenes K/O-Paar."""
 
     grundlage: Modellableitungsgrundlage
     modellableitungs_id: UUID
@@ -133,10 +132,12 @@ class Modellableitungsvorschau:
     o_id: UUID
     vorgeschlagene_bestandteile: tuple[AbgeleiteterModellbestandteil, ...]
     systematische_offene_eintraege: tuple[OffenerEintrag, ...]
-    entscheidungen: tuple[FachlicheBestandteilentscheidung, ...]
+    anwenderhinweise: tuple[AnwenderhinweisFuerSchritt9, ...]
+    unsicherheitskennzeichnungen: tuple[FachlicheUnsicherheitskennzeichnung, ...]
     bestandteile: tuple[AbgeleiteterModellbestandteil, ...]
     offene_eintraege: tuple[OffenerEintrag, ...]
-    entscheidungsfingerabdruck: str
+    prueffingerabdruck: str
+    bestaetigt_am: datetime | None
     k: dict[str, Any]
     o: dict[str, Any]
     k_bytes: bytes
@@ -281,20 +282,21 @@ class ModellableitungService:
         )
 
     @staticmethod
-    def entscheidungsfingerabdruck(
-        entscheidungen: tuple[FachlicheBestandteilentscheidung, ...],
+    def prueffingerabdruck(
+        anwenderhinweise: tuple[AnwenderhinweisFuerSchritt9, ...],
+        unsicherheitskennzeichnungen: tuple[FachlicheUnsicherheitskennzeichnung, ...],
     ) -> str:
-        """Bindet die Vorschau an Entscheidung, Begründung und Zeitpunkt je Bestandteil."""
+        """Bindet die Vorschau an optionale Hinweise und Unsicherheitsmarkierungen."""
         return _sha(
-            sorted(
-                (
-                    wert.bestandteil_id.value,
-                    wert.entscheidung.value,
-                    wert.begruendung,
-                    wert.entschieden_am,
-                )
-                for wert in entscheidungen
-            )
+            {
+                "anwenderhinweise": sorted(
+                    (wert.offener_eintrag_id, wert.anwenderhinweis) for wert in anwenderhinweise
+                ),
+                "unsicherheitskennzeichnungen": sorted(
+                    (wert.bestandteil_id.value, wert.anwenderhinweis)
+                    for wert in unsicherheitskennzeichnungen
+                ),
+            }
         )
 
     def vorschau(
@@ -305,22 +307,28 @@ class ModellableitungService:
         modellableitungs_id: UUID,
         k_id: UUID,
         o_id: UUID,
-        entscheidungen: tuple[FachlicheBestandteilentscheidung, ...] = (),
+        anwenderhinweise: tuple[AnwenderhinweisFuerSchritt9, ...] = (),
+        unsicherheitskennzeichnungen: tuple[FachlicheUnsicherheitskennzeichnung, ...] = (),
+        bestaetigt_am: datetime | None = None,
     ) -> Modellableitungsvorschau:
-        """Erzeugt Vorschläge und eine entscheidungsabhängige K/O-Vorschau ohne Ergänzungen."""
+        """Erzeugt eine K/O-Vorschau; Lösungen für O bleiben Schritt 9 vorbehalten."""
+        if bestaetigt_am is not None:
+            if bestaetigt_am.utcoffset() is None:
+                raise Domaenenfehler("Der Bestätigungszeitpunkt muss zeitzonenbewusst sein.")
+            bestaetigt_am = bestaetigt_am.astimezone(UTC)
         basis = self.grundlage_laden(projekt_id, aggregations_id)
         t_vorher = basis.zwischendaten.copy(deep=True)
         e_vorher = basis.event_log.copy(deep=True)
         p_vorher = bytes(basis.prozessmodell)
         ag_vorher = copy.deepcopy(basis.a_g)
         vorgeschlagene_bestandteile, systematische_offene = leite_modellbestandteile_ab(basis)
-        bestandteile, offene_eintraege = wende_fachliche_entscheidungen_an(
+        bestandteile, offene_eintraege = wende_pruefhinweise_an(
             vorgeschlagene_bestandteile,
             systematische_offene,
-            entscheidungen,
+            anwenderhinweise,
+            unsicherheitskennzeichnungen,
         )
-        entscheidungsfingerabdruck = self.entscheidungsfingerabdruck(entscheidungen)
-        vollstaendig_geprueft = len(entscheidungen) == len(MODELLBESTANDTEILE)
+        prueffingerabdruck = self.prueffingerabdruck(anwenderhinweise, unsicherheitskennzeichnungen)
         zeitpunkt = datetime.now(UTC)
         k: dict[str, Any] = {
             "artefaktart": K_ARTEFAKTART,
@@ -331,9 +339,9 @@ class ModellableitungService:
             "projekt_id": str(projekt_id),
             "eingangslineage": basis.lineage,
             "modellbestandteile": bestandteile,
-            "fachliche_entscheidungen": entscheidungen,
-            "entscheidungsfingerabdruck": entscheidungsfingerabdruck,
-            "menschlich_bestaetigt": vollstaendig_geprueft,
+            "prueffingerabdruck": prueffingerabdruck,
+            "menschlich_bestaetigt": bestaetigt_am is not None,
+            "bestaetigt_am": bestaetigt_am,
             "erstellt_am": zeitpunkt,
             "hinweis": (
                 "Vorläufiges konzeptionelles Modell; fachliche Ergänzung und Validierung "
@@ -350,9 +358,9 @@ class ModellableitungService:
             "modellableitungs_id": str(modellableitungs_id),
             "projekt_id": str(projekt_id),
             "mappingversion": MAPPINGVERSION,
-            "fachliche_entscheidungen": entscheidungen,
-            "entscheidungsfingerabdruck": entscheidungsfingerabdruck,
-            "menschlich_bestaetigt": vollstaendig_geprueft,
+            "prueffingerabdruck": prueffingerabdruck,
+            "menschlich_bestaetigt": bestaetigt_am is not None,
+            "bestaetigt_am": bestaetigt_am,
             "k_referenz": {
                 "k_id": str(k_id),
                 "gesamtpruefsumme": k["gesamtpruefsumme"],
@@ -381,10 +389,12 @@ class ModellableitungService:
             o_id,
             vorgeschlagene_bestandteile,
             systematische_offene,
-            entscheidungen,
+            anwenderhinweise,
+            unsicherheitskennzeichnungen,
             bestandteile,
             offene_eintraege,
-            entscheidungsfingerabdruck,
+            prueffingerabdruck,
+            bestaetigt_am,
             k,
             o,
             k_bytes,
@@ -394,51 +404,29 @@ class ModellableitungService:
         )
 
     @staticmethod
-    def _fachliche_vorschlagssignaturen(
-        vorschau: Modellableitungsvorschau,
-    ) -> dict[ModellbestandteilId, str]:
-        """Vergleicht Vorschläge ohne generationenspezifische IDs und Prüfsummen."""
-        offene = {
-            bestandteil_id: [
-                {
-                    "kategorie": wert.kategorie,
-                    "begruendung": wert.begruendung,
-                }
-                for wert in vorschau.systematische_offene_eintraege
-                if wert.bestandteil_id is bestandteil_id
-            ]
-            for bestandteil_id in ModellbestandteilId
-        }
-        return {
-            bestandteil.bestandteil_id: _sha(
-                {
-                    "bestandteil_id": bestandteil.bestandteil_id,
-                    "status": bestandteil.status,
-                    "informationen": [
-                        {
-                            "herkunftsartefakt": information.herkunftsartefakt,
-                            "strukturreferenz": information.strukturreferenz,
-                            "wert": information.wert,
-                            "uebernahmeart": information.uebernahmeart,
-                        }
-                        for information in bestandteil.informationen
-                    ],
-                    "offene_punkte": offene[bestandteil.bestandteil_id],
-                }
-            )
-            for bestandteil in vorschau.vorgeschlagene_bestandteile
-        }
+    def _offener_punkt_signatur(wert: OffenerEintrag | dict[str, Any]) -> str:
+        """Vergleicht einen O-Punkt ohne ID, Status und optionalen Anwenderhinweis."""
+        normalisiert = _normalisieren(wert)
+        return _sha(
+            {
+                name: normalisiert.get(name)
+                for name in (
+                    "bestandteil_id",
+                    "kategorie",
+                    "begruendung",
+                    "belegreferenzen",
+                    "kennzeichnungsherkunft",
+                )
+            }
+        )
 
-    def vorherige_entscheidungsvorbelegung(
+    def vorherige_anwenderhinweise(
         self,
         projekt_id: UUID,
         aggregations_id: UUID,
         neuer_vorschlag: Modellableitungsvorschau,
-    ) -> tuple[
-        dict[ModellbestandteilId, FachlicheBestandteilentscheidung],
-        frozenset[ModellbestandteilId],
-    ]:
-        """Liefert kontrollierte Entwürfe nur aus der direkten, gleichen Eingangslineage."""
+    ) -> dict[str, str]:
+        """Übernimmt Hinweise nur für fachlich exakt identische systematische O-Punkte."""
         basis = neuer_vorschlag.grundlage
         vorgaenger = self._repository.neueste_vorgaengerin(
             projekt_id,
@@ -447,37 +435,18 @@ class ModellableitungService:
             aggregations_id,
         )
         if vorgaenger is None:
-            return {}, frozenset()
-        _, k, _ = self.laden(vorgaenger.modellableitungs_id)
-        alter_vorschlag = self.vorschau(
-            projekt_id=projekt_id,
-            aggregations_id=vorgaenger.aggregations_id,
-            modellableitungs_id=vorgaenger.modellableitungs_id,
-            k_id=vorgaenger.k_id,
-            o_id=vorgaenger.o_id,
-        )
-        alt = self._fachliche_vorschlagssignaturen(alter_vorschlag)
-        neu = self._fachliche_vorschlagssignaturen(neuer_vorschlag)
-        rohentscheidungen = {
-            ModellbestandteilId(str(wert["bestandteil_id"])): wert
-            for wert in k.get("fachliche_entscheidungen", [])
+            return {}
+        _, _, altes_o = self.laden(vorgaenger.modellableitungs_id)
+        alte_hinweise = {
+            self._offener_punkt_signatur(wert): str(wert.get("anwenderhinweis", "")).strip()
+            for wert in altes_o.get("offene_eintraege", [])
+            if isinstance(wert, dict) and str(wert.get("anwenderhinweis", "")).strip()
         }
-        vorbelegung: dict[ModellbestandteilId, FachlicheBestandteilentscheidung] = {}
-        erneut_pruefen: set[ModellbestandteilId] = set()
-        for bestandteil_id in ModellbestandteilId:
-            roh = rohentscheidungen.get(bestandteil_id)
-            if roh is None:
-                continue
-            if alt.get(bestandteil_id) != neu.get(bestandteil_id):
-                erneut_pruefen.add(bestandteil_id)
-                continue
-            vorbelegung[bestandteil_id] = FachlicheBestandteilentscheidung(
-                bestandteil_id,
-                FachlicheEntscheidungsart(str(roh["entscheidung"])),
-                str(roh.get("begruendung", "")),
-                datetime.fromisoformat(str(roh["entschieden_am"])),
-            )
-        return vorbelegung, frozenset(erneut_pruefen)
+        return {
+            wert.offener_eintrag_id: alte_hinweise[signatur]
+            for wert in neuer_vorschlag.systematische_offene_eintraege
+            if (signatur := self._offener_punkt_signatur(wert)) in alte_hinweise
+        }
 
     def speichern(
         self,
@@ -485,16 +454,9 @@ class ModellableitungService:
         *,
         menschlich_bestaetigt: bool | None = None,
     ) -> Modellableitung:
-        """Persistiert K/O erst nach einer expliziten Entscheidung zu allen 16 Vorschlägen."""
-        entschiedene_ids = {wert.bestandteil_id for wert in vorschau.entscheidungen}
-        erwartete_ids = {wert.bestandteil_id for wert in MODELLBESTANDTEILE}
-        if entschiedene_ids != erwartete_ids or len(vorschau.entscheidungen) != len(erwartete_ids):
-            raise Domaenenfehler(
-                "K und O dürfen erst gespeichert werden, nachdem alle 16 Modellbestandteile "
-                "explizit fachlich geprüft wurden."
-            )
-        if menschlich_bestaetigt is False:
-            raise Domaenenfehler("Die fachliche Prüfung wurde nicht bestätigt.")
+        """Persistiert das K/O-Paar nach genau einer expliziten Gesamtbestätigung."""
+        if menschlich_bestaetigt is not True or vorschau.bestaetigt_am is None:
+            raise Domaenenfehler("Die Gesamtzuordnung wurde nicht ausdrücklich bestätigt.")
         basis = self.grundlage_laden(
             vorschau.grundlage.projekt.projekt_id,
             vorschau.grundlage.aggregation.aggregations_id,
@@ -505,23 +467,26 @@ class ModellableitungService:
                 "eine Neuberechnung ist erforderlich."
             )
         if (
-            self.entscheidungsfingerabdruck(vorschau.entscheidungen)
-            != vorschau.entscheidungsfingerabdruck
+            self.prueffingerabdruck(
+                vorschau.anwenderhinweise, vorschau.unsicherheitskennzeichnungen
+            )
+            != vorschau.prueffingerabdruck
         ):
             raise Domaenenfehler(
-                "Die fachlichen Entscheidungen wurden verändert; eine neue Vorschau ist nötig."
+                "Die Hinweise oder Unsicherheitsmarkierungen wurden verändert; "
+                "eine neue Vorschau ist nötig."
             )
         if (
             vorschau.k.get("menschlich_bestaetigt") is not True
             or vorschau.o.get("menschlich_bestaetigt") is not True
         ):
-            raise Domaenenfehler("Die K/O-Vorschau enthält keine vollständige fachliche Prüfung.")
+            raise Domaenenfehler("Die K/O-Vorschau enthält keine menschliche Gesamtbestätigung.")
         identisch = self._repository.finde_identisch(
             basis.projekt.projekt_id,
             basis.aggregation.aggregations_id,
             basis.eingabefingerabdruck,
             MAPPINGVERSION,
-            vorschau.entscheidungsfingerabdruck,
+            vorschau.prueffingerabdruck,
         )
         if identisch is not None:
             gespeichert = self.laden(identisch.modellableitungs_id)[0]
@@ -561,7 +526,7 @@ class ModellableitungService:
             basis.freigabe.event_log_id,
             basis.eingabefingerabdruck,
             MAPPINGVERSION,
-            vorschau.entscheidungsfingerabdruck,
+            vorschau.prueffingerabdruck,
             k_pfad,
             vorschau.k_sha256,
             o_pfad,
@@ -596,7 +561,9 @@ class ModellableitungService:
         return gespeichert
 
     @staticmethod
-    def _json_pruefen(inhalt: bytes, artefaktart: str, artefaktversion: int) -> dict[str, Any]:
+    def _json_pruefen(
+        inhalt: bytes, artefaktart: str, artefaktversionen: frozenset[int]
+    ) -> dict[str, Any]:
         try:
             struktur = json.loads(inhalt)
             pruefsumme = struktur.pop("gesamtpruefsumme")
@@ -604,7 +571,7 @@ class ModellableitungService:
             raise Importintegritaetsfehler("K oder O ist kein gültiges JSON-Artefakt.") from fehler
         if (
             struktur.get("artefaktart") != artefaktart
-            or struktur.get("artefaktversion") != artefaktversion
+            or struktur.get("artefaktversion") not in artefaktversionen
             or _sha(struktur) != pruefsumme
         ):
             raise Importintegritaetsfehler(
@@ -627,8 +594,8 @@ class ModellableitungService:
             or hashlib.sha256(o_bytes).hexdigest() != ableitung.o_sha256
         ):
             raise Importintegritaetsfehler("Die Dateiprüfsumme von K oder O ist ungültig.")
-        k = self._json_pruefen(k_bytes, K_ARTEFAKTART, K_ARTEFAKTVERSION)
-        o = self._json_pruefen(o_bytes, O_ARTEFAKTART, O_ARTEFAKTVERSION)
+        k = self._json_pruefen(k_bytes, K_ARTEFAKTART, frozenset({1, K_ARTEFAKTVERSION}))
+        o = self._json_pruefen(o_bytes, O_ARTEFAKTART, frozenset({1, O_ARTEFAKTVERSION}))
         if (
             k.get("k_id") != str(ableitung.k_id)
             or o.get("o_id") != str(ableitung.o_id)
@@ -646,6 +613,8 @@ class ModellableitungService:
         basis = self.grundlage_laden(ableitung.projekt_id, ableitung.aggregations_id)
         if (
             basis.eingabefingerabdruck != ableitung.eingabefingerabdruck
+            or k.get("artefaktversion") != K_ARTEFAKTVERSION
+            or o.get("artefaktversion") != O_ARTEFAKTVERSION
             or k.get("eingangslineage") != basis.lineage
             or k.get("mappingversion") != MAPPINGVERSION
             or o.get("mappingversion") != MAPPINGVERSION
@@ -661,6 +630,10 @@ class ModellableitungService:
                 "K enthält nicht exakt die 16 Modellbestandteile in stabiler Reihenfolge."
             )
         for definition, bestandteil in zip(MODELLBESTANDTEILE, bestandteile, strict=True):
+            if bestandteil.get("fachliche_entscheidung") is not None:
+                raise Importintegritaetsfehler(
+                    "K enthält eine historische Einzelentscheidung in der aktuellen Version."
+                )
             informationsquellen = {
                 wert.get("herkunftsartefakt") for wert in bestandteil.get("informationen", [])
             }
@@ -673,6 +646,13 @@ class ModellableitungService:
                     "Eine Quellenzuordnung in K widerspricht Tabelle 3.15."
                 )
             for information in bestandteil.get("informationen", []):
+                if (
+                    information.get("fachliche_entscheidung") is not None
+                    or information.get("bestaetigt_am") is not None
+                ):
+                    raise Importintegritaetsfehler(
+                        "Ein K-Eintrag enthält eine historische Einzelbestätigung."
+                    )
                 quelle = Eingangsartefakt(information["herkunftsartefakt"])
                 if quelle is Eingangsartefakt.DATENPROFIL_R:
                     gueltige_profile = {
@@ -692,66 +672,104 @@ class ModellableitungService:
                     raise Importintegritaetsfehler(
                         "Eine Herkunftsprüfsumme in K ist nicht mehr gültig."
                     )
-        offene_ids = {wert.get("offener_eintrag_id") for wert in o.get("offene_eintraege", [])}
+        offene_eintraege = o.get("offene_eintraege", [])
+        if not isinstance(offene_eintraege, list) or any(
+            not isinstance(wert, dict) for wert in offene_eintraege
+        ):
+            raise Importintegritaetsfehler("O enthält keine gültige Liste offener Einträge.")
+        offene_id_liste = [wert.get("offener_eintrag_id") for wert in offene_eintraege]
+        offene_ids = set(offene_id_liste)
         referenzierte_ids = {
             offen_id
             for bestandteil in bestandteile
             for offen_id in bestandteil.get("offene_eintrag_ids", [])
         }
-        if offene_ids != referenzierte_ids or any(
-            wert.get("status") != "offen" for wert in o.get("offene_eintraege", [])
+        if (
+            len(offene_ids) != len(offene_id_liste)
+            or offene_ids != referenzierte_ids
+            or any(
+                wert.get("status") != "offen"
+                or not str(wert.get("begruendung", "")).strip()
+                or not isinstance(wert.get("anwenderhinweis", ""), str)
+                or wert.get("anwenderhinweis", "") != wert.get("anwenderhinweis", "").strip()
+                or wert.get("fachliche_entscheidung") is not None
+                or wert.get("entschieden_am") is not None
+                or wert.get("kategorie") not in {"fehlend", "nicht_ableitbar", "fachlich_unsicher"}
+                or wert.get("kennzeichnungsherkunft")
+                not in {"systematisch_erkannt", "menschlich_markiert"}
+                or (
+                    wert.get("kennzeichnungsherkunft") == "menschlich_markiert"
+                    and wert.get("kategorie") != "fachlich_unsicher"
+                )
+                for wert in offene_eintraege
+            )
         ):
             raise Importintegritaetsfehler("Die offenen Einträge in K und O sind inkonsistent.")
-        entscheidungen = k.get("fachliche_entscheidungen", [])
-        entscheidungen_nach_id = {
-            wert.get("bestandteil_id"): wert for wert in entscheidungen if isinstance(wert, dict)
-        }
-        if (
-            len(entscheidungen) != len(MODELLBESTANDTEILE)
-            or len(entscheidungen_nach_id) != len(MODELLBESTANDTEILE)
-            or o.get("fachliche_entscheidungen") != entscheidungen
-            or k.get("menschlich_bestaetigt") is not True
-            or o.get("menschlich_bestaetigt") is not True
-            or k.get("entscheidungsfingerabdruck") != ableitung.unsicherheitsfingerabdruck
-            or o.get("entscheidungsfingerabdruck") != ableitung.unsicherheitsfingerabdruck
-            or _sha(
-                sorted(
-                    (
-                        wert["bestandteil_id"],
-                        wert["entscheidung"],
-                        wert.get("begruendung", ""),
-                        wert["entschieden_am"],
-                    )
-                    for wert in entscheidungen
-                )
-            )
-            != ableitung.unsicherheitsfingerabdruck
-        ):
-            raise Importintegritaetsfehler(
-                "Die fachlichen Einzelentscheidungen in K und O sind inkonsistent."
-            )
-        for bestandteil in bestandteile:
-            entscheidung = entscheidungen_nach_id.get(bestandteil["bestandteil_id"])
-            if not isinstance(entscheidung, dict) or (
-                bestandteil.get("fachliche_entscheidung") != entscheidung
+        bestandteile_nach_id = {wert["bestandteil_id"]: wert for wert in bestandteile}
+        for offener_eintrag in offene_eintraege:
+            bestandteil = bestandteile_nach_id.get(offener_eintrag.get("bestandteil_id"))
+            if bestandteil is None or (
+                offener_eintrag.get("kennzeichnungsherkunft") == "menschlich_markiert"
+                and not bestandteil.get("informationen")
             ):
                 raise Importintegritaetsfehler(
-                    "Eine fachliche Entscheidung ist nicht ihrem Modellbestandteil zugeordnet."
+                    "Eine Unsicherheitskennzeichnung besitzt keine sichere Information in K."
                 )
-            informationen = bestandteil.get("informationen", [])
-            if entscheidung["entscheidung"] == "vorschlag_uebernehmen":
-                if any(
-                    information.get("fachliche_entscheidung") != "vorschlag_uebernehmen"
-                    or information.get("bestaetigt_am") != entscheidung["entschieden_am"]
-                    for information in informationen
-                ):
-                    raise Importintegritaetsfehler(
-                        "Ein bestätigter K-Eintrag besitzt keine passende Übernahmeentscheidung."
-                    )
-            elif informationen:
+        for bestandteil in bestandteile:
+            offene = [
+                wert
+                for wert in offene_eintraege
+                if wert.get("bestandteil_id") == bestandteil["bestandteil_id"]
+            ]
+            erwarteter_status = (
+                "fachlich_unsicher"
+                if any(wert.get("kategorie") == "fachlich_unsicher" for wert in offene)
+                else "teilweise_offen"
+                if bestandteil.get("informationen") and offene
+                else "vollstaendig_zugeordnet"
+                if bestandteil.get("informationen")
+                else "offen"
+            )
+            if bestandteil.get("status") != erwarteter_status:
                 raise Importintegritaetsfehler(
-                    "Ein nicht bestätigter Vorschlag darf keine Information in K enthalten."
+                    "Der Status eines Modellbestandteils stimmt nicht mit K und O überein."
                 )
+        hinweise = sorted(
+            (wert["offener_eintrag_id"], wert["anwenderhinweis"])
+            for wert in offene_eintraege
+            if wert.get("kennzeichnungsherkunft") == "systematisch_erkannt"
+            and wert.get("anwenderhinweis")
+        )
+        unsicherheiten = sorted(
+            (wert["bestandteil_id"], wert.get("anwenderhinweis", ""))
+            for wert in offene_eintraege
+            if wert.get("kennzeichnungsherkunft") == "menschlich_markiert"
+        )
+        prueffingerabdruck = _sha(
+            {
+                "anwenderhinweise": hinweise,
+                "unsicherheitskennzeichnungen": unsicherheiten,
+            }
+        )
+        bestaetigt_am = k.get("bestaetigt_am")
+        try:
+            bestaetigungszeitpunkt = datetime.fromisoformat(str(bestaetigt_am))
+        except (TypeError, ValueError) as fehler:
+            raise Importintegritaetsfehler(
+                "Der Bestätigungszeitpunkt von K und O ist ungültig."
+            ) from fehler
+        if (
+            bestaetigungszeitpunkt.utcoffset() is None
+            or k.get("menschlich_bestaetigt") is not True
+            or o.get("menschlich_bestaetigt") is not True
+            or o.get("bestaetigt_am") != bestaetigt_am
+            or k.get("prueffingerabdruck") != ableitung.unsicherheitsfingerabdruck
+            or o.get("prueffingerabdruck") != ableitung.unsicherheitsfingerabdruck
+            or prueffingerabdruck != ableitung.unsicherheitsfingerabdruck
+        ):
+            raise Importintegritaetsfehler(
+                "Gesamtbestätigung oder Prüfhinweise in K und O sind inkonsistent."
+            )
         if "prozessmodell_p_soll" in json.dumps(k, ensure_ascii=False):
             raise Importintegritaetsfehler("P_Soll darf kein Eingangsartefakt von K sein.")
         return ableitung, k, o
@@ -762,7 +780,7 @@ class ModellableitungService:
         k: dict[str, Any],
         o: dict[str, Any],
     ) -> tuple[Modellableitung, dict[str, Any], dict[str, Any]]:
-        """Hält alte elfteilige K/O-Artefakte kontrolliert lesbar, aber nicht aktuell nutzbar."""
+        """Hält Mappingversionen 1 bis 3 kontrolliert lesbar, aber nicht aktuell nutzbar."""
         alte_ids = [
             "problemstellung",
             "zielsetzung",
@@ -777,10 +795,22 @@ class ModellableitungService:
             "darstellung_der_vorgaenge_des_systems",
         ]
         ids = [wert.get("bestandteil_id") for wert in k.get("modellbestandteile", [])]
+        aktuelle_ids = [wert.bestandteil_id.value for wert in MODELLBESTANDTEILE]
+        struktur_gueltig = (
+            ableitung.mappingversion in {1, 2}
+            and k.get("artefaktversion") == 1
+            and o.get("artefaktversion") == 1
+            and ids == alte_ids
+        ) or (
+            ableitung.mappingversion == 3
+            and k.get("artefaktversion") == 1
+            and o.get("artefaktversion") == 1
+            and ids == aktuelle_ids
+        )
         if (
-            ableitung.mappingversion not in {1, 2}
+            not struktur_gueltig
             or k.get("mappingversion") != ableitung.mappingversion
-            or ids != alte_ids
+            or o.get("mappingversion") != ableitung.mappingversion
         ):
             raise Importintegritaetsfehler(
                 "Die historische Modellableitung besitzt keine unterstützte alte Mappingstruktur."

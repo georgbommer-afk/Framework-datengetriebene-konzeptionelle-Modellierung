@@ -3,7 +3,7 @@
 import copy
 import hashlib
 import json
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass, replace
 from datetime import UTC, date, datetime
 from enum import Enum
 from pathlib import PurePosixPath
@@ -13,6 +13,9 @@ from uuid import UUID
 from framework_mvp.application.aktive_lineage_service import AktiveLineageService, LineageEndpunkt
 from framework_mvp.application.modellableitung import MODELLBESTANDTEILE
 from framework_mvp.application.modellableitung_service import ModellableitungService
+from framework_mvp.application.modellvalidierung_struktur import (
+    validiere_strukturierten_inhalt,
+)
 from framework_mvp.application.ports.modellvalidierung_repository import (
     ModellvalidierungRepository,
 )
@@ -33,8 +36,8 @@ from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
 
 K_STERN_ARTEFAKTART = "validiertes_konzeptionelles_modell_k_stern"
-K_STERN_ARTEFAKTVERSION = 2
-HISTORISCHE_K_STERN_ARTEFAKTVERSIONEN = frozenset({1})
+K_STERN_ARTEFAKTVERSION = 3
+HISTORISCHE_K_STERN_ARTEFAKTVERSIONEN = frozenset({1, 2})
 
 
 def _normalisieren(wert: Any) -> Any:
@@ -69,7 +72,10 @@ def _wirkung_auf_k(entscheidung: Offenheitsentscheidung | str) -> str:
     return {
         Offenheitsentscheidung.BESTAETIGT: "fachliche_bestaetigung_des_bestehenden_k_inhalts",
         Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST: (
-            "menschliche_ergaenzung_oder_korrektur_fuer_k_stern"
+            "strukturierte_menschliche_ergaenzung_fuer_k_stern"
+        ),
+        Offenheitsentscheidung.NICHT_BEKANNT_ODER_BESTIMMBAR: (
+            "bewusst_unbekannte_einschraenkung_ohne_modellwert"
         ),
         Offenheitsentscheidung.NICHT_ANWENDBAR: (
             "offener_punkt_ohne_neuen_modellinhalt_abgeschlossen"
@@ -232,7 +238,13 @@ class ModellvalidierungService:
             str(wert["offener_eintrag_id"]): wert
             for wert in grundlage.o.get("offene_eintraege", [])
         }
+        if zusaetzliche_anpassungen:
+            raise Domaenenfehler(
+                "Schritt 9 darf ausschließlich konkrete Einträge aus O bearbeiten. "
+                "Sichere K-Inhalte sind in Schritt 8 als fachlich unsicher zu kennzeichnen."
+            )
         behandelte_ids: set[str] = set()
+        validierte_behandlungen: list[BehandlungOffenerEintrag] = []
         for behandlung in behandlungen:
             if behandlung.offener_eintrag_id in behandelte_ids:
                 raise Domaenenfehler("Ein offener Eintrag darf nur einmal behandelt werden.")
@@ -247,13 +259,20 @@ class ModellvalidierungService:
                 raise Domaenenfehler(
                     "Bestandteil, Kategorie oder Begründung einer O-Behandlung wurde verändert."
                 )
+            if behandlung.entscheidung is Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST:
+                strukturierter_inhalt = validiere_strukturierten_inhalt(
+                    behandlung.bestandteil_id,
+                    behandlung.strukturierter_inhalt,
+                    grundlage.k,
+                )
+                behandlung = replace(
+                    behandlung,
+                    fachlicher_inhalt="",
+                    strukturierter_inhalt=strukturierter_inhalt,
+                )
             behandelte_ids.add(behandlung.offener_eintrag_id)
-        gueltige_bestandteile = {wert.bestandteil_id for wert in MODELLBESTANDTEILE}
-        if any(
-            anpassung.bestandteil_id not in gueltige_bestandteile
-            for anpassung in zusaetzliche_anpassungen
-        ):
-            raise Domaenenfehler("Eine Anpassung gehört zu keinem der 16 Modellbestandteile.")
+            validierte_behandlungen.append(behandlung)
+        behandlungen = tuple(validierte_behandlungen)
         unbehandelt = tuple(wert for wert in offene_nach_id if wert not in behandelte_ids)
         fingerabdruck = self.entscheidungsfingerabdruck(
             behandlungen,
@@ -265,7 +284,7 @@ class ModellvalidierungService:
         return Validierungsarbeitsfassung(
             grundlage,
             behandlungen,
-            zusaetzliche_anpassungen,
+            (),
             gesamtvalidierungsstatus,
             validierungsvermerk.strip(),
             gesamtpruefung_bestaetigt,
@@ -275,41 +294,73 @@ class ModellvalidierungService:
 
     @staticmethod
     def _menschliche_eintraege(
-        arbeitsfassung: Validierungsarbeitsfassung, bestandteil_id: ModellbestandteilId
+        arbeitsfassung: Validierungsarbeitsfassung,
+        bestandteil_id: ModellbestandteilId,
+        *,
+        entschieden_am: datetime,
     ) -> list[dict[str, Any]]:
         eintraege: list[dict[str, Any]] = []
+        offene_nach_id = {
+            str(wert["offener_eintrag_id"]): wert
+            for wert in arbeitsfassung.grundlage.o.get("offene_eintraege", [])
+        }
         for behandlung in arbeitsfassung.behandlungen:
             if behandlung.bestandteil_id is bestandteil_id:
+                original = copy.deepcopy(offene_nach_id[behandlung.offener_eintrag_id])
+                erzeugt_modellinhalt = (
+                    behandlung.entscheidung is Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST
+                )
                 eintraege.append(
                     {
                         "eintragstyp": MenschlicherEintragstyp.BEHANDLUNG_OFFENER_EINTRAG,
                         "offener_eintrag_id": behandlung.offener_eintrag_id,
                         "entscheidung": behandlung.entscheidung,
-                        "fachlicher_inhalt": behandlung.fachlicher_inhalt,
+                        "strukturierter_inhalt": copy.deepcopy(behandlung.strukturierter_inhalt),
+                        "kommentar": behandlung.begruendung,
                         "begruendung": behandlung.begruendung,
+                        "fachlicher_inhalt": "",
                         "fachliche_ergaenzung_oder_begruendung": (
-                            behandlung.fachlicher_inhalt or behandlung.begruendung
+                            copy.deepcopy(behandlung.strukturierter_inhalt)
+                            if erzeugt_modellinhalt
+                            else behandlung.begruendung
                         ),
-                        "modellinhalt_erzeugt": behandlung.entscheidung
-                        is Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST,
+                        "modellinhalt_erzeugt": erzeugt_modellinhalt,
+                        "dokumentierte_einschraenkung": (
+                            behandlung.entscheidung
+                            is Offenheitsentscheidung.NICHT_BEKANNT_ODER_BESTIMMBAR
+                        ),
                         "wirkung_auf_k": _wirkung_auf_k(behandlung.entscheidung),
+                        "urspruenglicher_o_eintrag": original,
+                        "anwenderhinweis_aus_schritt_8": str(original.get("anwenderhinweis", "")),
                         "menschliche_entscheidung": True,
-                    }
-                )
-        for index, anpassung in enumerate(arbeitsfassung.zusaetzliche_anpassungen, 1):
-            if anpassung.bestandteil_id is bestandteil_id:
-                eintraege.append(
-                    {
-                        "eintragstyp": MenschlicherEintragstyp.ZUSAETZLICHE_ANPASSUNG,
-                        "anpassungsnummer": index,
-                        "fachlicher_inhalt": anpassung.fachlicher_inhalt,
-                        "begruendung": anpassung.begruendung,
-                        "wirkung_auf_k": "menschliche_ergaenzung_oder_korrektur_fuer_k_stern",
-                        "fuer_k_stern_massgeblich": True,
-                        "menschliche_entscheidung": True,
+                        "entschieden_am": entschieden_am,
                     }
                 )
         return _normalisieren(eintraege)
+
+    @staticmethod
+    def _behandlungen_mit_kontext(
+        arbeitsfassung: Validierungsarbeitsfassung, *, entschieden_am: datetime
+    ) -> list[dict[str, Any]]:
+        offene_nach_id = {
+            str(wert["offener_eintrag_id"]): wert
+            for wert in arbeitsfassung.grundlage.o.get("offene_eintraege", [])
+        }
+        ergebnis: list[dict[str, Any]] = []
+        for behandlung in arbeitsfassung.behandlungen:
+            original = copy.deepcopy(offene_nach_id[behandlung.offener_eintrag_id])
+            wert = cast(dict[str, Any], _normalisieren(behandlung))
+            wert.update(
+                {
+                    "fachlicher_inhalt": "",
+                    "kommentar": behandlung.begruendung,
+                    "urspruenglicher_o_eintrag": original,
+                    "anwenderhinweis_aus_schritt_8": str(original.get("anwenderhinweis", "")),
+                    "entschieden_am": entschieden_am,
+                }
+            )
+            ergebnis.append(cast(dict[str, Any], _normalisieren(wert)))
+        return ergebnis
 
     def speichern(
         self,
@@ -414,18 +465,23 @@ class ModellvalidierungService:
                     "validierungsstatus": Gesamtvalidierungsstatus.FACHLICH_VALIDIERT,
                     "urspruenglicher_bestandteil": copy.deepcopy(original),
                     "menschliche_eintraege": self._menschliche_eintraege(
-                        arbeitsfassung, definition.bestandteil_id
+                        arbeitsfassung,
+                        definition.bestandteil_id,
+                        entschieden_am=zeitpunkt,
                     ),
                 }
                 for definition, original in zip(
                     MODELLBESTANDTEILE, basis.k["modellbestandteile"], strict=True
                 )
             ],
-            "behandlungen_offener_eintraege": arbeitsfassung.behandlungen,
+            "behandlungen_offener_eintraege": self._behandlungen_mit_kontext(
+                arbeitsfassung, entschieden_am=zeitpunkt
+            ),
             "gesamtvalidierung": {
                 "status": Gesamtvalidierungsstatus.FACHLICH_VALIDIERT,
                 "validierungsvermerk": arbeitsfassung.validierungsvermerk,
                 "menschlich_bestaetigt": arbeitsfassung.gesamtpruefung_bestaetigt,
+                "validiert_am": zeitpunkt,
             },
             "eingabefingerabdruck": basis.eingabefingerabdruck,
             "entscheidungsfingerabdruck": aktuell,
@@ -600,6 +656,13 @@ class ModellvalidierungService:
         behandlungsobjekte_liste: list[BehandlungOffenerEintrag] = []
         for behandlung in behandlungen:
             original = offene_nach_id[behandlung["offener_eintrag_id"]]
+            entschieden_am = behandlung.get("entschieden_am")
+            try:
+                entscheidungszeitpunkt = datetime.fromisoformat(str(entschieden_am))
+            except (TypeError, ValueError) as fehler:
+                raise Importintegritaetsfehler(
+                    "Der Zeitstempel einer O-Behandlung ist ungültig."
+                ) from fehler
             if (
                 behandlung.get("bestandteil_id") != original.get("bestandteil_id")
                 or behandlung.get("urspruengliche_kategorie") != original.get("kategorie")
@@ -607,9 +670,17 @@ class ModellvalidierungService:
                 or behandlung.get("entscheidung")
                 not in {wert.value for wert in Offenheitsentscheidung}
                 or not behandlung.get("menschliche_entscheidung")
+                or behandlung.get("urspruenglicher_o_eintrag") != original
+                or behandlung.get("anwenderhinweis_aus_schritt_8", "")
+                != original.get("anwenderhinweis", "")
+                or entscheidungszeitpunkt.utcoffset() is None
+                or behandlung.get("fachlicher_inhalt", "")
             ):
                 raise Importintegritaetsfehler("Eine O-Behandlung in K* ist inkonsistent.")
             try:
+                strukturierter_inhalt = behandlung.get("strukturierter_inhalt", {})
+                if not isinstance(strukturierter_inhalt, dict):
+                    raise Domaenenfehler("Der strukturierte Inhalt ist ungültig.")
                 behandlungsobjekte_liste.append(
                     BehandlungOffenerEintrag(
                         behandlung["offener_eintrag_id"],
@@ -617,11 +688,20 @@ class ModellvalidierungService:
                         Offenheitskategorie(behandlung["urspruengliche_kategorie"]),
                         behandlung["urspruengliche_begruendung"],
                         Offenheitsentscheidung(behandlung["entscheidung"]),
-                        str(behandlung.get("fachlicher_inhalt", "")),
+                        "",
                         str(behandlung.get("begruendung", "")),
                         behandlung["menschliche_entscheidung"],
+                        copy.deepcopy(strukturierter_inhalt),
                     )
                 )
+                if behandlung["entscheidung"] == (
+                    Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST.value
+                ):
+                    validiere_strukturierten_inhalt(
+                        ModellbestandteilId(behandlung["bestandteil_id"]),
+                        strukturierter_inhalt,
+                        basis.k,
+                    )
             except (Domaenenfehler, TypeError, ValueError) as fehler:
                 raise Importintegritaetsfehler(
                     "Eine O-Behandlung verletzt die fachlichen Entscheidungsregeln."
@@ -629,105 +709,77 @@ class ModellvalidierungService:
         gesamt = k_stern.get("gesamtvalidierung", {})
         if not isinstance(gesamt, dict):
             raise Importintegritaetsfehler("Die Gesamtvalidierung in K* ist ungültig.")
+        try:
+            validiert_am = datetime.fromisoformat(str(gesamt.get("validiert_am")))
+        except (TypeError, ValueError) as fehler:
+            raise Importintegritaetsfehler(
+                "Der Zeitstempel der Gesamtvalidierung ist ungültig."
+            ) from fehler
         if (
             gesamt.get("status") != Gesamtvalidierungsstatus.FACHLICH_VALIDIERT.value
             or gesamt.get("menschlich_bestaetigt") is not True
+            or validiert_am.utcoffset() is None
             or validierung.status is not Modellvalidierungsstatus.FACHLICH_VALIDIERT
         ):
             raise Importintegritaetsfehler("K* ist nicht ausdrücklich fachlich validiert.")
         behandlungsobjekte = tuple(behandlungsobjekte_liste)
-        zusaetzliche_roh: list[dict[str, Any]] = []
         behandlungs_eintraege = 0
         for bestandteil in bestandteile:
             bestandteil_id = ModellbestandteilId(bestandteil["bestandteil_id"])
             for eintrag in bestandteil.get("menschliche_eintraege", []):
-                if eintrag.get("eintragstyp") == (
+                if eintrag.get("eintragstyp") != (
                     MenschlicherEintragstyp.BEHANDLUNG_OFFENER_EINTRAG.value
                 ):
-                    behandlungs_eintraege += 1
-                    zugehoerig = next(
-                        (
-                            wert
-                            for wert in behandlungen
-                            if wert["offener_eintrag_id"] == eintrag.get("offener_eintrag_id")
-                        ),
-                        None,
-                    )
-                    if (
-                        zugehoerig is None
-                        or zugehoerig["bestandteil_id"] != bestandteil_id.value
-                        or eintrag.get("entscheidung") != zugehoerig["entscheidung"]
-                        or eintrag.get("fachlicher_inhalt", "")
-                        != zugehoerig.get("fachlicher_inhalt", "")
-                        or eintrag.get("begruendung", "") != zugehoerig.get("begruendung", "")
-                        or eintrag.get("fachliche_ergaenzung_oder_begruendung")
-                        != (
-                            zugehoerig.get("fachlicher_inhalt", "")
-                            or zugehoerig.get("begruendung", "")
-                        )
-                        or eintrag.get("modellinhalt_erzeugt")
-                        is not (
-                            zugehoerig["entscheidung"]
-                            == Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST.value
-                        )
-                        or eintrag.get("wirkung_auf_k")
-                        != _wirkung_auf_k(zugehoerig["entscheidung"])
-                    ):
-                        raise Importintegritaetsfehler(
-                            "Eine O-Behandlung ist dem falschen Bestandteil zugeordnet."
-                        )
-                elif eintrag.get("eintragstyp") == (
-                    MenschlicherEintragstyp.ZUSAETZLICHE_ANPASSUNG.value
-                ):
-                    if (
-                        eintrag.get("wirkung_auf_k")
-                        != "menschliche_ergaenzung_oder_korrektur_fuer_k_stern"
-                        or eintrag.get("fuer_k_stern_massgeblich") is not True
-                    ):
-                        raise Importintegritaetsfehler(
-                            "Eine zusätzliche Anpassung ist in K* nicht fachlich eindeutig."
-                        )
-                    zusaetzliche_roh.append(
-                        {
-                            "anpassungsnummer": eintrag.get("anpassungsnummer"),
-                            "bestandteil_id": bestandteil_id,
-                            "fachlicher_inhalt": eintrag.get("fachlicher_inhalt", ""),
-                            "begruendung": eintrag.get("begruendung", ""),
-                        }
-                    )
-                else:
                     raise Importintegritaetsfehler(
-                        "K* enthält einen unbekannten menschlichen Eintragstyp."
+                        "K* v3 darf keine freie Anpassung ohne Bezug zu O enthalten."
+                    )
+                behandlungs_eintraege += 1
+                zugehoerig = next(
+                    (
+                        wert
+                        for wert in behandlungen
+                        if wert["offener_eintrag_id"] == eintrag.get("offener_eintrag_id")
+                    ),
+                    None,
+                )
+                erwartet_modellinhalt = bool(
+                    zugehoerig
+                    and zugehoerig["entscheidung"]
+                    == Offenheitsentscheidung.ERGAENZT_ODER_ANGEPASST.value
+                )
+                erwartet_einschraenkung = bool(
+                    zugehoerig
+                    and zugehoerig["entscheidung"]
+                    == Offenheitsentscheidung.NICHT_BEKANNT_ODER_BESTIMMBAR.value
+                )
+                if (
+                    zugehoerig is None
+                    or zugehoerig["bestandteil_id"] != bestandteil_id.value
+                    or eintrag.get("entscheidung") != zugehoerig["entscheidung"]
+                    or eintrag.get("strukturierter_inhalt", {})
+                    != zugehoerig.get("strukturierter_inhalt", {})
+                    or eintrag.get("kommentar", "") != zugehoerig.get("begruendung", "")
+                    or eintrag.get("begruendung", "") != zugehoerig.get("begruendung", "")
+                    or eintrag.get("modellinhalt_erzeugt") is not erwartet_modellinhalt
+                    or eintrag.get("dokumentierte_einschraenkung") is not erwartet_einschraenkung
+                    or eintrag.get("wirkung_auf_k") != _wirkung_auf_k(zugehoerig["entscheidung"])
+                    or eintrag.get("urspruenglicher_o_eintrag")
+                    != zugehoerig.get("urspruenglicher_o_eintrag")
+                    or eintrag.get("anwenderhinweis_aus_schritt_8", "")
+                    != zugehoerig.get("anwenderhinweis_aus_schritt_8", "")
+                    or eintrag.get("entschieden_am") != zugehoerig.get("entschieden_am")
+                ):
+                    raise Importintegritaetsfehler(
+                        "Eine O-Behandlung ist dem falschen Bestandteil zugeordnet."
                     )
         if behandlungs_eintraege != len(behandlungen):
             raise Importintegritaetsfehler(
                 "Die O-Behandlungen sind nicht vollständig Modellbestandteilen zugeordnet."
             )
-        nummern = [wert["anpassungsnummer"] for wert in zusaetzliche_roh]
-        if any(not isinstance(wert, int) for wert in nummern) or sorted(nummern) != list(
-            range(1, len(nummern) + 1)
-        ):
-            raise Importintegritaetsfehler(
-                "Die Reihenfolge zusätzlicher menschlicher Anpassungen ist inkonsistent."
-            )
-        zusaetzliche_roh.sort(key=lambda wert: wert["anpassungsnummer"])
-        try:
-            zusaetzliche_objekte = tuple(
-                ZusaetzlicheModellanpassung(
-                    wert["bestandteil_id"],
-                    wert["fachlicher_inhalt"],
-                    wert["begruendung"],
-                )
-                for wert in zusaetzliche_roh
-            )
-        except (Domaenenfehler, TypeError, ValueError) as fehler:
-            raise Importintegritaetsfehler(
-                "Eine zusätzliche Anpassung in K* ist fachlich ungültig."
-            ) from fehler
         if (
             self.entscheidungsfingerabdruck(
                 behandlungsobjekte,
-                zusaetzliche_objekte,
+                (),
                 Gesamtvalidierungsstatus.FACHLICH_VALIDIERT,
                 str(gesamt.get("validierungsvermerk", "")),
                 True,

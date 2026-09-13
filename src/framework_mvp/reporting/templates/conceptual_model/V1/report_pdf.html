@@ -37,6 +37,17 @@
 
     </header>
 
+    <div class="pdf-project-name">
+        {{ projekt.get("bezeichnung") or "Projekt" }}
+    </div>
+
+    {% if validierung.get("validierungsvermerk") %}
+        <div class="pdf-overview-validation">
+            <strong>Fachliche Validierung</strong>
+            <span>{{ validierung.get("validierungsvermerk") }}</span>
+        </div>
+    {% endif %}
+
 
     {# ------------------------------------------------------------
        Kerndaten
@@ -265,22 +276,20 @@
          03 · Ausgaben und Eingaben
          ======================================================== -->
 
-    <article class="pdf-card pdf-card-full pdf-card-compact">
+    <article class="pdf-card pdf-card-full">
 
         <div class="pdf-card-label">
             03 · Ausgaben und Eingaben
         </div>
 
-        <h2>
-            Ergebnisgrößen
-        </h2>
+        <h2>Ausgaben</h2>
 
         {% set kpi_ergebnisse =
-            ausgaben_und_eingaben.get("kpi_ergebnisse", [])
+            ausgaben.get("kpi_ergebnisse", [])
         %}
 
         {% set ausgewaehlte_kpis =
-            ausgaben_und_eingaben.get("ausgewaehlte_kpis", [])
+            ausgaben.get("ausgewaehlte_kpis", [])
         %}
 
         {% if kpi_ergebnisse %}
@@ -294,7 +303,7 @@
                         <div class="pdf-kpi-name">
                             {{ kpi.get(
                                 "bezeichnung",
-                                kpi.get("kpi_id", "KPI")
+                                "KPI-Ergebnis"
                             ) }}
                         </div>
 
@@ -365,18 +374,18 @@
 
         {% endif %}
 
-        {% set conformance = ausgaben_und_eingaben.get("conformance_checking", {}) %}
+        {% set conformance = ausgaben.get("conformance_checking", {}) %}
         {% set conformance_ergebnis = conformance.get("ergebnis", {}) if conformance else {} %}
         {% if conformance_ergebnis %}
             <h3 class="pdf-subheading">Conformance Checking · Gleichung 3.14</h3>
             <div class="pdf-kv-list">
-                <div class="pdf-kv-row"><div class="pdf-kv-label">Fitness</div><div class="pdf-kv-value">{{ conformance_ergebnis.get("fitness", "–") }}</div></div>
+                <div class="pdf-kv-row"><div class="pdf-kv-label">Fitness</div><div class="pdf-kv-value">{{ conformance_ergebnis.get("fitness_anzeige", conformance_ergebnis.get("fitness", "–")) }}</div></div>
                 <div class="pdf-kv-row"><div class="pdf-kv-label">Token pT / cT / mT / rT</div><div class="pdf-kv-value">{{ conformance_ergebnis.get("produzierte_tokens", "–") }} / {{ conformance_ergebnis.get("konsumierte_tokens", "–") }} / {{ conformance_ergebnis.get("fehlende_tokens", "–") }} / {{ conformance_ergebnis.get("verbleibende_tokens", "–") }}</div></div>
                 <div class="pdf-kv-row"><div class="pdf-kv-label">Fälle gesamt / konform / abweichend</div><div class="pdf-kv-value">{{ conformance_ergebnis.get("ausgewertete_faelle", "–") }} / {{ conformance_ergebnis.get("konforme_faelle", "–") }} / {{ conformance_ergebnis.get("abweichende_faelle", "–") }}</div></div>
             </div>
         {% endif %}
 
-        {% set performance = ausgaben_und_eingaben.get("performance_und_engpassanalyse", {}) %}
+        {% set performance = ausgaben.get("performance_und_engpassanalyse", {}) %}
         {% set dt_db = performance.get("dt_db_ergebnis", {}) if performance else {} %}
         {% if dt_db and (dt_db.get("dt_statistik") or dt_db.get("db_statistik")) %}
             <h3 class="pdf-subheading">Soll-/Ist-Abweichungen</h3>
@@ -406,20 +415,53 @@
         {% set busy = performance.get("busy_ratio_ergebnis", {}) if performance else {} %}
         {% if busy and busy.get("ressourcenstatistiken") %}
             <h3 class="pdf-subheading">Ergänzende Performance · Busy Ratio</h3>
-            <div class="pdf-kpi-list">
-                {% for wert in busy.get("ressourcenstatistiken", []) %}
-                    <div class="pdf-kpi-row">
-                        <div class="pdf-kpi-name">{{ wert.get("ressource", "–") }}</div>
-                        <div class="pdf-kpi-value">n={{ wert.get("anzahl_gueltige_busy_ratios", "–") }} · Ø {{ wert.get("mittelwert_busy_ratio", "–") }} · Median {{ wert.get("median_busy_ratio", "–") }}</div>
-                    </div>
-                {% endfor %}
-            </div>
+            <table class="pdf-data-table pdf-table-busy">
+                <thead>
+                    <tr><th>Ressource</th><th>n</th><th>Mittelwert</th><th>Median</th></tr>
+                </thead>
+                <tbody>
+                    {% for wert in busy.get("ressourcenstatistiken", []) %}
+                        <tr>
+                            <td>{{ wert.get("ressource", "–") }}</td>
+                            <td>{{ wert.get("anzahl_gueltige_busy_ratios", "–") }}</td>
+                            <td>{{ wert.get("mittelwert_busy_ratio", "–") }}</td>
+                            <td>{{ wert.get("median_busy_ratio", "–") }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
             {% if busy.get("potenzieller_engpass") %}
                 <div class="pdf-notice">
-                    Potenzieller Engpass: {{ busy.get("potenzieller_engpass") }}.
+                    <strong>Potenzieller Engpass: {{ busy.get("potenzieller_engpass") }}</strong><br>
                     Daraus wird keine Ursache oder reale Warteschlange abgeleitet.
                 </div>
             {% endif %}
+        {% endif %}
+
+        <h2 class="pdf-major-subheading">Eingaben</h2>
+        {% set faktoren = eingaben.get("experimentelle_faktoren", []) %}
+        {% if faktoren %}
+            <table class="pdf-data-table pdf-table-factors">
+                <thead>
+                    <tr>
+                        <th>Bezugstyp</th><th>Konkreter Bezug</th><th>Faktor</th>
+                        <th>Art</th><th>Wertebereich / Ausprägungen</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for faktor in faktoren %}
+                        <tr>
+                            <td>{{ faktor.get("bezugstyp_anzeige", "–") }}</td>
+                            <td>{{ faktor.get("konkreter_bezug") or "Gesamtsystem" }}</td>
+                            <td>{{ faktor.get("bezeichnung", "–") }}</td>
+                            <td>{{ faktor.get("art_anzeige", "–") }}</td>
+                            <td>{{ faktor.get("wertebereich_anzeige", "–") }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <div class="pdf-empty">Keine experimentellen Faktoren festgelegt.</div>
         {% endif %}
 
     </article>
@@ -819,13 +861,11 @@
                     <div class="pdf-kv-row">
 
                         <div class="pdf-kv-label">
-                            Kanonisches Fallattribut
+                            Fallidentifikation
                         </div>
 
                         <div class="pdf-kv-value">
-                            {{ entitaeten.get(
-                                "kanonisches_fallattribut"
-                            ) or "–" }}
+                            {{ entitaeten.get("fallidentifikation") or "–" }}
                         </div>
 
                     </div>
@@ -898,68 +938,37 @@
             4.3 · Warteschlangen
         </div>
 
-        {% set wartezeit_kpis =
-            warteschlangen.get("wartezeit_kpis", [])
+        {% set bestaetigte_warteschlangen =
+            warteschlangen.get("bestaetigte_warteschlangen", [])
         %}
 
-        {% if wartezeit_kpis %}
-
-            <div class="pdf-kpi-list">
-
-                {% for kpi in wartezeit_kpis %}
-
-                    <div class="pdf-kpi-row">
-
-                        <div class="pdf-kpi-name">
-                            {{ kpi.get(
-                                "bezeichnung",
-                                kpi.get("kpi_id", "Wartezeit")
-                            ) }}
-                        </div>
-
-                        <div class="pdf-kpi-value">
-                            {{ kpi.get("ergebnis_anzeige", "–") }}
-                        </div>
-
-                    </div>
-
-                {% endfor %}
-
-            </div>
-
-        {% endif %}
-
-        {% set wartestellenhinweise =
-            warteschlangen.get("wartestellenhinweise", [])
-        %}
-
-        {% if wartestellenhinweise %}
-            <h3 class="pdf-subheading">Übergangswartezeiten aus Schritt 7</h3>
-            <div class="pdf-kpi-list">
-                {% for hinweis in wartestellenhinweise %}
-                    <div class="pdf-kpi-row">
-                        <div class="pdf-kpi-name">
-                            {{ hinweis.get("uebergang", {}).get("von", "–") }}
-                            →
-                            {{ hinweis.get("uebergang", {}).get("zu", "–") }}
-                            · n={{ hinweis.get("anzahl", hinweis.get("positive_hinweise", "–")) }}
-                        </div>
-                        <div class="pdf-kpi-value">
-                            Ø {{ hinweis.get("mittlere_wartezeit_sekunden", "–") }} s
-                        </div>
-                    </div>
-                {% endfor %}
-            </div>
-        {% endif %}
-
-        {% if not wartezeit_kpis and not wartestellenhinweise %}
-
+        {% if bestaetigte_warteschlangen %}
+            <table class="pdf-data-table">
+                <thead>
+                    <tr><th>Warteschlange</th><th>Vorgängeraktivität</th><th>Folgeaktivität</th><th>Kapazität / Regel</th></tr>
+                </thead>
+                <tbody>
+                    {% for wert in bestaetigte_warteschlangen %}
+                        <tr>
+                            <td>{{ wert.get("bezeichnung", "–") }}</td>
+                            <td>{{ wert.get("vorgaengeraktivitaet", "–") }}</td>
+                            <td>{{ wert.get("folgeaktivitaet", "–") }}</td>
+                            <td>
+                                {% if wert.get("kapazitaet") %}Kapazität: {{ wert.get("kapazitaet") }}{% endif %}
+                                {% if wert.get("kapazitaet") and wert.get("regel") %}<br>{% endif %}
+                                {% if wert.get("regel") %}Regel: {{ wert.get("regel") }}{% endif %}
+                                {% if not wert.get("kapazitaet") and not wert.get("regel") %}–{% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
             <div class="pdf-notice">
-                Aus den vorliegenden Artefakten wurde keine explizite
-                Warteschlangenstruktur als eigener Modellbestandteil
-                abgeleitet.
+                <strong>Keine Warteschlange fachlich bestätigt.</strong><br>
+                Datenbasierte Hinweise auf potenzielle Wartezeiten sind unter
+                „Datenauswahl und Daten“ dokumentiert.
             </div>
-
         {% endif %}
 
     </article>
@@ -969,7 +978,7 @@
          4.4 · Ressourcen
          ======================================================== -->
 
-    <article class="pdf-card pdf-card-full pdf-card-compact">
+    <article class="pdf-card pdf-card-full">
 
         <div class="pdf-card-label">
             4.4 · Ressourcen
@@ -1041,9 +1050,12 @@
 
                 {% if ressourcen.get("zuordnungsmodus") %}
                     <div class="pdf-inline-meta">
-                        Modus: <strong>{{ ressourcen.get("zuordnungsmodus") }}</strong>
-                        {% if ressourcen.get("zuordnungsherkunft") %}
-                            · {{ ressourcen.get("zuordnungsherkunft") }}
+                        {% if ressourcen.get("zuordnungsmodus") == "automatisch" %}
+                            Ressourcenzuordnung automatisch aus dem Event Log abgeleitet.
+                        {% elif ressourcen.get("zuordnungsmodus") == "manuell" %}
+                            Ressourcenzuordnung in Schritt 7 menschlich bestätigt.
+                        {% else %}
+                            Ressourcenzuordnung aus Schritt 7 übernommen.
                         {% endif %}
                     </div>
                 {% endif %}
@@ -1053,17 +1065,6 @@
                 %}
 
                 {% if event_log_ressourcen %}
-
-                    {% if ressourcen.get("ressourcenattribut") %}
-
-                        <div class="pdf-inline-meta">
-                            Attribut:
-                            <strong>
-                                {{ ressourcen.get("ressourcenattribut") }}
-                            </strong>
-                        </div>
-
-                    {% endif %}
 
                     <div class="pdf-chip-list">
 
@@ -1136,6 +1137,36 @@
             </div>
         {% endif %}
 
+        {% set ressourcenergaenzungen =
+            ressourcen.get("fachliche_ressourcenergaenzungen", [])
+        %}
+        {% if ressourcenergaenzungen %}
+            <h3 class="pdf-subheading">Fachlich ergänzte Ressourceninformationen</h3>
+            <table class="pdf-data-table">
+                <thead>
+                    <tr><th>Ressource</th><th>Rolle</th><th>Anzahl / Kapazität</th><th>Schicht und Pausen</th></tr>
+                </thead>
+                <tbody>
+                    {% for wert in ressourcenergaenzungen %}
+                        <tr>
+                            <td>{{ wert.get("ressource", "–") }}</td>
+                            <td>{{ wert.get("rolle") or "–" }}</td>
+                            <td>
+                                {% if wert.get("verfuegbare_anzahl") is not none %}Anzahl: {{ wert.get("verfuegbare_anzahl") }}{% endif %}
+                                {% if wert.get("kapazitaet") %}{% if wert.get("verfuegbare_anzahl") is not none %}<br>{% endif %}Kapazität: {{ wert.get("kapazitaet") }}{% endif %}
+                                {% if wert.get("verfuegbare_anzahl") is none and not wert.get("kapazitaet") %}–{% endif %}
+                            </td>
+                            <td>
+                                {% if wert.get("schichtstart") or wert.get("schichtende") %}{{ wert.get("schichtstart") or "–" }} bis {{ wert.get("schichtende") or "–" }}{% endif %}
+                                {% if wert.get("pausenzeiten") %}{% if wert.get("schichtstart") or wert.get("schichtende") %}<br>{% endif %}Pausen: {{ wert.get("pausenzeiten") }}{% endif %}
+                                {% if not wert.get("schichtstart") and not wert.get("schichtende") and not wert.get("pausenzeiten") %}–{% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+
 
         {% set ressourcen_kpis =
             ressourcen.get("ressourcenbezogene_kpis", [])
@@ -1156,7 +1187,7 @@
                         <div class="pdf-kpi-name">
                             {{ kpi.get(
                                 "bezeichnung",
-                                kpi.get("kpi_id", "KPI")
+                                "Ressourcenbezogene KPI"
                             ) }}
                         </div>
 
@@ -1313,6 +1344,37 @@
 
         {% endif %}
 
+        {% set explizite_annahmen = annahmen.get("explizite_annahmen", []) %}
+        {% if explizite_annahmen %}
+            <h3 class="pdf-subheading">Explizite Annahmen</h3>
+            <table class="pdf-data-table">
+                <thead><tr><th>Annahme</th><th>Hintergrund</th></tr></thead>
+                <tbody>
+                    {% for wert in explizite_annahmen %}
+                        <tr><td>{{ wert.get("annahme", "–") }}</td><td>{{ wert.get("hintergrund", "–") }}</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+
+        {% set explizite_vereinfachungen =
+            vereinfachungen.get("explizite_vereinfachungen", [])
+        %}
+        {% if explizite_vereinfachungen %}
+            <h3 class="pdf-subheading">Explizite Vereinfachungen</h3>
+            <table class="pdf-data-table">
+                <thead><tr><th>Bezug</th><th>Vereinfachung</th></tr></thead>
+                <tbody>
+                    {% for wert in explizite_vereinfachungen %}
+                        <tr>
+                            <td>{{ wert.get("konkreter_bezug") or "Gesamtsystem" }}</td>
+                            <td>{{ wert.get("beschreibung", "–") }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+
 
         {% set schwellwert =
             annahmen.get("schwellwert_auswirkung", {})
@@ -1387,46 +1449,21 @@
                         Datenquellen
                     </h2>
     
-                    <div class="pdf-source-list">
-    
-                        {% for quelle in datenquellen %}
-    
-                            <div class="pdf-source-row">
-    
-                                <div class="pdf-source-name">
-                                    {{ quelle.get(
-                                        "bezeichnung",
-                                        "Datenquelle"
-                                    ) }}
-                                </div>
-    
-                                <div class="pdf-source-meta">
-    
-                                    {% if quelle.get("quellsystemtyp") %}
-                                        <span>
-                                            {{ quelle.get("quellsystemtyp") }}
-                                        </span>
-                                    {% endif %}
-    
-                                    {% if quelle.get("quellenart") %}
-                                        <span>
-                                            {{ quelle.get("quellenart") }}
-                                        </span>
-                                    {% endif %}
-    
-                                    {% if quelle.get("konkretes_quellsystem") %}
-                                        <span>
-                                            {{ quelle.get("konkretes_quellsystem") }}
-                                        </span>
-                                    {% endif %}
-    
-                                </div>
-    
-                            </div>
-    
-                        {% endfor %}
-    
-                    </div>
+                    <table class="pdf-data-table pdf-table-sources">
+                        <thead>
+                            <tr><th>Datenquelle</th><th>Quellsystem</th><th>Format</th><th>Verwendung</th></tr>
+                        </thead>
+                        <tbody>
+                            {% for quelle in datenquellen %}
+                                <tr>
+                                    <td>{{ quelle.get("bezeichnung", "Datenquelle") }}</td>
+                                    <td>{{ quelle.get("quellsystem_anzeige") or "–" }}</td>
+                                    <td>{{ quelle.get("format_anzeige") or "–" }}</td>
+                                    <td>{{ quelle.get("verwendung") or "–" }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
     
                 {% else %}
     
@@ -1480,11 +1517,11 @@
     
             {% if profile %}
     
-                <h3 class="pdf-subheading">
-                    Datenprofil
-                </h3>
+                <h3 class="pdf-subheading">Datenprofile</h3>
     
                 {% for profil in profile %}
+
+                    <div class="pdf-profile-name">{{ profil.get("anzeigebezeichnung", "Datenprofil") }}</div>
     
                     <div class="pdf-data-metrics">
     
@@ -1532,100 +1569,85 @@
 
             {% set zeitdaten = daten.get("zeitbezogene_datenauswahl", {}) %}
             {% if zeitdaten %}
-                <h3 class="pdf-subheading">Zeitbezogene Datenauswahl aus Schritt 7</h3>
-                <div class="pdf-kv-list">
-                    <div class="pdf-kv-row">
-                        <div class="pdf-kv-label">Bearbeitungszeit · Gl. 3.3</div>
-                        <div class="pdf-kv-value">Ist-Ende(A) − Ist-Start(A)</div>
-                    </div>
-                    <div class="pdf-kv-row">
-                        <div class="pdf-kv-label">Potenzielle Wartezeit · Gl. 3.15</div>
-                        <div class="pdf-kv-value">Start(B) − Ende(A), nur wenn &gt; 0</div>
-                    </div>
-                    <div class="pdf-kv-row">
-                        <div class="pdf-kv-label">System-IAT · Gl. 3.16</div>
-                        <div class="pdf-kv-value">Frühester Ist-Start genau einmal je Case</div>
-                    </div>
-                    {% set system_iat = zeitdaten.get("system_zwischenankunftszeit", {}) %}
+                <h3 class="pdf-subheading">Zeitbezogene Datenauswahl</h3>
+                {% set system_iat = zeitdaten.get("system_zwischenankunftszeit", {}) %}
+                <div class="pdf-time-block">
+                    <h4>Zwischenankunftszeit System · Gl. 3.16</h4>
+                    <div class="pdf-muted">Systemeintritt: frühester Ist-Start je Fall</div>
                     {% if system_iat and system_iat.get("statistik") %}
-                        <div class="pdf-kv-row">
-                            <div class="pdf-kv-label">System-IAT</div>
-                            <div class="pdf-kv-value">
-                                {{ system_iat.get("anzahl_entitaeten", "–") }} Entitäten
-                                · {{ system_iat.get("statistik", {}).get("anzahl", "–") }} Werte
-                                · Median {{ system_iat.get("statistik", {}).get("median_sekunden", "–") }} s
-                                · Ø {{ system_iat.get("statistik", {}).get("mittelwert_sekunden", "–") }} s
-                            </div>
+                        <div class="pdf-time-summary">
+                            {{ system_iat.get("anzahl_entitaeten", "–") }} Entitäten ·
+                            {{ system_iat.get("statistik", {}).get("anzahl", "–") }} Werte ·
+                            Mittelwert {{ system_iat.get("statistik", {}).get("mittelwert_sekunden", "–") }} s ·
+                            Median {{ system_iat.get("statistik", {}).get("median_sekunden", "–") }} s
                         </div>
                     {% elif system_iat %}
-                        <div class="pdf-kv-row">
-                            <div class="pdf-kv-label">System-IAT</div>
-                            <div class="pdf-kv-value">{{ system_iat.get("begruendung", "nicht eindeutig bestimmbar") }}</div>
-                        </div>
+                        <div class="pdf-notice">{{ system_iat.get("begruendung", "Nicht eindeutig bestimmbar.") }}</div>
                     {% endif %}
-                    {% for wert in zeitdaten.get("zwischenankunftszeiten", []) %}
-                        <div class="pdf-kv-row">
-                            <div class="pdf-kv-label">
-                                Historische IAT {{ wert.get("definition", {}).get("bezeichnung", "") }}
-                            </div>
-                            <div class="pdf-kv-value">
-                                Median {{ wert.get("statistik", {}).get("median_sekunden", "–") }} s
-                                · Ø {{ wert.get("statistik", {}).get("mittelwert_sekunden", "–") }} s
-                            </div>
-                        </div>
-                    {% endfor %}
                 </div>
-                {% if zeitdaten.get("bearbeitungszeiten") %}
-                    <div class="pdf-kpi-list">
-                        {% for wert in zeitdaten.get("bearbeitungszeiten", []) %}
-                            <div class="pdf-kpi-row">
-                                <div class="pdf-kpi-name">
-                                    Bearbeitungszeit {{ wert.get("aktivitaet", "–") }}
-                                    {% if wert.get("ressource") %}· {{ wert.get("ressource") }}{% endif %}
-                                </div>
-                                <div class="pdf-kpi-value">
-                                    n={{ wert.get("statistik", {}).get("anzahl", "–") }}
-                                    · Ø {{ wert.get("statistik", {}).get("mittelwert_sekunden", "–") }} s
-                                    · Median {{ wert.get("statistik", {}).get("median_sekunden", "–") }} s
-                                </div>
-                            </div>
-                        {% endfor %}
-                    </div>
+
+                {% set bearbeitungszeiten = zeitdaten.get("bearbeitungszeiten_tabelle", []) %}
+                {% if bearbeitungszeiten %}
+                    <h4 class="pdf-table-heading">Bearbeitungszeit · Gl. 3.3</h4>
+                    <table class="pdf-data-table pdf-table-times">
+                        <thead><tr><th>Aktivität</th><th>Ressource</th><th>n</th><th>Mittelwert</th><th>Median</th></tr></thead>
+                        <tbody>
+                            {% for wert in bearbeitungszeiten %}
+                                <tr>
+                                    <td>{{ wert.get("aktivitaet") or "–" }}</td>
+                                    <td>{{ wert.get("ressource") or "–" }}</td>
+                                    <td>{{ wert.get("anzahl", "–") }}</td>
+                                    <td>{{ wert.get("mittelwert_sekunden", "–") }} s</td>
+                                    <td>{{ wert.get("median_sekunden", "–") }} s</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
                 {% endif %}
-                {% if zeitdaten.get("vereinfachte_zeitspannen") %}
-                    <div class="pdf-kpi-list">
-                        {% for wert in zeitdaten.get("vereinfachte_zeitspannen", []) %}
-                            <div class="pdf-kpi-row">
-                                <div class="pdf-kpi-name">
-                                    Vereinfachte Zeitspanne {{ wert.get("von_aktivitaet", "–") }} → {{ wert.get("zu_aktivitaet", "–") }}
-                                </div>
-                                <div class="pdf-kpi-value">
-                                    Start({{ wert.get("zu_aktivitaet", "B") }}) − Start({{ wert.get("von_aktivitaet", "A") }})
-                                    · n={{ wert.get("statistik", {}).get("anzahl", "–") }}
-                                    · Ø {{ wert.get("statistik", {}).get("mittelwert_sekunden", "–") }} s
-                                    · Median {{ wert.get("statistik", {}).get("median_sekunden", "–") }} s
-                                </div>
-                                <div class="pdf-kpi-note">Bestätigte Vereinfachung; keine Bearbeitungs- oder Wartezeit</div>
-                            </div>
-                        {% endfor %}
+
+                {% set vereinfachte = zeitdaten.get("vereinfachte_zeitspannen_tabelle", []) %}
+                {% if vereinfachte %}
+                    <h4 class="pdf-table-heading">Vereinfachte Zeitspannen</h4>
+                    <div class="pdf-notice">
+                        Mangels separater Aktivitäts-Endzeitpunkte wurden bestätigte Start-zu-Start-Zeitspannen verwendet.
+                        Diese enthalten mögliche Bearbeitungs-, Transport- und Warteanteile gemeinsam.
                     </div>
+                    <table class="pdf-data-table pdf-table-times">
+                        <thead><tr><th>Übergang</th><th>n</th><th>Mittelwert</th><th>Median</th></tr></thead>
+                        <tbody>
+                            {% for wert in vereinfachte %}
+                                <tr>
+                                    <td>{{ wert.get("uebergang", "–") }}</td>
+                                    <td>{{ wert.get("anzahl", "–") }}</td>
+                                    <td>{{ wert.get("mittelwert_sekunden", "–") }} s</td>
+                                    <td>{{ wert.get("median_sekunden", "–") }} s</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
                 {% endif %}
-                {% if zeitdaten.get("potenzielle_wartezeiten") %}
-                    <div class="pdf-kpi-list">
-                        {% for wert in zeitdaten.get("potenzielle_wartezeiten", []) %}
-                            <div class="pdf-kpi-row">
-                                <div class="pdf-kpi-name">
-                                    Potenzielle Wartestelle {{ wert.get("von_aktivitaet", "–") }} → {{ wert.get("zu_aktivitaet", "–") }}
-                                </div>
-                                <div class="pdf-kpi-value">
-                                    n={{ wert.get("statistik", {}).get("anzahl", "–") }}
-                                    · Ø {{ wert.get("statistik", {}).get("mittelwert_sekunden", "–") }} s
-                                    · Median {{ wert.get("statistik", {}).get("median_sekunden", "–") }} s
-                                </div>
-                                <div class="pdf-kpi-note">Hinweis; keine bestätigte Warteschlange</div>
-                            </div>
-                        {% endfor %}
+
+                {% set warten = zeitdaten.get("potenzielle_wartezeiten_tabelle", []) %}
+                {% if warten %}
+                    <h4 class="pdf-table-heading">Potenzielle Wartezeit · Gl. 3.15</h4>
+                    <div class="pdf-notice">
+                        Positive Zeitdifferenzen nach Gl. 3.15 werden als potenzielle Wartezeiten ausgewiesen.
+                        Sie stellen ohne fachliche Bestätigung keine Warteschlange dar.
                     </div>
+                    <table class="pdf-data-table pdf-table-times">
+                        <thead><tr><th>Übergang</th><th>n</th><th>Mittelwert</th><th>Median</th><th>Status</th></tr></thead>
+                        <tbody>
+                            {% for wert in warten %}
+                                <tr>
+                                    <td>{{ wert.get("uebergang", "–") }}</td>
+                                    <td>{{ wert.get("anzahl", "–") }}</td>
+                                    <td>{{ wert.get("mittelwert_sekunden", "–") }} s</td>
+                                    <td>{{ wert.get("median_sekunden", "–") }} s</td>
+                                    <td>{{ wert.get("status", "Hinweis") }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
                 {% endif %}
             {% endif %}
     
@@ -1652,7 +1674,7 @@
                         </div>
     
                         <div class="pdf-kv-value">
-                            {{ event_log.get("zeitraum_von") or "–" }}
+                            {{ event_log.get("zeitraum_von_anzeige", event_log.get("zeitraum_von")) or "–" }}
                         </div>
     
                     </div>
@@ -1664,7 +1686,7 @@
                         </div>
     
                         <div class="pdf-kv-value">
-                            {{ event_log.get("zeitraum_bis") or "–" }}
+                            {{ event_log.get("zeitraum_bis_anzeige", event_log.get("zeitraum_bis")) or "–" }}
                         </div>
     
                     </div>
@@ -1689,6 +1711,8 @@
             <div class="pdf-card-label">
                 07 · Darstellung der Vorgänge des Systems
             </div>
+
+            <div class="pdf-process-pair">
     
     
             <!-- Directly-Follows Graph -->
@@ -1740,26 +1764,10 @@
                 </span>
     
             {% endif %}
-    
-    
-            <!-- Optionaler fachlicher Validierungsvermerk -->
-    
-            {% if validierung.get("validierungsvermerk") %}
-    
-                <div class="pdf-validation-note">
-    
-                    <div class="pdf-validation-label">
-                        Validierungsvermerk
-                    </div>
-    
-                    <div>
-                        {{ validierung.get("validierungsvermerk") }}
-                    </div>
-    
-                </div>
-    
-            {% endif %}
-    
+
+            </div>
+
+
         </article>
     
     </section>
@@ -1774,7 +1782,7 @@
         <article class="pdf-card pdf-card-full pdf-technical-card">
     
             <div class="pdf-card-label">
-                08 · Technische Nachvollziehbarkeit
+                08 · Technischer Anhang – Nachvollziehbarkeit
             </div>
     
             <h2>
@@ -1899,7 +1907,7 @@
     
                                 <td>
                                     {{ eintrag.get(
-                                        "uebernahmeart",
+                                        "uebernahmeart_anzeige",
                                         "–"
                                     ) }}
                                 </td>
