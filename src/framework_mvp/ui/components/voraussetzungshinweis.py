@@ -1,6 +1,6 @@
 """Wiederverwendbarer, handlungsorientierter Hinweis bei veralteter Fachlineage."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 from uuid import UUID
 
@@ -17,6 +17,7 @@ def zeige_voraussetzungshinweis(
     aktionslabel: str,
     projekt_id: UUID,
     technische_details: Mapping[str, Any] | None = None,
+    aktion_vor_navigation: Callable[[], None] | None = None,
 ) -> None:
     """Erklärt Ursache, Folge und nächste Aktion ohne technische IDs im Haupttext."""
     with st.container(border=True):
@@ -24,6 +25,8 @@ def zeige_voraussetzungshinweis(
         st.write(grund)
         st.caption(konsequenz)
         if st.button(aktionslabel, type="primary", width="stretch"):
+            if aktion_vor_navigation is not None:
+                aktion_vor_navigation()
             framework_bereich_oeffnen(schritt=ziel_schritt, projekt_id=projekt_id)
         if technische_details:
             with st.expander("Technische Details", expanded=False):

@@ -12,10 +12,11 @@ from uuid import UUID
 import pandas as pd
 import streamlit as st
 
+from framework_mvp.application.ergebnisaggregation_service import Aggregationskonfigurationsvorlage
 from framework_mvp.domain.models import (
-    Freigabestatus, LogistischeZielgroesse, Mappingzustand, Projekt, Projektstatus,
-    ProfilkennzahlReferenz, Profilkennzahltyp, Qualitaetsfreigabe, Systemtyp,
-    Untersuchungsauftrag,
+    Datenartefakt, Freigabestatus, KpiKonfiguration, LogistischeZielgroesse,
+    Mappingzustand, OperandZuordnung, Projekt, Projektstatus, ProfilkennzahlReferenz,
+    Profilkennzahltyp, Qualitaetsfreigabe, Systemtyp, Untersuchungsauftrag,
 )
 from framework_mvp.ui.pages.ergebnisaggregation import zeige_ergebnisaggregation_seite
 
@@ -97,6 +98,8 @@ class Aggregation:
         assert (projekt_id, freigabe_id, analyse_id) == (P, F, A)
         st.session_state["test_uebergabe_schritt8"] = True
     def laden(self, aggregations_id):
+        if st.session_state.get("test_veraltetes_a_g"):
+            raise ValueError("U-Hash stimmt nicht mehr überein")
         return SimpleNamespace(
             aggregations_id=aggregations_id,
             projekt_id=P,
@@ -107,12 +110,45 @@ class Aggregation:
         ), {}
     def a_g_download_laden(self, aggregations_id): return b"{}"
     def gespeicherte_ergebnisdetails_laden(self, aggregations_id): return {}
+    def rekonfiguration_vorbereiten(self, projekt_id, freigabe_id, analyse_id):
+        assert (projekt_id, freigabe_id, analyse_id) == (P, F, A)
+        st.session_state["test_rekonfiguration_persistiert"] = True
+    def kompatible_konfigurationsvorlage_laden(self, projekt_id, freigabe_id, analyse_id):
+        assert (projekt_id, freigabe_id, analyse_id) == (P, F, A)
+        if not st.session_state.get("test_vorlage"):
+            return None
+        return Aggregationskonfigurationsvorlage(
+            ALTES_AG,
+            kpi_konfigurationen=(
+                KpiKonfiguration(
+                    "servicegrad",
+                    (
+                        OperandZuordnung(
+                            "befriedigte_kundenauftragspositionen",
+                            Datenartefakt.ZWISCHENDATENSATZ_T,
+                            spalte="befriedigt", bedingungsoperator="gleich", bedingungswert="ja",
+                        ),
+                        OperandZuordnung(
+                            "kundenauftragspositionen", Datenartefakt.ZWISCHENDATENSATZ_T,
+                            spalte="position",
+                        ),
+                    ),
+                    "%", "Kundenauftragspositionen",
+                ),
+            ),
+        )
 
 zeige_ergebnisaggregation_seite(Projekte(), Aggregation())
 """
 
 
-def _app(*, aktiv: bool = True, ressourcen_vollstaendig: bool = False) -> AppTest:
+def _app(
+    *,
+    aktiv: bool = True,
+    ressourcen_vollstaendig: bool = False,
+    veraltetes_a_g: bool = False,
+    vorlage: bool = False,
+) -> AppTest:
     app = AppTest.from_string(APP, default_timeout=10)
     if aktiv:
         app.session_state["aktuelles_projekt_id"] = "11111111-1111-1111-1111-111111111111"
@@ -120,6 +156,11 @@ def _app(*, aktiv: bool = True, ressourcen_vollstaendig: bool = False) -> AppTes
         app.session_state["aktuelle_analyse_id"] = "44444444-4444-4444-4444-444444444444"
     if ressourcen_vollstaendig:
         app.session_state["test_ressourcen_vollstaendig"] = True
+    if veraltetes_a_g:
+        app.session_state["test_veraltetes_a_g"] = True
+        app.session_state["aktuelle_aggregations_id"] = "77777777-7777-7777-7777-777777777777"
+    if vorlage:
+        app.session_state["test_vorlage"] = True
     return app.run()
 
 
@@ -278,3 +319,36 @@ def test_conformance_ergebnisdarstellung_und_mappingbestaetigung_sind_explizit()
     assert "rT · verbleibende Tokens" in quelle
     assert "PM4Py-Plausibilisierung" in quelle
     assert "fallbezogene Diagnosen" in quelle
+
+
+def test_neukonfigurationsaktion_oeffnet_editierbaren_modus_ohne_hinweis_loop() -> None:
+    app = _app(veraltetes_a_g=True)
+    aktion = next(
+        wert for wert in app.button if wert.label == "Ergebnisaggregation neu konfigurieren"
+    )
+
+    app = aktion.click().run()
+
+    assert not app.exception
+    assert app.session_state["test_rekonfiguration_persistiert"] is True
+    assert "aktuelle_aggregations_id" not in app.session_state
+    assert not any(wert.label == "Ergebnisaggregation neu konfigurieren" for wert in app.button)
+    assert any(wert.label == "Ergebnisaggregation berechnen und speichern" for wert in app.button)
+
+
+def test_persistierte_kpi_vorlage_fuellt_operanden_bedingung_und_bezugsmenge() -> None:
+    app = _app(vorlage=True)
+
+    assert not app.exception
+    assert app.session_state["ag_servicegrad_befriedigte_kundenauftragspositionen_quelle"] == "T"
+    assert app.session_state["ag_servicegrad_befriedigte_kundenauftragspositionen_spalte"] == (
+        "befriedigt"
+    )
+    assert app.session_state["ag_servicegrad_befriedigte_kundenauftragspositionen_bedingt"] is True
+    assert app.session_state["ag_servicegrad_befriedigte_kundenauftragspositionen_operator"] == (
+        "gleich"
+    )
+    assert app.session_state["ag_servicegrad_befriedigte_kundenauftragspositionen_wert"] == "ja"
+    assert app.session_state["ag_servicegrad_einheit"] == "%"
+    assert app.session_state["ag_servicegrad_bezugsmenge"] == "Kundenauftragspositionen"
+    assert any("bisherigen A_G" in wert.value for wert in app.info)

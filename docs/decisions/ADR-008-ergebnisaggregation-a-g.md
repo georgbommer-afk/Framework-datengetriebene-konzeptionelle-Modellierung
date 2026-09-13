@@ -26,9 +26,10 @@ Profilkennzahlen aus R werden ab A_G-Artefaktversion 4 über einen strukturierte
 stabiler interner Referenz, Import-/Datenquellenbezug, Spalte, Kennzahltyp, Wert,
 Profilprüfsumme und gegebenenfalls vollständiger Indikatorbedingung ausgewählt. Die UI zeigt
 daraus fachliche Bezeichnungen statt technischer String-Suffixe. Zeilenanzahl, gültige
-Beobachtungen und die in R gespeicherte absolute Indikatorhäufigkeit sind ausschließlich für
-ANZAHL-Operanden nutzbar; ein arithmetisches Mittel ausschließlich für MITTELWERT. R wird für
-SUMME nur bei einer tatsächlich gespeicherten Summe, für MESSWERTE gar nicht und für eine
+Beobachtungen sind ausschließlich für ANZAHL-Operanden nutzbar; die in R gespeicherte absolute
+Indikatorhäufigkeit kann als Anzahl oder Summe der Indikatorfunktion verwendet werden. Ein
+arithmetisches Mittel ist ausschließlich für MITTELWERT geeignet. R wird für SUMME sonst nur bei
+einer tatsächlich gespeicherten Summe, für MESSWERTE gar nicht und für eine
 Zeitdifferenzsumme nur bei einer exakt passenden gespeicherten Kennzahl angeboten. Insbesondere
 wird keine Summe aus Mittelwert und Anzahl rekonstruiert. Der Benutzer bestätigt die fachliche
 Bedeutung weiterhin durch die konkrete Zuordnung.
@@ -111,14 +112,28 @@ Zwischenankunftszeiten entstehen nur für einen oder mehrere explizit bestätigt
 Ankunftsströme q aus E* oder T. Quelle, Entitäts-ID, Ankunftszeit, Filter und gegebenenfalls
 Vorkommensregel werden je Strom gespeichert; mehrdeutige Vorkommen ohne Regel werden
 ausgeschlossen. Die Lineage wird pro Zeitgröße gespeichert, nicht pauschal als Q/R/T/E*.
-A_G-Artefaktversionen 1 bis 4 bleiben unverändert lesbar und werden nicht migriert. Dadurch
+A_G-Artefaktversionen 1 bis 5 bleiben unverändert lesbar und werden nicht migriert. Dadurch
 wird eine alte `Übergangswartezeit` insbesondere nicht als explizit bestätigte Warteschlange
-interpretiert. Neue Läufe schreiben Version 5. Eine additive Schemaversion 8 speichert nur ID,
+interpretiert. Neue Läufe schreiben Version 6. Diese speichert die bestätigten manuellen
+Entscheidungen zusätzlich getrennt von den daraus berechneten Ergebnissen. Eine additive
+Schemaversion 8 speichert nur ID,
 vollständige Eingabe- und Konfigurationsfingerabdrücke, Pfad, Prüfsumme, Status und Zeit.
 Detailartefakte werden atomar
 geschrieben; identische IDs und Fingerabdrücke sind idempotent. Änderungen an U, R, T, E*, P,
 A_D oder einer bestätigten Konfiguration invalidieren eine Vorschau beziehungsweise ein
-gespeichertes A_G. Schritt 8 erhält nach erneuter Validierung ausschließlich P und A_G.
+gespeichertes A_G. Der fachliche Eingabefingerabdruck enthält den U-Hash, aber weder den bloßen
+Projektänderungszeitpunkt noch die Projektbezeichnung; beide bleiben Provenienz beziehungsweise
+Anzeigeinformation.
+
+Ändert sich bei unveränderter T/R/E*/P/A_D-Grundlage ausschließlich die KPI-Auswahl in U, wird
+die persistierte aktive Projektlineage bis `P_A_D` gekürzt. A_G, K/O und K* bleiben als Historie
+gespeichert. Schritt 7 lädt das jüngste anhand von IDs und Prüfsummen kompatible historische A_G
+als Konfigurationsvorlage. Weiterhin ausgewählte KPI werden ausschließlich über dieselbe KPI-ID
+übernommen, neue bleiben unkonfiguriert und entfernte entfallen. Sollmodell, Aktivitätsmapping,
+Conformance-Auswahl, Ressourcen-/Entitätszuordnungen, Warteschlangen, Ankunftsströme sowie
+Performance- und Busy-Ratio-Konfiguration werden ebenfalls übernommen; sämtliche Ergebnisse
+werden mit der aktuellen U-Version neu berechnet. Schritt 8 erhält nach erneuter Validierung
+ausschließlich P und das neu aktive A_G.
 
 ## Konsequenzen
 
@@ -128,6 +143,8 @@ gespeichertes A_G. Schritt 8 erhält nach erneuter Validierung ausschließlich P
 - P und P_Soll sind technisch und fachlich getrennt.
 - Externe Modellierungs- oder Netzwerkausfälle blockieren weder PNML-Upload noch Aggregation.
 - Fall- und Ereignisdetails stehen zusätzlich als CSV bereit.
+- KPI-only-Änderungen erhalten die abgeschlossene Grundlage der Schritte 2 bis 6 und setzen den
+  persistenten Fortschritt gezielt auf Schritt 7.
 
 ## Abgrenzung
 

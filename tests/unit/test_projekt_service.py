@@ -1,5 +1,6 @@
 """Unit-Tests für den Projektservice."""
 
+from dataclasses import replace
 from uuid import UUID, uuid4
 
 import pytest
@@ -11,11 +12,20 @@ from framework_mvp.domain.exceptions import (
 )
 from framework_mvp.domain.models import (
     BeteiligtePerson,
+    LogistischeZielgroesse,
     Projekt,
     Projektstatus,
     Systemtyp,
     Untersuchungsauftrag,
 )
+
+
+class AenderungsfolgenSpy:
+    def __init__(self) -> None:
+        self.projekt_ids: list[UUID] = []
+
+    def kpi_auswahl_geaendert(self, projekt_id: UUID) -> None:
+        self.projekt_ids.append(projekt_id)
 
 
 class InMemoryProjektRepository:
@@ -123,3 +133,46 @@ def test_aktualisierung_erhaelt_id_und_erstellungszeitpunkt() -> None:
     assert aktualisiert.erstellt_am == ursprung.erstellt_am
     assert aktualisiert.geaendert_am >= ursprung.geaendert_am
     assert repository.laden(ursprung.projekt_id) == aktualisiert
+
+
+def test_nur_tatsaechliche_reine_kpi_aenderung_loest_selektive_folgen_aus() -> None:
+    repository = InMemoryProjektRepository()
+    folgen = AenderungsfolgenSpy()
+    service = ProjektService(repository, folgen)
+    auftrag = replace(
+        _auftrag(),
+        logistische_zielgroessen=(
+            LogistischeZielgroesse.LIEFERFAEHIGKEIT,
+            LogistischeZielgroesse.NACHARBEIT,
+        ),
+        ausgewaehlte_kpi_ids=("servicegrad",),
+    )
+    projekt = service.projekt_anlegen(bezeichnung="Projekt", untersuchungsauftrag=auftrag)
+
+    nur_umbenannt = service.projekt_aktualisieren(
+        projekt.projekt_id,
+        bezeichnung="Neue Bezeichnung",
+        untersuchungsauftrag=auftrag,
+        status=projekt.status,
+    )
+    assert folgen.projekt_ids == []
+
+    mit_kpi = replace(
+        auftrag,
+        ausgewaehlte_kpi_ids=("servicegrad", "nacharbeitsquote_rr"),
+    )
+    service.projekt_aktualisieren(
+        projekt.projekt_id,
+        bezeichnung=nur_umbenannt.bezeichnung,
+        untersuchungsauftrag=mit_kpi,
+        status=projekt.status,
+    )
+    assert folgen.projekt_ids == [projekt.projekt_id]
+
+    service.projekt_aktualisieren(
+        projekt.projekt_id,
+        bezeichnung=nur_umbenannt.bezeichnung,
+        untersuchungsauftrag=replace(mit_kpi, anmerkungen="fachlich geändert"),
+        status=projekt.status,
+    )
+    assert folgen.projekt_ids == [projekt.projekt_id]

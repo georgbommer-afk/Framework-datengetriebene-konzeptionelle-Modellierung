@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -236,6 +237,107 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
                 f"SELECT COUNT(*) FROM {tabelle} WHERE projekt_id=?",  # noqa: S608
                 (str(projekt_id),),
             ).fetchone()[0]
+
+    alte_aggregation = UUID(ziel_rehydriert.referenzen["aktuelle_aggregations_id"])
+    with sqlite3.connect(ziel_db) as verbindung:
+        historische_anzahlen = {
+            tabelle: verbindung.execute(
+                f"SELECT COUNT(*) FROM {tabelle} WHERE projekt_id=?",  # noqa: S608
+                (str(projekt_id),),
+            ).fetchone()[0]
+            for tabelle in (
+                "ergebnisaggregationen",
+                "modellableitungen",
+                "modellvalidierungen",
+            )
+        }
+    ziel_projekte = erstelle_projekt_service(ziel_db)
+    importiertes_projekt = ziel_projekte.projekt_laden(projekt_id)
+    assert importiertes_projekt is not None
+    ziel_projekte.projekt_aktualisieren(
+        projekt_id,
+        bezeichnung=importiertes_projekt.bezeichnung,
+        untersuchungsauftrag=replace(
+            importiertes_projekt.untersuchungsauftrag,
+            ausgewaehlte_kpi_ids=("servicegrad",),
+        ),
+        status=importiertes_projekt.status,
+        beteiligte_personen=importiertes_projekt.beteiligte_personen,
+    )
+
+    nach_kpi_aenderung = erstelle_projektkontext_service(ziel_db, ziel_ws).wiederherstellen(
+        projekt_id
+    )
+    assert nach_kpi_aenderung.framework_schritt == 7
+    assert "aktuelle_aggregations_id" not in nach_kpi_aenderung.referenzen
+    assert "aktuelle_modellableitungs_id" not in nach_kpi_aenderung.referenzen
+    assert "aktuelle_validierungslauf_id" not in nach_kpi_aenderung.referenzen
+    ziel_aggregation = erstelle_ergebnisaggregation_service(ziel_db, ziel_ws)
+    assert (
+        ziel_aggregation.historisch_laden(alte_aggregation)[0].aggregations_id == alte_aggregation
+    )
+    vorlage = ziel_aggregation.kompatible_konfigurationsvorlage_laden(
+        projekt_id,
+        UUID(nach_kpi_aenderung.referenzen["aktuelle_freigabe_id"]),
+        UUID(nach_kpi_aenderung.referenzen["aktuelle_analyse_id"]),
+    )
+    assert vorlage is not None
+    assert [wert.kpi_id for wert in vorlage.kpi_konfigurationen] == ["servicegrad"]
+    nach_neustart = erstelle_fortschritt_service(ziel_db).laden(ziel_kontext, projekt_id)
+    assert nach_neustart.schritt == 7
+    assert nach_neustart.abgeschlossene_unterschritte[6:] == (0, 0, 0, 0)
+    with sqlite3.connect(ziel_db) as verbindung:
+        assert {
+            tabelle: verbindung.execute(
+                f"SELECT COUNT(*) FROM {tabelle} WHERE projekt_id=?",  # noqa: S608
+                (str(projekt_id),),
+            ).fetchone()[0]
+            for tabelle in historische_anzahlen
+        } == historische_anzahlen
+
+    neue_vorschau = ziel_aggregation.vorschau(
+        projekt_id=projekt_id,
+        freigabe_id=UUID(nach_kpi_aenderung.referenzen["aktuelle_freigabe_id"]),
+        analyse_id=UUID(nach_kpi_aenderung.referenzen["aktuelle_analyse_id"]),
+        kpi_konfigurationen=vorlage.kpi_konfigurationen,
+        sollmodell=vorlage.sollmodell,
+        aktivitaetsmapping=vorlage.aktivitaetsmapping,
+        conformance_ausfuehren=vorlage.conformance_ausfuehren,
+        ressourcenanalyse=vorlage.ressourcenanalyse,
+        ressourcenattributzuordnungen=vorlage.ressourcenattributzuordnungen,
+        entitaetsattributzuordnungen=vorlage.entitaetsattributzuordnungen,
+        entitaetstyp=vorlage.entitaetstyp,
+        bestaetigte_warteschlangen=vorlage.bestaetigte_warteschlangen,
+        ankunftsstroeme=vorlage.ankunftsstroeme,
+        performance_zeitvergleich_konfiguration=(vorlage.performance_zeitvergleich_konfiguration),
+        performance_zeitvergleich_ausfuehren=vorlage.performance_zeitvergleich_ausfuehren,
+        busy_ratio_konfiguration=vorlage.busy_ratio_konfiguration,
+        busy_ratio_ausfuehren=vorlage.busy_ratio_ausfuehren,
+    )
+    neue_aggregation = ziel_aggregation.speichern(
+        uuid4(), neue_vorschau, menschlich_bestaetigt=True
+    )
+    neuer_kontext = erstelle_projektkontext_service(ziel_db, ziel_ws).wiederherstellen(projekt_id)
+    assert neuer_kontext.framework_schritt == 8
+    assert neuer_kontext.referenzen["aktuelle_aggregations_id"] == str(
+        neue_aggregation.aggregations_id
+    )
+    with sqlite3.connect(ziel_db) as verbindung:
+        assert (
+            verbindung.execute(
+                "SELECT COUNT(*) FROM ergebnisaggregationen WHERE projekt_id=?",
+                (str(projekt_id),),
+            ).fetchone()[0]
+            == historische_anzahlen["ergebnisaggregationen"] + 1
+        )
+        for tabelle in ("modellableitungen", "modellvalidierungen"):
+            assert (
+                verbindung.execute(
+                    f"SELECT COUNT(*) FROM {tabelle} WHERE projekt_id=?",  # noqa: S608
+                    (str(projekt_id),),
+                ).fetchone()[0]
+                == historische_anzahlen[tabelle]
+            )
 
 
 def test_vollstaendiges_demo_wird_auf_gleicher_db_gestagt_an_neuen_gast_gebunden(

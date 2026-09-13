@@ -30,7 +30,10 @@ from framework_mvp.application.ergebnisaggregation.strukturierte_ergebnisse impo
     analysiere_warteschlangen,
     analysiere_zeitbezogene_datenauswahl,
 )
-from framework_mvp.application.ergebnisaggregation.zeitvergleich import zeitvergleich_berechnen
+from framework_mvp.application.ergebnisaggregation.zeitvergleich import (
+    lese_externe_sollzeitdaten,
+    zeitvergleich_berechnen,
+)
 from framework_mvp.application.ports.ergebnisaggregation_repository import (
     ErgebnisaggregationRepository,
 )
@@ -52,6 +55,7 @@ from framework_mvp.domain.models import (
     Ergebnisaggregation,
     KpiErgebnis,
     KpiKonfiguration,
+    OperandZuordnung,
     PerformanceZeitvergleichErgebnis,
     PerformanceZeitvergleichKonfiguration,
     ProcessMiningAnalyse,
@@ -61,8 +65,12 @@ from framework_mvp.domain.models import (
     Qualitaetsfreigabe,
     RessourcenanalyseErgebnis,
     Ressourcenzuordnungsmodus,
+    SollmodellEntscheidung,
+    SollmodellErstellungsart,
+    SollmodellMetadaten,
     SollmodellVorschau,
     Sollzeitdaten,
+    Vorkommensregel,
     WarteschlangenanalyseErgebnis,
     ZeitbezogeneDatenauswahlErgebnis,
     ZeitvergleichErgebnis,
@@ -71,8 +79,8 @@ from framework_mvp.domain.models import (
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
 
-AG_ARTEFAKTVERSION = 5
-AG_LESBARE_ARTEFAKTVERSIONEN = frozenset({1, 2, 3, 4, AG_ARTEFAKTVERSION})
+AG_ARTEFAKTVERSION = 6
+AG_LESBARE_ARTEFAKTVERSIONEN = frozenset({1, 2, 3, 4, 5, AG_ARTEFAKTVERSION})
 AG_ARTEFAKTART = "aggregierte_analyseergebnisse_a_g"
 STRUKTURIERTE_ERGEBNISVERSION = 3
 
@@ -157,6 +165,33 @@ class Aggregationsvorschau:
     performance_zeitvergleich_ergebnis: PerformanceZeitvergleichErgebnis | None = None
     busy_ratio_konfiguration: BusyRatioKonfiguration | None = None
     busy_ratio_ergebnis: BusyRatioErgebnis | None = None
+    conformance_ausfuehren: bool = False
+    zeitvergleich_ausfuehren: bool = False
+    performance_zeitvergleich_ausfuehren: bool = False
+    busy_ratio_ausfuehren: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Aggregationskonfigurationsvorlage:
+    """Persistierte manuelle Entscheidungen eines fachlich kompatiblen A_G."""
+
+    aggregations_id: UUID
+    kpi_konfigurationen: tuple[KpiKonfiguration, ...] = ()
+    sollmodell: SollmodellVorschau | None = None
+    aktivitaetsmapping: Aktivitaetsmapping | None = None
+    conformance_ausfuehren: bool = False
+    ressourcenanalyse: RessourcenanalyseErgebnis | None = None
+    ressourcenattributzuordnungen: tuple[Attributzuordnung, ...] = ()
+    entitaetsattributzuordnungen: tuple[Attributzuordnung, ...] = ()
+    entitaetstyp: str = ""
+    bestaetigte_warteschlangen: tuple[BestaetigteWarteschlangeninformation, ...] = ()
+    ankunftsstroeme: tuple[AnkunftsstromDefinition, ...] = ()
+    performance_zeitvergleich_konfiguration: PerformanceZeitvergleichKonfiguration | None = None
+    performance_zeitvergleich_ausfuehren: bool = False
+    busy_ratio_konfiguration: BusyRatioKonfiguration | None = None
+    busy_ratio_ausfuehren: bool = False
+    sollzeitdaten: Sollzeitdaten | None = None
+    sollzeit_tabelle: pd.DataFrame | None = None
 
 
 class ErgebnisaggregationService:
@@ -424,7 +459,6 @@ class ErgebnisaggregationService:
                 "projekt_id": projekt_id,
                 "spezifikations_id": projekt_id,
                 "untersuchungsauftrag_sha256": u_sha256,
-                "projekt_geaendert_am": projekt.geaendert_am,
                 "datenprofil_sha256": r_sha256,
                 "zwischendatensatz_id": datensatz.zwischendatensatz_id,
                 "zwischendatensatz_sha256": datensatz.sha256,
@@ -824,6 +858,10 @@ class ErgebnisaggregationService:
             performance_zeitvergleich,
             busy_ratio_konfiguration,
             busy_ratio,
+            conformance_ausfuehren,
+            zeitvergleich_ausfuehren,
+            performance_zeitvergleich_ausfuehren,
+            busy_ratio_ausfuehren,
         )
 
     def speichern(
@@ -1196,6 +1234,15 @@ class ErgebnisaggregationService:
         etl_abstraktionen = (
             abstraktionen_laden(basis.zwischendatensatz) if callable(abstraktionen_laden) else ()
         )
+        ressourcenentscheidung = vorschau.ressourcenanalyse
+        sollmodell_entscheidung = SollmodellEntscheidung.KEIN_SOLLMODELL
+        if vorschau.sollmodell is not None:
+            sollmodell_entscheidung = (
+                SollmodellEntscheidung.LINEARER_ASSISTENT
+                if vorschau.sollmodell.metadaten.erstellungsart
+                is SollmodellErstellungsart.LINEARER_ASSISTENT
+                else SollmodellEntscheidung.KOMPLEXES_PNML
+            )
         return {
             "artefaktversion": AG_ARTEFAKTVERSION,
             "artefaktart": AG_ARTEFAKTART,
@@ -1236,6 +1283,47 @@ class ErgebnisaggregationService:
             "kpi_konfigurationsversion": 2,
             "kpi_konfigurationen": vorschau.kpi_konfigurationen,
             "kpi_ergebnisse": vorschau.kpi_ergebnisse,
+            "konfiguration": {
+                "version": 1,
+                "kpi_konfigurationen": vorschau.kpi_konfigurationen,
+                "sollmodell_entscheidung": sollmodell_entscheidung,
+                "conformance_ausfuehren": vorschau.conformance_ausfuehren,
+                "ressourcenzuordnung": {
+                    "modus": ressourcenentscheidung.modus if ressourcenentscheidung else None,
+                    "manuelle_zuordnungen": {
+                        wert.aktivitaet: wert.manuell_bestaetigte_ressourcen
+                        for wert in (
+                            ressourcenentscheidung.zuordnungen if ressourcenentscheidung else ()
+                        )
+                        if wert.manuell_bestaetigte_ressourcen
+                    },
+                    "offene_aktivitaeten": tuple(
+                        wert.aktivitaet
+                        for wert in (
+                            ressourcenentscheidung.zuordnungen if ressourcenentscheidung else ()
+                        )
+                        if wert.offen
+                    ),
+                    "begruendung": (
+                        ressourcenentscheidung.begruendung if ressourcenentscheidung else ""
+                    ),
+                },
+                "ressourcenattributzuordnungen": vorschau.ressourcenattributzuordnungen,
+                "entitaetsattributzuordnungen": vorschau.entitaetsattributzuordnungen,
+                "entitaetstyp": vorschau.entitaetstyp,
+                "bestaetigte_warteschlangen": vorschau.bestaetigte_warteschlangen,
+                "ankunftsstroeme": vorschau.ankunftsstroeme,
+                "zeitvergleich_konfiguration": vorschau.zeitvergleich_konfiguration,
+                "zeitvergleich_ausfuehren": vorschau.zeitvergleich_ausfuehren,
+                "performance_zeitvergleich_konfiguration": (
+                    vorschau.performance_zeitvergleich_konfiguration
+                ),
+                "performance_zeitvergleich_ausfuehren": (
+                    vorschau.performance_zeitvergleich_ausfuehren
+                ),
+                "busy_ratio_konfiguration": vorschau.busy_ratio_konfiguration,
+                "busy_ratio_ausfuehren": vorschau.busy_ratio_ausfuehren,
+            },
             "conformance_checking": {
                 "sollprozess_vorhanden": vorschau.sollmodell is not None,
                 "durchgefuehrt": vorschau.conformance_ergebnis is not None,
@@ -1307,8 +1395,8 @@ class ErgebnisaggregationService:
             "erstellt_am": datetime.now(UTC),
         }
 
-    def laden(self, aggregations_id: UUID) -> tuple[Ergebnisaggregation, dict[str, Any]]:
-        """Lädt A_G erst nach erneuter Prüfung aller Referenzen, Dateien und Prüfsummen."""
+    def historisch_laden(self, aggregations_id: UUID) -> tuple[Ergebnisaggregation, dict[str, Any]]:
+        """Lädt ein unveränderliches A_G samt Eigenintegrität ohne Aktivitätsannahme."""
         aggregation = self._repository.laden(aggregations_id)
         if aggregation is None:
             raise Importintegritaetsfehler("Die Ergebnisaggregation wurde nicht gefunden.")
@@ -1333,6 +1421,17 @@ class ErgebnisaggregationService:
             or _sha(a_g) != gesamtpruefsumme
         ):
             raise Importintegritaetsfehler("Metadaten oder Gesamtprüfsumme von A_G sind ungültig.")
+        for pfad, erwartet in a_g.get("artefakt_pruefsummen", {}).items():
+            if hashlib.sha256(self._artefakte.lesen(str(pfad))).hexdigest() != erwartet:
+                raise Importintegritaetsfehler(
+                    "Die Prüfsumme eines von A_G referenzierten Detailartefakts ist ungültig."
+                )
+        a_g["gesamtpruefsumme"] = gesamtpruefsumme
+        return aggregation, a_g
+
+    def laden(self, aggregations_id: UUID) -> tuple[Ergebnisaggregation, dict[str, Any]]:
+        """Lädt A_G erst nach erneuter Prüfung der aktuell gültigen Fachlineage."""
+        aggregation, a_g = self.historisch_laden(aggregations_id)
         gespeicherte_profile = tuple(
             wert
             for wert in a_g.get("lineage", {}).get("datenprofil_r", {}).get("profile", ())
@@ -1356,13 +1455,573 @@ class ErgebnisaggregationService:
                 "Die vollständige Lineage von A_G stimmt nicht mehr mit U, R, T, E*, "
                 "P und A_D überein."
             )
-        for pfad, erwartet in a_g.get("artefakt_pruefsummen", {}).items():
-            if hashlib.sha256(self._artefakte.lesen(str(pfad))).hexdigest() != erwartet:
-                raise Importintegritaetsfehler(
-                    "Die Prüfsumme eines von A_G referenzierten Detailartefakts ist ungültig."
-                )
-        a_g["gesamtpruefsumme"] = gesamtpruefsumme
         return aggregation, a_g
+
+    @staticmethod
+    def _vorlage_ist_fachlich_kompatibel(
+        aggregation: Ergebnisaggregation,
+        a_g: dict[str, Any],
+        basis: Aggregationsgrundlage,
+    ) -> bool:
+        """Vergleicht die unveränderte Grundlage ohne den absichtlich geänderten U-Hash."""
+        lineage = a_g.get("lineage", {})
+        profil = lineage.get("datenprofil_r", {})
+        datensatz = lineage.get("zwischendatensatz_t", {})
+        freigabe = lineage.get("event_log_e_stern", {})
+        prozessmodell = lineage.get("prozessmodell_p", {})
+        discovery = lineage.get("discovery_ergebnisse_a_d", {})
+        return bool(
+            aggregation.projekt_id == basis.projekt.projekt_id
+            and aggregation.freigabe_id == basis.freigabe.freigabe_id
+            and aggregation.event_log_id == basis.freigabe.event_log_id
+            and aggregation.analyse_id == basis.analyse.analyse_id
+            and profil.get("sha256") == basis.datenprofil_sha256
+            and datensatz.get("id") == str(basis.zwischendatensatz.zwischendatensatz_id)
+            and datensatz.get("sha256") == basis.zwischendatensatz.sha256
+            and freigabe.get("freigabe_id") == str(basis.freigabe.freigabe_id)
+            and freigabe.get("freigabe_report_sha256") == basis.freigabe.report_sha256
+            and freigabe.get("kettenfingerabdruck") == basis.freigabe.kettenfingerabdruck
+            and freigabe.get("event_log_id") == str(basis.freigabe.event_log_id)
+            and freigabe.get("sha256") == basis.freigabe.event_log_sha256
+            and prozessmodell.get("pfad")
+            == basis.discovery_ergebnisse["prozessmodell_p"]["relativer_pfad"]
+            and prozessmodell.get("sha256") == basis.prozessmodell_sha256
+            and discovery.get("pfad") == basis.analyse.relativer_ergebnis_pfad
+            and discovery.get("sha256") == basis.discovery_ergebnisse_sha256
+        )
+
+    @staticmethod
+    def _profilkennzahl_wiederherstellen(wert: object) -> ProfilkennzahlReferenz | None:
+        if not isinstance(wert, dict):
+            return None
+        try:
+            return ProfilkennzahlReferenz(
+                referenz_id=str(wert["referenz_id"]),
+                import_id=str(wert["import_id"]),
+                datenquellen_id=str(wert.get("datenquellen_id", "")),
+                datenquelle_bezeichnung=str(wert.get("datenquelle_bezeichnung", "")),
+                originaldateiname=str(wert.get("originaldateiname", "")),
+                tabellenbezeichnung=str(wert.get("tabellenbezeichnung", "")),
+                spaltenname=str(wert.get("spaltenname", "")),
+                kennzahltyp=Profilkennzahltyp(str(wert["kennzahltyp"])),
+                wert=float(wert["wert"]),
+                operator=str(wert.get("operator", "")),
+                vergleichswert=str(wert.get("vergleichswert", "")),
+                auswertbare_beobachtungen=int(wert.get("auswertbare_beobachtungen", 0)),
+                grundgesamtheit=int(wert.get("grundgesamtheit", 0)),
+                profilversion=int(wert.get("profilversion", 1)),
+                profil_sha256=str(wert.get("profil_sha256", "")),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _kpi_konfiguration_wiederherstellen(cls, wert: object) -> KpiKonfiguration | None:
+        if not isinstance(wert, dict):
+            return None
+        zuordnungen: list[OperandZuordnung] = []
+        try:
+            for roh in wert.get("zuordnungen", ()):
+                if not isinstance(roh, dict):
+                    return None
+                zuordnungen.append(
+                    OperandZuordnung(
+                        operand_id=str(roh["operand_id"]),
+                        quelle=Datenartefakt(str(roh["quelle"])),
+                        spalte=str(roh.get("spalte", "")),
+                        zweite_spalte=str(roh.get("zweite_spalte", "")),
+                        bedingungsoperator=str(roh.get("bedingungsoperator", "")),
+                        bedingungswert=str(roh.get("bedingungswert", "")),
+                        startaktivitaet=str(roh.get("startaktivitaet", "")),
+                        endaktivitaet=str(roh.get("endaktivitaet", "")),
+                        vorkommensregel=Vorkommensregel(
+                            str(roh.get("vorkommensregel", Vorkommensregel.ERSTES.value))
+                        ),
+                        profilreferenz=str(roh.get("profilreferenz", "")),
+                        profilkennzahl=cls._profilkennzahl_wiederherstellen(
+                            roh.get("profilkennzahl")
+                        ),
+                    )
+                )
+            return KpiKonfiguration(
+                kpi_id=str(wert["kpi_id"]),
+                zuordnungen=tuple(zuordnungen),
+                einheit=str(wert.get("einheit", "")),
+                bezugsmenge=str(wert.get("bezugsmenge", "")),
+                direkte_profilreferenz=str(wert.get("direkte_profilreferenz", "")),
+                direkte_profilkennzahl=cls._profilkennzahl_wiederherstellen(
+                    wert.get("direkte_profilkennzahl")
+                ),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _attributzuordnungen_wiederherstellen(
+        werte: object,
+    ) -> tuple[Attributzuordnung, ...]:
+        if not isinstance(werte, list):
+            return ()
+        ergebnis: list[Attributzuordnung] = []
+        for wert in werte:
+            if not isinstance(wert, dict):
+                continue
+            try:
+                zuordnung = Attributzuordnung(
+                    Datenartefakt(str(wert["quelle"])),
+                    str(wert["attributspalte"]),
+                    str(wert["schluesselspalte"]),
+                    str(wert.get("zeitspalte", "")),
+                )
+            except (KeyError, ValueError):
+                continue
+            if zuordnung not in ergebnis:
+                ergebnis.append(zuordnung)
+        return tuple(ergebnis)
+
+    @staticmethod
+    def _warteschlangen_wiederherstellen(
+        werte: object,
+    ) -> tuple[BestaetigteWarteschlangeninformation, ...]:
+        if not isinstance(werte, list):
+            return ()
+        ergebnis = []
+        for wert in werte:
+            if not isinstance(wert, dict):
+                continue
+            try:
+                ergebnis.append(
+                    BestaetigteWarteschlangeninformation(
+                        str(wert["bezeichnung"]),
+                        str(wert["von_aktivitaet"]),
+                        str(wert["zu_aktivitaet"]),
+                        Datenartefakt(str(wert["quelle"])),
+                        str(wert["informationsspalte"]),
+                        str(wert.get("filterwert", "")),
+                    )
+                )
+            except (KeyError, ValueError):
+                continue
+        return tuple(ergebnis)
+
+    @staticmethod
+    def _ankunftsstroeme_wiederherstellen(
+        werte: object,
+    ) -> tuple[AnkunftsstromDefinition, ...]:
+        if not isinstance(werte, list):
+            return ()
+        ergebnis = []
+        for wert in werte:
+            if not isinstance(wert, dict):
+                continue
+            try:
+                regel = wert.get("vorkommensregel")
+                ergebnis.append(
+                    AnkunftsstromDefinition(
+                        str(wert["bezeichnung"]),
+                        Datenartefakt(str(wert["quelle"])),
+                        str(wert["entitaetsspalte"]),
+                        str(wert["zeitspalte"]),
+                        aktivitaet=str(wert.get("aktivitaet", "")),
+                        filterspalte=str(wert.get("filterspalte", "")),
+                        filterwert=str(wert.get("filterwert", "")),
+                        vorkommensregel=Vorkommensregel(str(regel)) if regel else None,
+                        vorkommensnummer=(
+                            int(wert["vorkommensnummer"])
+                            if wert.get("vorkommensnummer") is not None
+                            else None
+                        ),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return tuple(ergebnis)
+
+    @staticmethod
+    def _performance_wiederherstellen(
+        wert: object,
+    ) -> PerformanceZeitvergleichKonfiguration | None:
+        if not isinstance(wert, dict):
+            return None
+        try:
+            return PerformanceZeitvergleichKonfiguration(
+                sollquelle=str(wert["sollquelle"]),
+                soll_case_id_spalte=str(wert["soll_case_id_spalte"]),
+                soll_activity_spalte=str(wert["soll_activity_spalte"]),
+                ist_case_id_spalte=str(wert["ist_case_id_spalte"]),
+                ist_activity_spalte=str(wert["ist_activity_spalte"]),
+                plan_ende_spalte=str(wert["plan_ende_spalte"]),
+                ist_ende_spalte=str(wert["ist_ende_spalte"]),
+                plan_start_spalte=str(wert.get("plan_start_spalte", "")),
+                ist_start_spalte=str(wert.get("ist_start_spalte", "")),
+                soll_auftretensnummer_spalte=str(wert.get("soll_auftretensnummer_spalte", "")),
+                vorkommensregel=Vorkommensregel(
+                    str(wert.get("vorkommensregel", Vorkommensregel.ERSTES.value))
+                ),
+                fertigstellungsabweichung_aktiv=bool(
+                    wert.get("fertigstellungsabweichung_aktiv", True)
+                ),
+                bearbeitungszeitabweichung_aktiv=bool(
+                    wert.get("bearbeitungszeitabweichung_aktiv", False)
+                ),
+            )
+        except (KeyError, ValueError):
+            return None
+
+    @staticmethod
+    def _busy_ratio_wiederherstellen(wert: object) -> BusyRatioKonfiguration | None:
+        if not isinstance(wert, dict):
+            return None
+        try:
+            von = wert.get("zeitraum_von")
+            bis = wert.get("zeitraum_bis")
+            return BusyRatioKonfiguration(
+                str(wert["ressourcenspalte"]),
+                str(wert["startspalte"]),
+                str(wert["endspalte"]),
+                datetime.fromisoformat(str(von)) if von else None,
+                datetime.fromisoformat(str(bis)) if bis else None,
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _sollmodell_wiederherstellen(self, a_g: dict[str, Any]) -> SollmodellVorschau | None:
+        referenz = a_g.get("optionale_artefakte", {}).get("prozessmodell_p_soll")
+        if not isinstance(referenz, dict):
+            return None
+        try:
+            meta = json.loads(self._artefakte.lesen(str(referenz["relativer_metadaten_pfad"])))
+            metadaten = meta["metadaten"]
+            markierungen = meta["markierungen"]
+            return SollmodellVorschau(
+                metadaten=SollmodellMetadaten(
+                    sollmodell_id=UUID(str(metadaten["sollmodell_id"])),
+                    projekt_id=UUID(str(metadaten["projekt_id"])),
+                    bezeichnung=str(metadaten["bezeichnung"]),
+                    erstellungsart=SollmodellErstellungsart(str(metadaten["erstellungsart"])),
+                    fachliche_grundlage=str(metadaten["fachliche_grundlage"]),
+                    version=str(metadaten["version"]),
+                    erstellende_oder_pruefende_person=str(
+                        metadaten["erstellende_oder_pruefende_person"]
+                    ),
+                    freigabedatum=date.fromisoformat(str(metadaten["freigabedatum"])),
+                    erstellt_am=datetime.fromisoformat(str(metadaten["erstellt_am"])),
+                    sha256=str(metadaten["sha256"]),
+                    menschlich_bestaetigt=bool(metadaten["menschlich_bestaetigt"]),
+                ),
+                original_pnml=self._artefakte.lesen(str(referenz["original_pnml_pfad"])),
+                replay_pnml=self._artefakte.lesen(str(referenz["replay_pnml_pfad"])),
+                replay_sha256=str(referenz["replay_sha256"]),
+                sichtbare_transitionen=tuple(
+                    str(wert) for wert in meta.get("sichtbare_transitionen", ())
+                ),
+                startplatz=str(markierungen["startplatz"]),
+                endplatz=str(markierungen["endplatz"]),
+                markierungen_abgeleitet=bool(markierungen["abgeleitet"]),
+                markierungsableitung_bestaetigt=bool(
+                    markierungen["ableitung_menschlich_bestaetigt"]
+                ),
+                workflow_netz=bool(meta["workflow_netz"]),
+                sound=bool(meta["sound"]),
+                warnungen=tuple(str(wert) for wert in meta.get("warnungen", ())),
+            )
+        except (
+            Domaenenfehler,
+            Importintegritaetsfehler,
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
+            return None
+
+    def _aktivitaetsmapping_wiederherstellen(
+        self, a_g: dict[str, Any]
+    ) -> Aktivitaetsmapping | None:
+        referenz = a_g.get("optionale_artefakte", {}).get("aktivitaetsmapping")
+        if not isinstance(referenz, dict):
+            return None
+        try:
+            wert = json.loads(self._artefakte.lesen(str(referenz["relativer_pfad"])))
+            return Aktivitaetsmapping(
+                mapping_id=UUID(str(wert["mapping_id"])),
+                projekt_id=UUID(str(wert["projekt_id"])),
+                sollmodell_id=UUID(str(wert["sollmodell_id"])),
+                exakte_zuordnungen=tuple(
+                    (str(paar[0]), str(paar[1])) for paar in wert.get("exakte_zuordnungen", ())
+                ),
+                manuelle_zuordnungen=tuple(
+                    (str(paar[0]), str(paar[1])) for paar in wert.get("manuelle_zuordnungen", ())
+                ),
+                nur_event_log=tuple(str(name) for name in wert.get("nur_event_log", ())),
+                nur_sollmodell=tuple(str(name) for name in wert.get("nur_sollmodell", ())),
+                menschlich_bestaetigt=bool(wert["menschlich_bestaetigt"]),
+            )
+        except (
+            Importintegritaetsfehler,
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
+            return None
+
+    def _sollzeitdaten_wiederherstellen(
+        self,
+        aggregation: Ergebnisaggregation,
+        a_g: dict[str, Any],
+        performance: PerformanceZeitvergleichKonfiguration | None,
+    ) -> tuple[Sollzeitdaten | None, pd.DataFrame | None]:
+        """Lädt das unveränderte externe Sollzeit-Original und rekonstruiert seine Tabelle."""
+        referenz = a_g.get("optionale_artefakte", {}).get("sollzeitdaten")
+        if not isinstance(referenz, dict):
+            return None, None
+        try:
+            originalbytes = self._artefakte.lesen(str(referenz["relativer_pfad"]))
+            erwartet = str(referenz["sha256"])
+            if hashlib.sha256(originalbytes).hexdigest() != erwartet:
+                return None, None
+            originaldateiname = str(referenz["originaldateiname"])
+            sollzeitdaten_id = UUID(str(referenz["sollzeitdaten_id"]))
+            trennzeichen = ","
+            kandidaten = (
+                (",", ";", "\t", "|") if originaldateiname.lower().endswith(".csv") else (",",)
+            )
+            erforderliche_spalten = set()
+            if performance is not None and performance.sollquelle == "extern":
+                erforderliche_spalten = {
+                    performance.soll_case_id_spalte,
+                    performance.soll_activity_spalte,
+                    performance.plan_ende_spalte,
+                    performance.plan_start_spalte,
+                    performance.soll_auftretensnummer_spalte,
+                } - {""}
+            gelesene_tabelle = None
+            for kandidat in kandidaten:
+                _, tabelle = lese_externe_sollzeitdaten(
+                    projekt_id=aggregation.projekt_id,
+                    dateiname=originaldateiname,
+                    originalbytes=originalbytes,
+                    trennzeichen=kandidat,
+                    sollzeitdaten_id=sollzeitdaten_id,
+                )
+                if erforderliche_spalten <= set(tabelle.columns):
+                    trennzeichen = kandidat
+                    gelesene_tabelle = tabelle
+                    break
+            if gelesene_tabelle is None:
+                _, gelesene_tabelle = lese_externe_sollzeitdaten(
+                    projekt_id=aggregation.projekt_id,
+                    dateiname=originaldateiname,
+                    originalbytes=originalbytes,
+                    trennzeichen=trennzeichen,
+                    sollzeitdaten_id=sollzeitdaten_id,
+                )
+            dateityp = PurePosixPath(originaldateiname).suffix.removeprefix(".").lower()
+            artefakt = Sollzeitdaten(
+                sollzeitdaten_id,
+                aggregation.projekt_id,
+                originaldateiname,
+                dateityp,
+                originalbytes,
+                erwartet,
+                aggregation.erstellt_am,
+            )
+            return artefakt, gelesene_tabelle
+        except (Domaenenfehler, Importintegritaetsfehler, KeyError, TypeError, ValueError):
+            return None, None
+
+    @staticmethod
+    def _attributentscheidungen_aus_ergebnis(wert: object) -> list[dict[str, Any]]:
+        if not isinstance(wert, dict) or not isinstance(wert.get("attribute"), list):
+            return []
+        return [
+            {
+                "quelle": attribut.get("quelle"),
+                "attributspalte": attribut.get("attributspalte"),
+                "schluesselspalte": attribut.get("schluesselspalte"),
+                "zeitspalte": attribut.get("zeitspalte", ""),
+            }
+            for attribut in wert["attribute"]
+            if isinstance(attribut, dict)
+        ]
+
+    def _vorlage_wiederherstellen(
+        self,
+        aggregation: Ergebnisaggregation,
+        a_g: dict[str, Any],
+        basis: Aggregationsgrundlage,
+    ) -> Aggregationskonfigurationsvorlage:
+        konfiguration = a_g.get("konfiguration")
+        if not isinstance(konfiguration, dict):
+            konfiguration = {}
+        struktur = a_g.get("strukturierte_ergebnisse")
+        if not isinstance(struktur, dict):
+            struktur = {}
+
+        kpi_roh = konfiguration.get("kpi_konfigurationen", a_g.get("kpi_konfigurationen", ()))
+        kpi_nach_id: dict[str, KpiKonfiguration] = {}
+        if isinstance(kpi_roh, list):
+            for wert in kpi_roh:
+                wiederhergestellt = self._kpi_konfiguration_wiederherstellen(wert)
+                if wiederhergestellt is not None:
+                    kpi_nach_id[wiederhergestellt.kpi_id] = wiederhergestellt
+        kpi_konfigurationen = tuple(
+            kpi_nach_id[kpi_id]
+            for kpi_id in basis.projekt.untersuchungsauftrag.ausgewaehlte_kpi_ids
+            if kpi_id in kpi_nach_id
+        )
+
+        ressourcen_roh = konfiguration.get("ressourcenzuordnung")
+        if not isinstance(ressourcen_roh, dict):
+            ressourcen_roh = struktur.get("ressourcen", {})
+        manuelle: dict[str, tuple[str, ...]] = {}
+        offene: tuple[str, ...] = ()
+        begruendung = ""
+        if isinstance(ressourcen_roh, dict):
+            explizit_manuell = ressourcen_roh.get("manuelle_zuordnungen")
+            if isinstance(explizit_manuell, dict):
+                manuelle = {
+                    str(name): tuple(str(eintrag) for eintrag in werte)
+                    for name, werte in explizit_manuell.items()
+                    if isinstance(werte, list)
+                }
+            elif isinstance(ressourcen_roh.get("zuordnungen"), list):
+                manuelle = {
+                    str(wert["aktivitaet"]): tuple(
+                        str(name) for name in wert.get("manuell_bestaetigte_ressourcen", ())
+                    )
+                    for wert in ressourcen_roh["zuordnungen"]
+                    if isinstance(wert, dict) and wert.get("manuell_bestaetigte_ressourcen")
+                }
+            explizit_offen = ressourcen_roh.get("offene_aktivitaeten")
+            if isinstance(explizit_offen, list):
+                offene = tuple(str(name) for name in explizit_offen)
+            elif isinstance(ressourcen_roh.get("zuordnungen"), list):
+                offene = tuple(
+                    str(wert["aktivitaet"])
+                    for wert in ressourcen_roh["zuordnungen"]
+                    if isinstance(wert, dict) and wert.get("offen")
+                )
+            begruendung = str(ressourcen_roh.get("begruendung", ""))
+
+        ressourcenattribute_roh = konfiguration.get("ressourcenattributzuordnungen")
+        if not isinstance(ressourcenattribute_roh, list):
+            ressourcenattribute_roh = self._attributentscheidungen_aus_ergebnis(
+                struktur.get("ressourcen")
+            )
+        entitaeten_roh = struktur.get("entitaetsinstanzen_und_attribute")
+        entitaetsattribute_roh = konfiguration.get("entitaetsattributzuordnungen")
+        if not isinstance(entitaetsattribute_roh, list):
+            entitaetsattribute_roh = self._attributentscheidungen_aus_ergebnis(entitaeten_roh)
+        ressourcenattribute = self._attributzuordnungen_wiederherstellen(ressourcenattribute_roh)
+        entitaetsattribute = self._attributzuordnungen_wiederherstellen(entitaetsattribute_roh)
+        ressourcenanalyse = analysiere_ressourcen(
+            basis.event_log,
+            manuelle_zuordnungen=manuelle,
+            offene_aktivitaeten=offene,
+            nicht_moeglich_begruendung=begruendung,
+        )
+
+        warteschlangen_roh = konfiguration.get("bestaetigte_warteschlangen")
+        warteschlangen_ergebnis = struktur.get("warteschlangen_und_wartezeiten")
+        if not isinstance(warteschlangen_roh, list) and isinstance(warteschlangen_ergebnis, dict):
+            warteschlangen_roh = warteschlangen_ergebnis.get("bestaetigte_warteschlangen")
+
+        ankunftsstroeme_roh = konfiguration.get("ankunftsstroeme")
+        datenauswahl = struktur.get("zeitbezogene_datenauswahl")
+        if not isinstance(ankunftsstroeme_roh, list) and isinstance(datenauswahl, dict):
+            zwischenankuenfte = datenauswahl.get("zwischenankunftszeiten", ())
+            if isinstance(zwischenankuenfte, list):
+                ankunftsstroeme_roh = [
+                    wert.get("definition") for wert in zwischenankuenfte if isinstance(wert, dict)
+                ]
+
+        performance_block = struktur.get("performance_und_engpassanalyse")
+        if not isinstance(performance_block, dict):
+            performance_block = {}
+        performance = self._performance_wiederherstellen(
+            konfiguration.get(
+                "performance_zeitvergleich_konfiguration",
+                performance_block.get("dt_db_konfiguration"),
+            )
+        )
+        busy = self._busy_ratio_wiederherstellen(
+            konfiguration.get(
+                "busy_ratio_konfiguration", performance_block.get("busy_ratio_konfiguration")
+            )
+        )
+        sollzeitdaten, sollzeit_tabelle = self._sollzeitdaten_wiederherstellen(
+            aggregation, a_g, performance
+        )
+        conformance = a_g.get("conformance_checking", {})
+        return Aggregationskonfigurationsvorlage(
+            aggregations_id=aggregation.aggregations_id,
+            kpi_konfigurationen=kpi_konfigurationen,
+            sollmodell=self._sollmodell_wiederherstellen(a_g),
+            aktivitaetsmapping=self._aktivitaetsmapping_wiederherstellen(a_g),
+            conformance_ausfuehren=bool(
+                konfiguration.get(
+                    "conformance_ausfuehren",
+                    conformance.get("durchgefuehrt", False)
+                    if isinstance(conformance, dict)
+                    else False,
+                )
+            ),
+            ressourcenanalyse=ressourcenanalyse,
+            ressourcenattributzuordnungen=ressourcenattribute,
+            entitaetsattributzuordnungen=entitaetsattribute,
+            entitaetstyp=str(
+                konfiguration.get(
+                    "entitaetstyp",
+                    entitaeten_roh.get("entitaetstyp", "")
+                    if isinstance(entitaeten_roh, dict)
+                    else "",
+                )
+            ),
+            bestaetigte_warteschlangen=self._warteschlangen_wiederherstellen(warteschlangen_roh),
+            ankunftsstroeme=self._ankunftsstroeme_wiederherstellen(ankunftsstroeme_roh),
+            performance_zeitvergleich_konfiguration=performance,
+            performance_zeitvergleich_ausfuehren=bool(
+                konfiguration.get("performance_zeitvergleich_ausfuehren", performance is not None)
+            ),
+            busy_ratio_konfiguration=busy,
+            busy_ratio_ausfuehren=bool(
+                konfiguration.get("busy_ratio_ausfuehren", busy is not None)
+            ),
+            sollzeitdaten=sollzeitdaten,
+            sollzeit_tabelle=sollzeit_tabelle,
+        )
+
+    def kompatible_konfigurationsvorlage_laden(
+        self,
+        projekt_id: UUID,
+        freigabe_id: UUID,
+        analyse_id: UUID,
+    ) -> Aggregationskonfigurationsvorlage | None:
+        """Lädt die jüngste Vorlage mit identischer Grundlage und filtert KPI nach aktueller U."""
+        basis = self.grundlage_laden(projekt_id, freigabe_id, analyse_id)
+        for kandidat in reversed(self._repository.fuer_analyse(projekt_id, analyse_id)):
+            if kandidat.freigabe_id != freigabe_id:
+                continue
+            try:
+                aggregation, a_g = self.historisch_laden(kandidat.aggregations_id)
+            except (Domaenenfehler, Importintegritaetsfehler):
+                continue
+            if self._vorlage_ist_fachlich_kompatibel(aggregation, a_g, basis):
+                return self._vorlage_wiederherstellen(aggregation, a_g, basis)
+        return None
+
+    def rekonfiguration_vorbereiten(
+        self,
+        projekt_id: UUID,
+        freigabe_id: UUID,
+        analyse_id: UUID,
+    ) -> None:
+        """Validiert P/A_D und entfernt A_G-Folgereferenzen aus der aktiven Lineage."""
+        self.grundlage_laden(projekt_id, freigabe_id, analyse_id)
+        if self._aktive_lineage is not None:
+            self._aktive_lineage.bis_endpunkt_zuruecksetzen(projekt_id, LineageEndpunkt.P_A_D)
 
     def grundlage_fuer_aggregation(self, aggregations_id: UUID) -> Aggregationsgrundlage:
         """Lädt die in A_G unveränderlich fixierten R-Generationen erneut."""

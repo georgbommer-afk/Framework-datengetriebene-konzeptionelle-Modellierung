@@ -162,6 +162,21 @@ class AktiveLineageService:
             verbindung.close()
         return AktiveProjektlineage(UUID(projekt), endpunkt, behalten, revision, zeitpunkt)
 
+    def bis_endpunkt_zuruecksetzen(
+        self,
+        projekt_id: UUID | str,
+        endpunkt: LineageEndpunkt,
+    ) -> AktiveProjektlineage | None:
+        """Kürzt nur eine bereits weiter fortgeschrittene aktive Lineage.
+
+        Die bis zum Zielendpunkt gehörenden Referenzen werden aus dem bestehenden
+        Checkpoint übernommen. Fachartefakte werden dabei weder verändert noch gelöscht.
+        """
+        aktuell = self.laden(projekt_id)
+        if aktuell is None or REIHENFOLGE.index(aktuell.endpunkt) < REIHENFOLGE.index(endpunkt):
+            return aktuell
+        return self.aktivieren(projekt_id, endpunkt, aktuell.referenzen)
+
     def legacy_uebernehmen(
         self,
         projekt_id: UUID | str,

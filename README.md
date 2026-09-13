@@ -179,6 +179,14 @@ erforderlich. A_G-Version 1 bleibt lesbar.
 Die fachliche Vorschau wird neu berechnet und anschließend ohne redundante
 Bestätigungscheckbox mit einem primären Button gespeichert und an Schritt 8 übergeben.
 
+Wird in einem fortgeschrittenen Projekt nachträglich ausschließlich die KPI-Auswahl in U
+geändert, bleiben T, M, Event-Log-Konfiguration, E, E*, P und A_D aktiv. Nur die aktive Lineage
+ab A_G wird gelöst und der persistierte Fortschritt auf Schritt 7 gesetzt; historische A_G-,
+K/O- und K*-Artefakte bleiben erhalten. Schritt 7 verwendet das jüngste über T/R/E*/P/A_D
+kompatible A_G als Vorlage, übernimmt bestehende KPI-Konfigurationen strikt über ihre KPI-ID und
+berechnet die Ergebnisse neu. Projektbezeichnung und bloßer Änderungszeitpunkt beeinflussen den
+fachlichen A_G-Fingerabdruck nicht.
+
 ### 8. Modellbestandteile ableiten
 
 Ordnet Informationen aus U, S, Q, R, T, E*, P und A_G anhand der festen Quellenmatrix aus

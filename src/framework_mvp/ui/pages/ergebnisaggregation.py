@@ -32,12 +32,14 @@ from framework_mvp.application.ergebnisaggregation.zeitvergleich import (
     lese_externe_sollzeitdaten,
 )
 from framework_mvp.application.ergebnisaggregation_service import (
+    Aggregationskonfigurationsvorlage,
     Aggregationsvorschau,
     ErgebnisaggregationService,
 )
 from framework_mvp.application.projekt_service import ProjektService
 from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
+    AktivitaetRessourcenZuordnung,
     AnkunftsstromDefinition,
     Attributzuordnung,
     BestaetigteWarteschlangeninformation,
@@ -65,6 +67,7 @@ from framework_mvp.ui.navigation import (
     framework_bereich_oeffnen,
     schritt_abschliessen_und_weiter,
 )
+from framework_mvp.ui.session_cleanup import ergebnisaggregation_zustand_invalidieren
 
 WOPED_NEXT_URL = "https://taminofischer.github.io/woped-next/"
 PETRI_GRUNDLAGEN_URL = "https://doi.org/10.1007/978-94-009-0649-5_6"
@@ -129,6 +132,177 @@ def _profilkennzahl_auswahl(
         )
     )
     return nach_id.get(auswahl)
+
+
+def _widget_standard(key: str, wert: object) -> None:
+    if key not in st.session_state:
+        st.session_state[key] = wert
+
+
+def _konfigurationsvorlage_initialisieren(
+    vorlage: Aggregationskonfigurationsvorlage,
+) -> None:
+    """Überführt persistierte Entscheidungen einmalig in die editierbaren Widgets."""
+    for konfiguration in vorlage.kpi_konfigurationen:
+        kpi_id = konfiguration.kpi_id
+        direkt = konfiguration.direkte_profilkennzahl
+        _widget_standard(f"ag_{kpi_id}_direkt_r", direkt is not None)
+        if direkt is not None:
+            _widget_standard(f"ag_{kpi_id}_direkt_r_referenz", direkt.referenz_id)
+        _widget_standard(f"ag_{kpi_id}_einheit", konfiguration.einheit)
+        _widget_standard(f"ag_{kpi_id}_bezugsmenge", konfiguration.bezugsmenge)
+        for zuordnung in konfiguration.zuordnungen:
+            praefix = f"ag_{kpi_id}_{zuordnung.operand_id}"
+            _widget_standard(f"{praefix}_quelle", zuordnung.quelle.value)
+            if zuordnung.profilkennzahl is not None:
+                _widget_standard(f"{praefix}_profil", zuordnung.profilkennzahl.referenz_id)
+            if zuordnung.startaktivitaet and zuordnung.endaktivitaet:
+                _widget_standard(f"{praefix}_zeitmodus", "Start- und Endaktivität in E*")
+                _widget_standard(f"{praefix}_start", zuordnung.startaktivitaet)
+                _widget_standard(f"{praefix}_ende", zuordnung.endaktivitaet)
+                _widget_standard(f"{praefix}_regel", zuordnung.vorkommensregel.value)
+            elif zuordnung.zweite_spalte:
+                _widget_standard(
+                    f"{praefix}_zeitmodus", "zwei ausdrücklich gewählte Zeitstempelspalten"
+                )
+                _widget_standard(f"{praefix}_spalte1", zuordnung.spalte)
+                _widget_standard(f"{praefix}_spalte2", zuordnung.zweite_spalte)
+            else:
+                _widget_standard(f"{praefix}_spalte", zuordnung.spalte)
+            _widget_standard(f"{praefix}_bedingt", bool(zuordnung.bedingungsoperator))
+            if zuordnung.bedingungsoperator:
+                _widget_standard(f"{praefix}_operator", zuordnung.bedingungsoperator)
+                _widget_standard(f"{praefix}_wert", zuordnung.bedingungswert)
+
+    sollmodell = vorlage.sollmodell
+    if sollmodell is None:
+        _widget_standard("ag_sollmodell_entscheidung", SollmodellEntscheidung.KEIN_SOLLMODELL.value)
+    else:
+        entscheidung = (
+            SollmodellEntscheidung.LINEARER_ASSISTENT
+            if sollmodell.metadaten.erstellungsart.value == "linearer_assistent"
+            else SollmodellEntscheidung.KOMPLEXES_PNML
+        )
+        _widget_standard("ag_sollmodell_entscheidung", entscheidung.value)
+        st.session_state.ag_sollmodell = sollmodell
+        praefix = (
+            "ag_linear" if entscheidung is SollmodellEntscheidung.LINEARER_ASSISTENT else "ag_pnml"
+        )
+        _widget_standard(f"{praefix}_name", sollmodell.metadaten.bezeichnung)
+        _widget_standard(f"{praefix}_grundlage", sollmodell.metadaten.fachliche_grundlage)
+        _widget_standard(f"{praefix}_version", sollmodell.metadaten.version)
+        _widget_standard(
+            f"{praefix}_person", sollmodell.metadaten.erstellende_oder_pruefende_person
+        )
+        _widget_standard(f"{praefix}_freigabe", sollmodell.metadaten.freigabedatum)
+        if entscheidung is SollmodellEntscheidung.LINEARER_ASSISTENT:
+            _widget_standard("ag_lineare_reihenfolge", list(sollmodell.sichtbare_transitionen))
+    if vorlage.aktivitaetsmapping is not None:
+        st.session_state.ag_aktivitaetsmapping = vorlage.aktivitaetsmapping
+        _widget_standard("ag_mapping_bestaetigt", True)
+        for quelle, ziel in vorlage.aktivitaetsmapping.manuelle_zuordnungen:
+            _widget_standard(f"ag_mapping_{quelle}", ziel)
+    _widget_standard("ag_conformance_aktiv", vorlage.conformance_ausfuehren)
+
+    for art, zuordnungen in (
+        ("Ressourcenattribute", vorlage.ressourcenattributzuordnungen),
+        ("Entitätsattribute", vorlage.entitaetsattributzuordnungen),
+    ):
+        for quelle, key in (
+            (Datenartefakt.EVENT_LOG_E_STERN, "e"),
+            (Datenartefakt.ZWISCHENDATENSATZ_T, "t"),
+        ):
+            gruppe = [wert for wert in zuordnungen if wert.quelle is quelle]
+            _widget_standard(f"ag_{art}_{key}_aktiv", bool(gruppe))
+            if gruppe:
+                _widget_standard(f"ag_{art}_{key}_id", gruppe[0].schluesselspalte)
+                _widget_standard(
+                    f"ag_{art}_{key}_attribute", [wert.attributspalte for wert in gruppe]
+                )
+                _widget_standard(
+                    f"ag_{art}_{key}_zeit",
+                    gruppe[0].zeitspalte or "— kein Zeitbezug —",
+                )
+    _widget_standard("ag_entitaetstyp", vorlage.entitaetstyp)
+
+    warteschlange = (
+        vorlage.bestaetigte_warteschlangen[0] if vorlage.bestaetigte_warteschlangen else None
+    )
+    _widget_standard("ag_queue_aktiv", warteschlange is not None)
+    if warteschlange is not None:
+        _widget_standard("ag_queue_quelle", warteschlange.quelle.value)
+        _widget_standard("ag_queue_name", warteschlange.bezeichnung)
+        _widget_standard("ag_queue_von", warteschlange.von_aktivitaet)
+        _widget_standard("ag_queue_zu", warteschlange.zu_aktivitaet)
+        _widget_standard("ag_queue_spalte", warteschlange.informationsspalte)
+        _widget_standard("ag_queue_filter", warteschlange.filterwert)
+
+    _widget_standard("ag_iat_anzahl", len(vorlage.ankunftsstroeme))
+    for index, strom in enumerate(vorlage.ankunftsstroeme):
+        praefix = f"ag_iat_{index}"
+        _widget_standard(f"{praefix}_name", strom.bezeichnung)
+        _widget_standard(f"{praefix}_quelle", strom.quelle.value)
+        _widget_standard(f"{praefix}_id", strom.entitaetsspalte)
+        _widget_standard(f"{praefix}_zeit", strom.zeitspalte)
+        _widget_standard(f"{praefix}_aktivitaet", strom.aktivitaet or "— keine —")
+        _widget_standard(f"{praefix}_filter", bool(strom.filterspalte))
+        _widget_standard(f"{praefix}_filterspalte", strom.filterspalte)
+        _widget_standard(f"{praefix}_filterwert", strom.filterwert)
+        _widget_standard(
+            f"{praefix}_regel",
+            strom.vorkommensregel.value
+            if strom.vorkommensregel is not None
+            else "— keine; Mehrdeutige ausschließen —",
+        )
+
+    performance = vorlage.performance_zeitvergleich_konfiguration
+    _widget_standard(
+        "ag_performance_dt",
+        bool(performance and performance.fertigstellungsabweichung_aktiv),
+    )
+    _widget_standard(
+        "ag_performance_db",
+        bool(performance and performance.bearbeitungszeitabweichung_aktiv),
+    )
+    if performance is not None:
+        _widget_standard("ag_performance_regel_kanonisch", performance.vorkommensregel.value)
+        _widget_standard("ag_performance_regel", performance.vorkommensregel.value)
+        _widget_standard(
+            "ag_performance_quelle",
+            "Externe CSV-/XLSX-Datei"
+            if performance.sollquelle == "extern"
+            else performance.sollquelle,
+        )
+        for key, wert in (
+            ("ag_performance_soll_case", performance.soll_case_id_spalte),
+            ("ag_performance_soll_activity", performance.soll_activity_spalte),
+            ("ag_performance_plan_ende", performance.plan_ende_spalte),
+            ("ag_performance_ist_case", performance.ist_case_id_spalte),
+            ("ag_performance_ist_activity", performance.ist_activity_spalte),
+            ("ag_performance_ist_ende", performance.ist_ende_spalte),
+            ("ag_performance_plan_start", performance.plan_start_spalte),
+            ("ag_performance_ist_start", performance.ist_start_spalte),
+            ("ag_performance_vorkommen", performance.soll_auftretensnummer_spalte),
+        ):
+            if wert:
+                _widget_standard(key, wert)
+    if vorlage.sollzeitdaten is not None and vorlage.sollzeit_tabelle is not None:
+        st.session_state.ag_sollzeitdaten = vorlage.sollzeitdaten
+        st.session_state.ag_sollzeit_tabelle = vorlage.sollzeit_tabelle.copy(deep=True)
+        st.session_state.ag_performance_upload_sha = vorlage.sollzeitdaten.sha256
+
+    busy = vorlage.busy_ratio_konfiguration
+    _widget_standard("ag_performance_busy", vorlage.busy_ratio_ausfuehren)
+    if busy is not None:
+        _widget_standard("ag_busy_resource", busy.ressourcenspalte)
+        _widget_standard("ag_busy_start", busy.startspalte)
+        _widget_standard("ag_busy_ende", busy.endspalte)
+        if busy.zeitraum_von is not None:
+            _widget_standard("ag_busy_von", busy.zeitraum_von.date())
+            _widget_standard("ag_busy_von_kanonisch", busy.zeitraum_von.date())
+        if busy.zeitraum_bis is not None:
+            _widget_standard("ag_busy_bis", busy.zeitraum_bis.date())
+            _widget_standard("ag_busy_bis_kanonisch", busy.zeitraum_bis.date())
 
 
 def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
@@ -326,15 +500,18 @@ def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
                             bedingungswert=bedingungswert,
                         )
                     )
+            einheit_key = f"ag_{kpi_id}_einheit"
+            _widget_standard(einheit_key, "")
             einheit = (
-                st.text_input("Fachlich bestätigte Einheit", key=f"ag_{kpi_id}_einheit")
+                st.text_input("Fachlich bestätigte Einheit", key=einheit_key)
                 if definition.einheiteneingabe_erforderlich
                 else definition.einheit
             )
+            bezugsmenge_key = f"ag_{kpi_id}_bezugsmenge"
+            _widget_standard(bezugsmenge_key, definition.bezugsmenge)
             bezugsmenge = st.text_input(
                 "Bestätigte Bezugsmenge",
-                value=definition.bezugsmenge,
-                key=f"ag_{kpi_id}_bezugsmenge",
+                key=bezugsmenge_key,
             )
             konfiguration = KpiKonfiguration(
                 kpi_id,
@@ -361,16 +538,16 @@ def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
 
 
 def _sollmodell_metadaten(praefix: str) -> dict[str, object]:
+    _widget_standard(f"{praefix}_version", "1.0")
+    _widget_standard(f"{praefix}_freigabe", date.today())
     return {
         "bezeichnung": st.text_input("Bezeichnung des Sollmodells", key=f"{praefix}_name"),
         "fachliche_grundlage": st.text_area(
             "Fachliche Grundlage beziehungsweise Quelle", key=f"{praefix}_grundlage"
         ),
-        "modellversion": st.text_input("Version", value="1.0", key=f"{praefix}_version"),
+        "modellversion": st.text_input("Version", key=f"{praefix}_version"),
         "person": st.text_input("Erstellende oder prüfende Person", key=f"{praefix}_person"),
-        "freigabedatum": st.date_input(
-            "Freigabedatum", value=date.today(), key=f"{praefix}_freigabe"
-        ),
+        "freigabedatum": st.date_input("Freigabedatum", key=f"{praefix}_freigabe"),
     }
 
 
@@ -658,7 +835,10 @@ def _sollmodell_und_mapping(basis: object) -> tuple[object | None, object | None
     return sollmodell, mapping, conformance
 
 
-def _ressourcenzuordnung(basis: object) -> RessourcenanalyseErgebnis | None:
+def _ressourcenzuordnung(
+    basis: object,
+    vorlage: Aggregationskonfigurationsvorlage | None = None,
+) -> RessourcenanalyseErgebnis | None:
     st.markdown("#### A. Ressourcen")
     automatisch = analysiere_ressourcen(basis.event_log.copy(deep=True))
     if automatisch.modus is Ressourcenzuordnungsmodus.AUTOMATISCH:
@@ -703,12 +883,32 @@ def _ressourcenzuordnung(basis: object) -> RessourcenanalyseErgebnis | None:
             width="stretch",
         )
     luecken = [wert for wert in automatisch.zuordnungen if wert.offen]
+    vorlage_nach_aktivitaet = {
+        wert.aktivitaet: wert
+        for wert in (
+            vorlage.ressourcenanalyse.zuordnungen if vorlage and vorlage.ressourcenanalyse else ()
+        )
+    }
     tabelle = st.data_editor(
         pd.DataFrame(
             {
                 "Aktivität": [wert.aktivitaet for wert in luecken],
-                "Manuelle Ressourcen (kommagetrennt)": ["" for _ in luecken],
-                "Offen / nicht bekannt": [True for _ in luecken],
+                "Manuelle Ressourcen (kommagetrennt)": [
+                    ", ".join(
+                        vorlage_nach_aktivitaet.get(
+                            wert.aktivitaet,
+                            AktivitaetRessourcenZuordnung(wert.aktivitaet, ()),
+                        ).manuell_bestaetigte_ressourcen
+                    )
+                    for wert in luecken
+                ],
+                "Offen / nicht bekannt": [
+                    vorlage_nach_aktivitaet.get(
+                        wert.aktivitaet,
+                        AktivitaetRessourcenZuordnung(wert.aktivitaet, (), offen=True),
+                    ).offen
+                    for wert in luecken
+                ],
             }
         ),
         hide_index=True,
@@ -1687,6 +1887,14 @@ def zeige_ergebnisaggregation_seite(
                 schritt_abschliessen_und_weiter(aktueller_schritt=7, projekt_id=projekt_id)
             return
         except (Domaenenfehler, Importintegritaetsfehler, ValueError) as fehler:
+
+            def rekonfiguration_vorbereiten() -> None:
+                vorbereiten = getattr(service, "rekonfiguration_vorbereiten", None)
+                if callable(vorbereiten):
+                    vorbereiten(projekt_id, freigabe_id, analyse_id)
+                ergebnisaggregation_zustand_invalidieren(st.session_state)
+                st.session_state[bearbeitung_key] = True
+
             zeige_voraussetzungshinweis(
                 grund=(
                     "Die Ergebnisaggregation kann für die aktuelle fachliche Grundlage "
@@ -1700,6 +1908,7 @@ def zeige_ergebnisaggregation_seite(
                 aktionslabel="Ergebnisaggregation neu konfigurieren",
                 projekt_id=projekt_id,
                 technische_details={"ursache": str(fehler)},
+                aktion_vor_navigation=rekonfiguration_vorbereiten,
             )
             return
     try:
@@ -1714,11 +1923,26 @@ def zeige_ergebnisaggregation_seite(
             technische_details={"ursache": str(fehler)},
         )
         return
+    vorlage = None
+    vorlage_laden = getattr(service, "kompatible_konfigurationsvorlage_laden", None)
+    if callable(vorlage_laden):
+        try:
+            vorlage = vorlage_laden(projekt_id, freigabe_id, analyse_id)
+        except (Domaenenfehler, Importintegritaetsfehler, ValueError):
+            vorlage = None
+    vorlage_key = f"ag_vorlage_initialisiert_{projekt_id}_{basis.untersuchungsauftrag_sha256}"
+    if vorlage is not None and not st.session_state.get(vorlage_key, False):
+        _konfigurationsvorlage_initialisieren(vorlage)
+        st.session_state[vorlage_key] = True
+        st.info(
+            "Die kompatiblen manuellen Entscheidungen des bisherigen A_G wurden als "
+            "Vorlage geladen. Neue KPI bleiben unkonfiguriert."
+        )
     _eingangsartefakte(basis)
     kpi_konfigurationen = _kpi_konfigurationen(basis)
     sollmodell, mapping, conformance = _sollmodell_und_mapping(basis)
     st.subheader("4. Ressourcen, Entitäten, Warteschlangen und Zeitgrößen")
-    ressourcenanalyse = _ressourcenzuordnung(basis)
+    ressourcenanalyse = _ressourcenzuordnung(basis, vorlage)
     ressourcenattribute = _attributzuordnungen(basis, art="Ressourcenattribute")
     st.markdown("#### B. Entitätsinformationen")
     st.write(
