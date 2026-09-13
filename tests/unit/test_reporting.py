@@ -50,6 +50,22 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
             informationen.append(
                 _information("untersuchungsauftrag.problemstellung", "Materialfluss prüfen", "U")
             )
+        elif bestandteil_id == "ausgaben" and neue_felder:
+            informationen.append(
+                _information(
+                    "kpi_ergebnisse[0]",
+                    {
+                        "kpi_id": "mittlere_durchfuehrungszeit",
+                        "bezeichnung": "Mittlere Durchführungszeit",
+                        "status": "berechnet",
+                        "ergebnis": 1850.1799999999998,
+                        "einheit": "s",
+                        "bezugsmenge": "Produktionsaufträge n",
+                        "formel": "Σ Durchführungszeit_i / n",
+                    },
+                    "A_G",
+                )
+            )
         elif bestandteil_id == "aktivitaeten":
             informationen.append(_information("sichtbare_aktivitaeten", ["A", "B"], "P"))
         elif bestandteil_id == "warteschlangen" and neue_felder:
@@ -150,6 +166,41 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
                     "A_G",
                 )
             )
+            informationen.append(
+                _information(
+                    "strukturierte_ergebnisse.datenaufbereitung",
+                    {
+                        "ausgang": "ursprüngliche Datenquelle D",
+                        "fachliche_bedeutung": (
+                            "Alle Transformationen bilden eine Aufbereitungskette; "
+                            "fachlich gültig ist genau der aktuelle Zwischendatensatz T."
+                        ),
+                        "transformationshistorie": [
+                            {
+                                "reihenfolge": 1,
+                                "betroffener_datensatz": "Zwischendatensatz T",
+                                "transformationsart": "Werte regelbasiert abstrahieren",
+                                "betroffene_spalten": ["Von", "Zu"],
+                                "regel": {"vergleichsart": "Beginnt mit", "suchwert": "HRL-04"},
+                                "ersatz_oder_abstraktionswert": "HRL",
+                                "beschreibung": "Lagerplätze fachlich gruppieren",
+                                "eingang": "ursprüngliche Datenquelle D",
+                                "ergebnis": "aktiver Zwischendatensatz T",
+                                "wirkung": "389 Werte regelbasiert abstrahiert",
+                                "zeilen_vorher": 400,
+                                "zeilen_nachher": 400,
+                            }
+                        ],
+                        "aktiver_zwischendatensatz_t": {
+                            "id": str(uuid4()),
+                            "zeilenanzahl": 400,
+                            "spaltenanzahl": 8,
+                            "sha256": "e" * 64,
+                        },
+                    },
+                    "A_G",
+                )
+            )
         elif bestandteil_id == "darstellung_der_vorgaenge_des_systems":
             informationen.append(
                 _information(
@@ -211,57 +262,128 @@ def test_build_report_data_projiziert_neue_felder_ohne_k_stern_mutation() -> Non
     ]
     assert report["ressourcen"]["zuordnungsmodus"] == "manuell"
     assert report["ressourcen"]["zuordnungsherkunft"].endswith("Schritt 7")
+    assert report["ausgaben_und_eingaben"]["kpi_ergebnisse"][0]["ergebnis_anzeige"] == "1850,18 s"
     assert (
         report["daten"]["zeitbezogene_datenauswahl"]["zwischenankunftszeiten"][0]["statistik"][
             "median_sekunden"
         ]
         == 120.0
     )
+    assert (
+        report["daten"]["datenaufbereitung"]["transformationshistorie"][0]["ergebnis"]
+        == "aktiver Zwischendatensatz T"
+    )
     assert len(report["modellbestandteile"]) == 16
 
 
-def test_etl_abstraktionen_sind_strukturiert_und_in_html_und_pdf_ausgebbar(
+def test_reportgliederung_folgt_den_acht_fachlichen_abschnitten() -> None:
+    html = render_report_html(build_report_data(_k_stern()))
+
+    for nummer, titel in (
+        ("1", "Problemstellung"),
+        ("2", "Zielsetzung"),
+        ("3", "Ausgaben und Eingaben"),
+        ("4", "Modellumfang, Modellgrenzen und Detaillierungsgrad"),
+        ("4.1", "Entitäten"),
+        ("4.2", "Aktivitäten"),
+        ("4.3", "Warteschlangen"),
+        ("4.4", "Ressourcen"),
+        ("5", "Annahmen und Vereinfachungen"),
+        ("6", "Datenauswahl und Daten"),
+        ("7", "Darstellung der Vorgänge des Systems"),
+        ("8", "Technische Nachvollziehbarkeit"),
+    ):
+        assert f'<div class="component-number">\n        {nummer}\n' in html or (
+            f'<div class="section-number">{nummer}</div>' in html
+        )
+        assert titel in html
+    assert "1850.1799999999998" not in html
+    assert "1850,18 s" in html
+    assert "12.08.2026 10:00:00 +00:00" in html
+
+
+@pytest.mark.parametrize(
+    ("fallstudie", "systemtyp", "kpi_id", "kpi_name", "ergebnis", "einheit"),
+    (
+        (
+            "intralogistiksystem",
+            "intralogistik",
+            "servicegrad",
+            "Servicegrad",
+            3.333,
+            "%",
+        ),
+        (
+            "produktionssystem",
+            "produktion",
+            "einhaltung_lagerbandbreite",
+            "Einhaltung Lagerbandbreite",
+            90.0,
+            "%",
+        ),
+        (
+            "synthetisches-produktionssystem",
+            "produktion",
+            "mittlere_durchfuehrungszeit",
+            "Mittlere Durchführungszeit",
+            1850.1799999999998,
+            "s",
+        ),
+    ),
+)
+def test_reports_der_drei_fallstudien_bleiben_renderbar(
     tmp_path: Path,
+    fallstudie: str,
+    systemtyp: str,
+    kpi_id: str,
+    kpi_name: str,
+    ergebnis: float,
+    einheit: str,
 ) -> None:
     k_stern = _k_stern()
     bestandteile = cast(list[dict[str, Any]], k_stern["modellbestandteile"])
-    vereinfachungen = next(
-        wert for wert in bestandteile if wert["bestandteil_id"] == "vereinfachungen"
+    umfang = next(wert for wert in bestandteile if wert["bestandteil_id"] == "modellumfang")
+    umfang["urspruenglicher_bestandteil"]["informationen"].append(
+        _information("systemprofil", {"systemtyp": systemtyp}, "S")
     )
-    abstraktion = vereinfachungen["urspruenglicher_bestandteil"]["informationen"][0]["wert"][0]
-    abstraktion.update(
+    ausgaben = next(wert for wert in bestandteile if wert["bestandteil_id"] == "ausgaben")
+    kpi = ausgaben["urspruenglicher_bestandteil"]["informationen"][0]["wert"]
+    kpi.update(
         {
-            "quellspalten": ["Von", "Zu"],
-            "zielspalten": ["Von", "Zu"],
-            "treffer_nach_spalte": {"Von": 185, "Zu": 204},
-            "betroffene_beobachtungen": 389,
-            "originalwerte_erhalten": False,
+            "kpi_id": kpi_id,
+            "bezeichnung": kpi_name,
+            "ergebnis": ergebnis,
+            "einheit": einheit,
         }
     )
+
+    report = build_report_data(k_stern, projektbezeichnung=fallstudie)
+    html = render_report_html(report)
+    pdf = render_report_pdf(report, tmp_path / f"{fallstudie}.pdf")
+
+    assert report["modellumfang"]["systemtyp"] == systemtyp
+    assert kpi_name in html
+    assert str(ergebnis) not in html
+    assert pdf.read_bytes().startswith(b"%PDF-")
+
+
+def test_transformationshistorie_wird_einmal_fachlich_in_html_und_pdf_ausgegeben(
+    tmp_path: Path,
+) -> None:
+    k_stern = _k_stern()
     report = build_report_data(k_stern)
 
-    assert report["vereinfachungen"]["etl_abstraktionen"] == [
-        {
-            "quellspalte": "Von",
-            "vergleichsart": "Beginnt mit",
-            "suchwert_muster": "HRL-04-",
-            "vorher_muster": "HRL-04-*",
-            "abstraktionswert": "HRL-04",
-            "zielspalte": "Von_aggregiert",
-            "betroffene_beobachtungen": 389,
-            "originalwerte_erhalten": False,
-            "quellspalten": ["Von", "Zu"],
-            "zielspalten": ["Von", "Zu"],
-            "treffer_nach_spalte": {"Von": 185, "Zu": 204},
-        }
-    ]
+    historie = report["daten"]["datenaufbereitung"]["transformationshistorie"]
+    assert len(historie) == 1
+    assert historie[0]["betroffene_spalten"] == ["Von", "Zu"]
+    assert historie[0]["ersatz_oder_abstraktionswert"] == "HRL"
     html = render_report_html(report)
-    assert "Regelbasierte ETL-Abstraktionen" in html
-    assert "HRL-04-*" in html
+    assert html.count("Datenaufbereitung: D → aktiver Zwischendatensatz T") == 1
+    assert "Regelbasierte ETL-Abstraktionen" not in html
+    assert "Werte regelbasiert abstrahieren" in html
+    assert "HRL-04" in html
     assert "Von, Zu" in html
-    assert "389 Beobachtungen" in html
-    assert "Von: 185" in html
-    assert "Zu: 204" in html
+    assert "389 Werte regelbasiert abstrahiert" in html
 
     ziel = render_report_pdf(report, tmp_path / "abstraktionen.pdf")
     assert ziel.read_bytes().startswith(b"%PDF-")
@@ -342,6 +464,11 @@ def test_xlsx_renderer_erzeugt_zehn_geordnete_lesbare_arbeitsblaetter() -> None:
     assert all(isinstance(zeile[2].value, int) for zeile in statistikwerte)
     assert all(isinstance(zeile[3].value, Real) for zeile in statistikwerte)
     assert all(zeile[3].number_format == "0.00" for zeile in statistikwerte)
+    assert any(
+        zelle.value == "Transformationshistorie D → aktiver Datensatz T"
+        for zeile in datenblatt.iter_rows()
+        for zelle in zeile
+    )
     assert (
         len(
             {

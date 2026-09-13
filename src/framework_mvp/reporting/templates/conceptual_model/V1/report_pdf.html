@@ -539,7 +539,7 @@
 
                     {% for schluessel, wert in spezifisch.items() %}
 
-                        {# Ressourcen erscheinen erst in 08 #}
+                        {# Ressourcen erscheinen gesammelt unter 4.4 #}
 
                         {% if wert
                               and schluessel != "ressourcen" %}
@@ -696,13 +696,13 @@
 
 
     <!-- ========================================================
-         05 · Entitäten
+         4.1 · Entitäten
          ======================================================== -->
 
     <article class="pdf-card pdf-card-full pdf-card-compact">
 
         <div class="pdf-card-label">
-            05 · Entitäten
+            4.1 · Entitäten
         </div>
 
         <div class="pdf-card-row pdf-card-row-inner">
@@ -776,13 +776,13 @@
 <div class="pdf-page-content">
 
     <!-- ========================================================
-         06 · Aktivitäten
+         4.2 · Aktivitäten
          ======================================================== -->
 
     <article class="pdf-card pdf-card-full">
 
         <div class="pdf-card-label">
-            06 · Aktivitäten
+            4.2 · Aktivitäten
         </div>
 
         {% set sichtbare_aktivitaeten =
@@ -823,13 +823,13 @@
 
 
     <!-- ========================================================
-         07 · Warteschlangen
+         4.3 · Warteschlangen
          ======================================================== -->
 
     <article class="pdf-card pdf-card-full pdf-card-compact">
 
         <div class="pdf-card-label">
-            07 · Warteschlangen
+            4.3 · Warteschlangen
         </div>
 
         {% set wartezeit_kpis =
@@ -900,13 +900,13 @@
 
 
     <!-- ========================================================
-         08 · Ressourcen
+         4.4 · Ressourcen
          ======================================================== -->
 
     <article class="pdf-card pdf-card-full pdf-card-compact">
 
         <div class="pdf-card-label">
-            08 · Ressourcen
+            4.4 · Ressourcen
         </div>
 
 
@@ -1110,13 +1110,13 @@
 
 
     <!-- ========================================================
-         09 · Annahmen und Vereinfachungen
+         05 · Annahmen und Vereinfachungen
          ======================================================== -->
 
     <article class="pdf-card pdf-card-full pdf-card-compact">
 
         <div class="pdf-card-label">
-            09 · Annahmen und Vereinfachungen
+            05 · Annahmen und Vereinfachungen
         </div>
 
         {% set entscheidungen =
@@ -1253,53 +1253,10 @@
 
         {% endif %}
 
-        {% if vereinfachungen.get("etl_abstraktionen", []) %}
-
-            <h3 class="pdf-subheading">
-                Regelbasierte ETL-Abstraktionen
-            </h3>
-
-            <div class="pdf-compact-structure">
-
-                {% for abstraktion in vereinfachungen.get("etl_abstraktionen", []) %}
-
-                    <div class="pdf-compact-structure-row">
-
-                        <div class="pdf-compact-structure-label">
-                            {{ abstraktion.get("quellspalten", [abstraktion.get("quellspalte", "–")]) | join(", ") }}
-                        </div>
-
-                        <div class="pdf-compact-structure-value">
-                            {{ abstraktion.get("vergleichsart", "–") }}
-                            „{{ abstraktion.get("suchwert_muster", "–") }}“
-                            → „{{ abstraktion.get("abstraktionswert", "–") }}“ ·
-                            {{ abstraktion.get("betroffene_beobachtungen", 0) }} Beobachtungen<br>
-                            Vorher/Muster: {{ abstraktion.get("vorher_muster", "–") }} ·
-                            Nachher: {{ abstraktion.get("abstraktionswert", "–") }} ·
-                            Zielspalte: {{ abstraktion.get("zielspalte", "–") }}
-                            {% if abstraktion.get("treffer_nach_spalte") %}
-                                <br>Treffer je Spalte:
-                                {% for spalte, anzahl in abstraktion.get("treffer_nach_spalte", {}).items() %}
-                                    {{ spalte }}: {{ anzahl }}{% if not loop.last %} · {% endif %}
-                                {% endfor %}
-                            {% endif %}
-                            {% if abstraktion.get("originalwerte_erhalten", false) %}
-                                · Originalwerte in der Quellspalte erhalten
-                            {% endif %}
-                        </div>
-
-                    </div>
-
-                {% endfor %}
-
-            </div>
-
-        {% endif %}
-
     </article>
 
     <!-- ========================================================
-         10 · Datenauswahl und Daten
+         06 · Datenauswahl und Daten
          ======================================================== -->
 
          <article class="pdf-card pdf-card-full">
@@ -1308,7 +1265,7 @@
             <div class="pdf-card-start">
     
                 <div class="pdf-card-label">
-                    10 · Datenauswahl und Daten
+                    06 · Datenauswahl und Daten
                 </div>
     
                 {% set datenquellen =
@@ -1371,6 +1328,39 @@
                 {% endif %}
     
             </div>
+
+            {% set aufbereitung = daten.get("datenaufbereitung", {}) %}
+            {% if aufbereitung %}
+                <h3 class="pdf-subheading">Datenaufbereitung: D → aktiver Zwischendatensatz T</h3>
+                <div class="pdf-notice">
+                    {{ aufbereitung.get("fachliche_bedeutung", "–") }}
+                </div>
+                {% set transformationshistorie = aufbereitung.get("transformationshistorie", []) %}
+                {% if transformationshistorie %}
+                    <div class="pdf-compact-structure">
+                        {% for schritt in transformationshistorie %}
+                            <div class="pdf-compact-structure-row">
+                                <div class="pdf-compact-structure-label">
+                                    {{ schritt.get("reihenfolge") }} · {{ schritt.get("transformationsart", "–") }}
+                                </div>
+                                <div class="pdf-compact-structure-value">
+                                    Spalte(n): {{ schritt.get("betroffene_spalten", []) | join(", ") or "gesamter Datensatz" }}<br>
+                                    {% if schritt.get("regel") %}
+                                        Regel:
+                                        {% for name, wert in schritt.get("regel", {}).items() %}
+                                            {{ name | replace("_", " ") }}={{ wert }}{% if not loop.last %}; {% endif %}
+                                        {% endfor %}<br>
+                                    {% endif %}
+                                    {% if schritt.get("ersatz_oder_abstraktionswert") != "" %}
+                                        Ersatz-/Abstraktionswert: {{ schritt.get("ersatz_oder_abstraktionswert") }}<br>
+                                    {% endif %}
+                                    {{ schritt.get("wirkung", "") }} · <strong>{{ schritt.get("ergebnis", "") }}</strong>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endif %}
     
     
             <!-- Datenprofil -->
@@ -1535,7 +1525,7 @@
     
     
     <!-- ================================================================
-         11 · Darstellung der Vorgänge des Systems
+         07 · Darstellung der Vorgänge des Systems
          ================================================================ -->
     
     <section class="pdf-section">
@@ -1543,7 +1533,7 @@
         <article class="pdf-card pdf-card-full pdf-process-card">
     
             <div class="pdf-card-label">
-                11 · Darstellung der Vorgänge des Systems
+                07 · Darstellung der Vorgänge des Systems
             </div>
     
     
@@ -1622,7 +1612,7 @@
     
     
     <!-- ================================================================
-         A · Technische Nachvollziehbarkeit
+         08 · Technische Nachvollziehbarkeit
          ================================================================ -->
     
     <section class="pdf-section">
@@ -1630,7 +1620,7 @@
         <article class="pdf-card pdf-card-full pdf-technical-card">
     
             <div class="pdf-card-label">
-                A · Technische Nachvollziehbarkeit
+                08 · Technische Nachvollziehbarkeit
             </div>
     
             <h2>

@@ -676,6 +676,7 @@ def _annahmen_vereinfachungen(sammlung: _Sammlung) -> None:
 def _daten(sammlung: _Sammlung) -> None:
     strukturierte = _strukturierte_ergebnisse(sammlung)
     zeitdaten = strukturierte.get("zeitbezogene_datenauswahl", {})
+    datenaufbereitung = strukturierte.get("datenaufbereitung", {})
     for quelle in sammlung.basis.datenquellen:
         auswahlwert = {
             "datenquellen_id": str(quelle.datenquellen_id),
@@ -754,6 +755,14 @@ def _daten(sammlung: _Sammlung) -> None:
             ModellbestandteilId.DATENAUSWAHL,
             Offenheitskategorie.NICHT_ABLEITBAR,
             "A_G enthält keine strukturierte Datenauswahl; Schritt 8 berechnet sie nicht neu.",
+        )
+    if isinstance(datenaufbereitung, dict) and datenaufbereitung:
+        sammlung.info(
+            ModellbestandteilId.DATENAUSWAHL,
+            Eingangsartefakt.AGGREGIERTE_ANALYSEERGEBNISSE_A_G,
+            "strukturierte_ergebnisse.datenaufbereitung",
+            datenaufbereitung,
+            Uebernahmeart.METADATENZUSAMMENFASSUNG,
         )
     sammlung.info(
         ModellbestandteilId.DATEN,

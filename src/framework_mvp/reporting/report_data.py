@@ -8,6 +8,8 @@ from enum import Enum
 from typing import Any, cast
 from uuid import UUID
 
+from framework_mvp.formatierung import formatiere_messwert, formatiere_zeitstempel
+
 REPORT_DATA_VERSION = 1
 
 ERWARTETE_BESTANDTEIL_IDS = (
@@ -67,7 +69,11 @@ class ReportDataFehler(ValueError):
 
 def _normalisieren(wert: Any) -> Any:
     """Überführt Werte in ausschließlich Jinja-/JSON-freundliche Python-Typen."""
-    if isinstance(wert, (UUID, datetime, date, Enum)):
+    if isinstance(wert, datetime | date):
+        return formatiere_zeitstempel(wert)
+    if isinstance(wert, str):
+        return formatiere_zeitstempel(wert)
+    if isinstance(wert, (UUID, Enum)):
         return str(wert.value if isinstance(wert, Enum) else wert)
     if is_dataclass(wert):
         return _normalisieren(asdict(cast(Any, wert)))
@@ -384,9 +390,7 @@ def _kpi_aufbereiten(wert: Any) -> dict[str, Any]:
     if ergebnis is None:
         ergebnis_anzeige = _anzeigetext(status)
     else:
-        ergebnis_anzeige = str(ergebnis)
-        if einheit:
-            ergebnis_anzeige = f"{ergebnis_anzeige} {einheit}"
+        ergebnis_anzeige = formatiere_messwert(ergebnis, einheit)
 
     return {
         "kpi_id": str(wert.get("kpi_id", "")),
@@ -677,6 +681,13 @@ def build_report_data(
     )
     if not isinstance(zeitbezogene_datenauswahl, Mapping):
         zeitbezogene_datenauswahl = {}
+    datenaufbereitung = _info_wert(
+        daten,
+        "strukturierte_ergebnisse.datenaufbereitung",
+        {},
+    )
+    if not isinstance(datenaufbereitung, Mapping):
+        datenaufbereitung = {}
     if not wartestellenhinweise:
         # Potenzielle Wartezeiten sind auch dann berichtsfähige Messwerte, wenn sie
         # fachlich noch keine explizit bestätigte Warteschlange in K* begründen.
@@ -719,7 +730,7 @@ def build_report_data(
             "validierungslauf_id": _normalisieren(k_stern.get("validierungslauf_id")),
             "artefaktart": _normalisieren(k_stern.get("artefaktart")),
             "artefaktversion": _normalisieren(k_stern.get("artefaktversion")),
-            "erstellt_am": _normalisieren(k_stern.get("erstellt_am")),
+            "erstellt_am": formatiere_zeitstempel(k_stern.get("erstellt_am")),
         },
         "validierung": {
             "status": _normalisieren(status),
@@ -884,6 +895,7 @@ def build_report_data(
             "zwischendatensatz": _normalisieren(zwischendatensatz),
             "event_log": _normalisieren(event_log),
             "zeitbezogene_datenauswahl": _normalisieren(zeitbezogene_datenauswahl),
+            "datenaufbereitung": _normalisieren(datenaufbereitung),
         },
         "prozessdarstellung": {
             **_abschnitt_metadaten(k_stern, darstellung),

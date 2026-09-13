@@ -168,10 +168,10 @@ class DemoProjektService:
                 "Belastbare konzeptionelle Grundlage für Verbesserungsentscheidungen"
             ),
             logistische_zielgroessen=(
-                LogistischeZielgroesse.LIEFERFAEHIGKEIT,
+                LogistischeZielgroesse.QUALITAET,
                 LogistischeZielgroesse.LIEFERTREUE,
             ),
-            ausgewaehlte_kpi_ids=("servicegrad", "liefertreue"),
+            ausgewaehlte_kpi_ids=("first_time_quality_ftq", "liefertreue"),
             systemklassifikation=Systemklassifikation(
                 bereich="Synthetische variantenreiche Auftragsfertigung",
                 objekte_gueter="Produktionsaufträge und diskrete Stückgüter",
@@ -425,42 +425,21 @@ class DemoProjektService:
         )
         kpis = (
             KpiKonfiguration(
-                "servicegrad",
+                "first_time_quality_ftq",
                 (
                     OperandZuordnung(
-                        "befriedigte_kundenauftragspositionen",
+                        "gutmenge_gq",
                         Datenartefakt.ZWISCHENDATENSATZ_T,
-                        spalte="Qualitaetsstatus",
-                        bedingungsoperator="gleich",
-                        bedingungswert="FREIGEGEBEN",
+                        spalte="Gutmenge",
                     ),
                     OperandZuordnung(
-                        "kundenauftragspositionen",
+                        "produzierte_fertigungsmenge_pqf",
                         Datenartefakt.ZWISCHENDATENSATZ_T,
-                        spalte="Produktionsauftrag",
+                        spalte="Auftragsmenge",
                     ),
                 ),
                 "%",
-                "Produktionsereignisse",
-            ),
-            KpiKonfiguration(
-                "liefertreue",
-                (
-                    OperandZuordnung(
-                        "liefertreue_produktionsauftraege",
-                        Datenartefakt.ZWISCHENDATENSATZ_T,
-                        spalte="Qualitaetsstatus",
-                        bedingungsoperator="gleich",
-                        bedingungswert="FREIGEGEBEN",
-                    ),
-                    OperandZuordnung(
-                        "produktionsauftraege",
-                        Datenartefakt.ZWISCHENDATENSATZ_T,
-                        spalte="Produktionsauftrag",
-                    ),
-                ),
-                "%",
-                "Produktionsereignisse",
+                "produzierte Fertigungsmenge (PQF)",
             ),
         )
         performance = PerformanceZeitvergleichKonfiguration(

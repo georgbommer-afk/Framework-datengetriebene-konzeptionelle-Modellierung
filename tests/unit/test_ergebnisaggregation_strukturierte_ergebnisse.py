@@ -207,8 +207,10 @@ def test_potenzielle_wartezeit_nutzt_timestamp_reihenfolge_und_zaehlt_ueberlappu
     assert ergebnis.anzahl_ueberlappungen == 1
     assert len(ergebnis.potenzielle_wartezeiten) == 1
     statistik = ergebnis.potenzielle_wartezeiten[0].statistik
-    assert statistik.anzahl == 2
-    assert statistik.median_sekunden == 600.0
+    assert statistik.anzahl == 1
+    assert statistik.mittelwert_sekunden == 1200.0
+    assert statistik.median_sekunden == 1200.0
+    assert ergebnis.ausgeschlossene_nicht_auswertbare_werte == 1
     assert "Potenzielle Wartezeit" in ergebnis.berechnungsregel
     assert "E*.timestamp" in ergebnis.berechnungsregel
 

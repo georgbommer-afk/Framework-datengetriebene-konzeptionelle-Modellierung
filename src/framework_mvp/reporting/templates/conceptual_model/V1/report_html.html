@@ -88,7 +88,7 @@
 <header class="component-header">
 
     <div class="component-number">
-        {{ "%02d" | format(nummer | int) }}
+        {{ nummer }}
     </div>
 
     <div class="component-heading">
@@ -384,7 +384,7 @@
 <section class="report-section model-component">
 
     {{ modellbestandteil_kopf(
-        1,
+        "1",
         "Problemstellung",
         problemstellung
     ) }}
@@ -415,7 +415,7 @@
 <section class="report-section model-component">
 
     {{ modellbestandteil_kopf(
-        2,
+        "2",
         "Zielsetzung",
         zielsetzung
     ) }}
@@ -734,13 +734,13 @@
 
 
 {# ================================================================ #}
-{# 5 Entitäten                                                       #}
+{# 4.1 Entitäten                                                     #}
 {# ================================================================ #}
 
 <section class="report-section model-component">
 
     {{ modellbestandteil_kopf(
-        "5",
+        "4.1",
         "Entitäten",
         entitaeten
     ) }}
@@ -776,13 +776,13 @@
 
 
 {# ================================================================ #}
-{# 6 Aktivitäten                                                     #}
+{# 4.2 Aktivitäten                                                   #}
 {# ================================================================ #}
 
 <section class="report-section model-component">
 
     {{ modellbestandteil_kopf(
-        "6",
+        "4.2",
         "Aktivitäten",
         aktivitaeten
     ) }}
@@ -822,13 +822,13 @@
 
 
 {# ================================================================ #}
-{# 7 Warteschlangen                                                  #}
+{# 4.3 Warteschlangen                                                #}
 {# ================================================================ #}
 
 <section class="report-section model-component">
 
     {{ modellbestandteil_kopf(
-        "7",
+        "4.3",
         "Warteschlangen",
         warteschlangen
     ) }}
@@ -899,13 +899,13 @@
 
 
 {# ================================================================ #}
-{# 8 Ressourcen                                                      #}
+{# 4.4 Ressourcen                                                    #}
 {# ================================================================ #}
 
 <section class="report-section model-component">
 
     {{ modellbestandteil_kopf(
-        "8",
+        "4.4",
         "Ressourcen",
         ressourcen
     ) }}
@@ -1022,13 +1022,13 @@
 
 
 {# ================================================================ #}
-{# 9 Annahmen und Vereinfachungen                                    #}
+{# 5 Annahmen und Vereinfachungen                                    #}
 {# ================================================================ #}
 
 <section class="report-section model-component">
 
     {{ modellbestandteil_kopf(
-        "9",
+        "5",
         "Annahmen und Vereinfachungen",
         annahmen
     ) }}
@@ -1082,53 +1082,68 @@
         </div>
     {% endif %}
 
-    {% if vereinfachungen.etl_abstraktionen %}
-        <div class="content-card">
-            <h2>Regelbasierte ETL-Abstraktionen</h2>
-
-            {% for abstraktion in vereinfachungen.etl_abstraktionen %}
-                <div class="human-input-entry">
-                    <strong>
-                        {{ abstraktion.get("quellspalten", [abstraktion.quellspalte]) | join(", ") }} |
-                        {{ abstraktion.vergleichsart }} „{{ abstraktion.suchwert_muster }}“
-                        → „{{ abstraktion.abstraktionswert }}“ |
-                        {{ abstraktion.betroffene_beobachtungen }} Beobachtungen
-                    </strong>
-                    <div>
-                        Vorher/Muster: {{ abstraktion.vorher_muster }} ·
-                        Nachher: {{ abstraktion.abstraktionswert }} ·
-                        Zielspalte: {{ abstraktion.zielspalte }}
-                        {% if abstraktion.get("treffer_nach_spalte") %}
-                            · Treffer je Spalte:
-                            {% for spalte, anzahl in abstraktion.treffer_nach_spalte.items() %}
-                                {{ spalte }}: {{ anzahl }}{% if not loop.last %} · {% endif %}
-                            {% endfor %}
-                        {% endif %}
-                        {% if abstraktion.originalwerte_erhalten %}
-                            · Originalwerte in der Quellspalte erhalten
-                        {% endif %}
-                    </div>
-                </div>
-            {% endfor %}
-        </div>
-    {% endif %}
-
     {{ fachliche_anpassungen(annahmen) }}
 
 </section>
 
 
 {# ================================================================ #}
-{# 10 Datenauswahl und Daten                                         #}
+{# 6 Datenauswahl und Daten                                          #}
 {# ================================================================ #}
 
 <section class="report-section model-component">
 
     {{ modellbestandteil_kopf(
-        "10",
+        "6",
         "Datenauswahl und Daten",
         daten
     ) }}
+
+    {% set aufbereitung = daten.get("datenaufbereitung", {}) %}
+    {% if aufbereitung %}
+        <h2 class="subsection-title">Datenaufbereitung: D → aktiver Zwischendatensatz T</h2>
+        <div class="notice-block">
+            {{ wert_oder_strich(aufbereitung.get("fachliche_bedeutung")) }}
+        </div>
+        {% set transformationshistorie = aufbereitung.get("transformationshistorie", []) %}
+        {% if transformationshistorie %}
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Reihenfolge</th>
+                        <th>Transformation</th>
+                        <th>Spalte(n)</th>
+                        <th>Regel / Ersatzwert</th>
+                        <th>Wirkung / Ergebnis</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for schritt in transformationshistorie %}
+                        <tr>
+                            <td>{{ schritt.get("reihenfolge") }}</td>
+                            <td>
+                                <strong>{{ schritt.get("transformationsart") }}</strong>
+                                {% if schritt.get("beschreibung") %}<br>{{ schritt.get("beschreibung") }}{% endif %}
+                            </td>
+                            <td>{{ schritt.get("betroffene_spalten", []) | join(", ") or "gesamter Datensatz" }}</td>
+                            <td>
+                                {{ strukturwert(schritt.get("regel", {})) }}
+                                {% if schritt.get("ersatz_oder_abstraktionswert") != "" %}
+                                    Ersatz-/Abstraktionswert: {{ schritt.get("ersatz_oder_abstraktionswert") }}
+                                {% endif %}
+                            </td>
+                            <td>
+                                {{ schritt.get("wirkung") }}<br>
+                                <strong>{{ schritt.get("ergebnis") }}</strong>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <div class="empty-block">Keine fachlichen Transformationen; T entspricht der bestätigten Datenauswahl.</div>
+        {% endif %}
+    {% endif %}
 
     <h2 class="subsection-title">Datenquellen</h2>
 
@@ -1409,13 +1424,13 @@
 
 
 {# ================================================================ #}
-{# 11 Darstellung der Vorgänge                                      #}
+{# 7 Darstellung der Vorgänge                                       #}
 {# ================================================================ #}
 
 <section class="report-section model-component process-section">
 
     {{ modellbestandteil_kopf(
-        11,
+        "7",
         "Darstellung der Vorgänge des Systems",
         prozessdarstellung
     ) }}
@@ -1489,7 +1504,7 @@
 <section class="report-section validation-section">
 
     <header class="section-header">
-        <div class="section-number">V</div>
+        <div class="section-number">✓</div>
         <div class="section-heading">
             <h1>Validierung</h1>
         </div>
@@ -1522,7 +1537,7 @@
 <section class="report-section appendix-section">
 
     <header class="section-header">
-        <div class="section-number">A</div>
+        <div class="section-number">8</div>
         <div class="section-heading">
             <h1>Technische Nachvollziehbarkeit</h1>
         </div>

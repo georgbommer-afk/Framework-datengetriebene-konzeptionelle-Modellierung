@@ -69,6 +69,7 @@ class Operandentyp(StrEnum):
     MITTELWERT = "mittelwert"
     MESSWERTE = "messwerte"
     ZEITDIFFERENZ_SUMME = "zeitdifferenz_summe"
+    EINDEUTIGER_WERT = "eindeutiger_wert"
 
 
 class Profilkennzahltyp(StrEnum):

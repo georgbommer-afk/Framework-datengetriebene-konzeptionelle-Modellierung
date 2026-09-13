@@ -494,6 +494,86 @@ class TransformationsService:
             ergebnis.append(dokumentation)
         return tuple(ergebnis)
 
+    def fachliche_transformationshistorie_laden(
+        self, datensatz: Zwischendatensatz
+    ) -> tuple[dict[str, object], ...]:
+        """Projiziert die persistierte Lineage einmalig auf fachliche Schritte innerhalb T."""
+        artefakt = self._transformationsartefakt(datensatz)
+        plan = artefakt.get("transformationsplan", {})
+        schritte = plan.get("schritte", []) if isinstance(plan, dict) else []
+        historie = artefakt.get("transformationshistorie", [])
+        if not isinstance(schritte, list) or not isinstance(historie, list):
+            return ()
+        wirkung_nach_schritt = {
+            int(wert["schritt"]): wert
+            for wert in historie
+            if isinstance(wert, dict) and isinstance(wert.get("schritt"), int)
+        }
+        aktive_schritte = [
+            wert
+            for wert in schritte
+            if isinstance(wert, dict) and bool(wert.get("aktiviert", True))
+        ]
+        ergebnis: list[dict[str, object]] = []
+        for schritt in aktive_schritte:
+            try:
+                reihenfolge = int(schritt["reihenfolge"])
+                transformationsart = Transformationsart(str(schritt["typ"]))
+                parameter = json.loads(str(schritt.get("parameter_json", "{}")))
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                continue
+            wirkung = wirkung_nach_schritt.get(reihenfolge)
+            if not isinstance(wirkung, dict) or not isinstance(parameter, dict):
+                continue
+            regel = {
+                name: parameter[name]
+                for name in (
+                    "vergleichsart",
+                    "suchwert",
+                    "gesuchte_werte",
+                    "operator",
+                    "wert",
+                    "format",
+                    "datentyp",
+                )
+                if name in parameter
+            }
+            ergebnis.append(
+                {
+                    "reihenfolge": reihenfolge,
+                    "betroffener_datensatz": "Zwischendatensatz T",
+                    "transformationsart": TRANSFORMATIONSART_BEZEICHNUNGEN.get(
+                        transformationsart, transformationsart.value
+                    ),
+                    "betroffene_spalten": [
+                        str(wert) for wert in schritt.get("betroffene_spalten", [])
+                    ],
+                    "regel": regel,
+                    "ersatz_oder_abstraktionswert": parameter.get("ersatzwert", ""),
+                    "zielspalte_oder_modus": parameter.get(
+                        "zielspalte", parameter.get("zielmodus", "")
+                    ),
+                    "beschreibung": str(schritt.get("beschreibung", "")),
+                    "fachliche_begruendung": str(schritt.get("fachliche_begruendung", "")),
+                    "eingang": (
+                        "ursprüngliche Datenquelle D"
+                        if not ergebnis
+                        else "vorheriger Arbeitsstand innerhalb T"
+                    ),
+                    "ergebnis": (
+                        "aktiver Zwischendatensatz T"
+                        if len(ergebnis) + 1 == len(aktive_schritte)
+                        else "nächster Arbeitsstand innerhalb T"
+                    ),
+                    "wirkung": str(wirkung.get("ergebnis_oder_warnung", "")),
+                    "zeilen_vorher": int(wirkung.get("zeilen_vorher", 0)),
+                    "zeilen_nachher": int(wirkung.get("zeilen_nachher", 0)),
+                    "spalten_vorher": int(wirkung.get("spalten_vorher", 0)),
+                    "spalten_nachher": int(wirkung.get("spalten_nachher", 0)),
+                }
+            )
+        return tuple(ergebnis)
+
     def _letzter_ausgefuehrter_stand(
         self, plan: Transformationsplan
     ) -> tuple[Zwischendatensatz | None, pd.DataFrame, tuple[Transformationshistorie, ...]]:

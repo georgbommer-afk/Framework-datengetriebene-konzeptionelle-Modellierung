@@ -321,6 +321,16 @@ def test_conformance_ergebnisdarstellung_und_mappingbestaetigung_sind_explizit()
     assert "fallbezogene Diagnosen" in quelle
 
 
+def test_kpi_ui_zeigt_formel_fachliche_operanden_quelle_einheit_und_status() -> None:
+    quelle = Path("src/framework_mvp/ui/pages/ergebnisaggregation.py").read_text(encoding="utf-8")
+    assert "Feste Formel:" in quelle
+    assert "Erforderliche Eingangsgröße: {operand.bezeichnung}" in quelle
+    assert "Zulässige Datenquelle" in quelle
+    assert "Fachlich bestätigte Einheit" in quelle
+    assert "Vorschau des KPI-Ergebnisses" in quelle
+    assert "Noch nicht berechenbar" in quelle
+
+
 def test_neukonfigurationsaktion_oeffnet_editierbaren_modus_ohne_hinweis_loop() -> None:
     app = _app(veraltetes_a_g=True)
     aktion = next(

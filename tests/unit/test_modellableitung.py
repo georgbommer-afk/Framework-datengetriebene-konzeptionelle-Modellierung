@@ -170,6 +170,19 @@ def _basis(tmp_path: Path):  # type: ignore[no-untyped-def]
     )
     strukturiert = {
         "ergebnisversion": 1,
+        "datenaufbereitung": {
+            "ausgang": "ursprüngliche Datenquelle D",
+            "transformationshistorie": [
+                {
+                    "reihenfolge": 1,
+                    "transformationsart": "Werte ersetzen",
+                    "betroffene_spalten": ["wert"],
+                    "regel": {"gesuchte_werte": [3]},
+                    "ersatz_oder_abstraktionswert": 4,
+                    "ergebnis": "aktiver Zwischendatensatz T",
+                }
+            ],
+        },
         "ressourcen": _json_dict(analysiere_ressourcen(event_log)),
         "warteschlangen_und_wartezeiten": _json_dict(analysiere_warteschlangen(event_log)),
         "zeitbezogene_datenauswahl": _json_dict(
@@ -357,6 +370,29 @@ def test_etl_abstraktion_wird_aus_a_g_als_vereinfachung_uebernommen(tmp_path: Pa
     assert any(
         wert.strukturreferenz == "discovery_ergebnisse_a_d.schwellwert_k.auswirkung"
         for wert in vereinfachungen.informationen
+    )
+
+
+def test_transformationshistorie_wird_datenauswahl_und_nicht_eingaben_zugeordnet(
+    tmp_path: Path,
+) -> None:
+    bestandteile, _ = leite_modellbestandteile_ab(_basis(tmp_path))
+    datenauswahl = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.DATENAUSWAHL
+    )
+    eingaben = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.EINGABEN
+    )
+
+    eintrag = next(
+        wert
+        for wert in datenauswahl.informationen
+        if wert.strukturreferenz == "strukturierte_ergebnisse.datenaufbereitung"
+    )
+    assert eintrag.wert["transformationshistorie"][0]["ergebnis"] == ("aktiver Zwischendatensatz T")
+    assert not any(
+        wert.strukturreferenz == "strukturierte_ergebnisse.datenaufbereitung"
+        for wert in eingaben.informationen
     )
 
 
@@ -625,7 +661,7 @@ def test_potenzielle_wartezeiten_werden_aus_a_g_uebernommen_ohne_neuberechnung(
     )
 
 
-def test_nullwartezeit_bleibt_gueltig_negative_und_fehlende_werden_ausgeschlossen(
+def test_nur_positive_wartezeit_bleibt_gueltig_null_negative_und_fehlende_entfallen(
     tmp_path: Path,
 ) -> None:
     basis = _basis(tmp_path)
@@ -676,7 +712,10 @@ def test_nullwartezeit_bleibt_gueltig_negative_und_fehlende_werden_ausgeschlosse
         for wert in datenauswahl.informationen
         if wert.strukturreferenz == "strukturierte_ergebnisse.zeitbezogene_datenauswahl"
     )
-    assert analyse["potenzielle_wartezeiten"][0]["statistik"]["median_sekunden"] == 0.0
+    assert analyse["potenzielle_wartezeiten"] == []
+    struktur = basis.a_g["strukturierte_ergebnisse"]["warteschlangen_und_wartezeiten"]
+    assert struktur["anzahl_ueberlappungen"] == 1
+    assert struktur["ausgeschlossene_nicht_auswertbare_werte"] == 2
     assert any(
         wert.bestandteil_id is ModellbestandteilId.WARTESCHLANGEN
         and "keine explizit bestätigte Warteschlange" in wert.begruendung

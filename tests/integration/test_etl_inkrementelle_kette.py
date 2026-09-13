@@ -160,6 +160,13 @@ def test_drei_planoperationen_erzeugen_vorschau_aber_erst_beim_abschluss_ein_t(
     )
     assert len(lineage["transformationsplan"]["schritte"]) == 3
     assert len(lineage["transformationshistorie"]) == 3
+    fachhistorie = service.fachliche_transformationshistorie_laden(abschluss.datensatz)
+    assert len(fachhistorie) == 3
+    assert [wert["reihenfolge"] for wert in fachhistorie] == [1, 2, 3]
+    assert fachhistorie[0]["eingang"] == "ursprüngliche Datenquelle D"
+    assert fachhistorie[-1]["ergebnis"] == "aktiver Zwischendatensatz T"
+    assert all(wert["betroffener_datensatz"] == "Zwischendatensatz T" for wert in fachhistorie)
+    assert not any("id" in schluessel.lower() for wert in fachhistorie for schluessel in wert)
 
 
 def test_schritt_entfernen_nummeriert_neu_und_persistiert_kein_t(tmp_path: Path) -> None:

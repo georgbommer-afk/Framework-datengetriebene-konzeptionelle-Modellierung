@@ -89,6 +89,10 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
 
     projekt = erstelle_projekt_service(quell_db).projekt_laden(projekt_id)
     assert projekt is not None
+    assert projekt.untersuchungsauftrag.ausgewaehlte_kpi_ids == (
+        "first_time_quality_ftq",
+        "liefertreue",
+    )
     produktion = projekt.untersuchungsauftrag.systemklassifikation.produktion
     assert produktion is not None
     assert produktion.auftragsabwicklungsstrategie == "Make-to-Order (MTO)"
@@ -140,6 +144,9 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     aggregations_id = UUID(quell_rehydriert.referenzen["aktuelle_aggregations_id"])
     _, a_g = erstelle_ergebnisaggregation_service(quell_db, quell_ws).laden(aggregations_id)
     assert a_g["kpi_konfigurationen"]
+    kpi_ergebnisse = {wert["kpi_id"]: wert for wert in a_g["kpi_ergebnisse"]}
+    assert kpi_ergebnisse["first_time_quality_ftq"]["status"] == "berechnet"
+    assert kpi_ergebnisse["liefertreue"]["status"] == "nicht_berechenbar"
     assert a_g["conformance_checking"]["durchgefuehrt"] is True
     assert a_g["strukturierte_ergebnisse"]["ressourcen"]
 
@@ -261,7 +268,7 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
         bezeichnung=importiertes_projekt.bezeichnung,
         untersuchungsauftrag=replace(
             importiertes_projekt.untersuchungsauftrag,
-            ausgewaehlte_kpi_ids=("servicegrad",),
+            ausgewaehlte_kpi_ids=("first_time_quality_ftq",),
         ),
         status=importiertes_projekt.status,
         beteiligte_personen=importiertes_projekt.beteiligte_personen,
@@ -284,7 +291,7 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
         UUID(nach_kpi_aenderung.referenzen["aktuelle_analyse_id"]),
     )
     assert vorlage is not None
-    assert [wert.kpi_id for wert in vorlage.kpi_konfigurationen] == ["servicegrad"]
+    assert [wert.kpi_id for wert in vorlage.kpi_konfigurationen] == ["first_time_quality_ftq"]
     nach_neustart = erstelle_fortschritt_service(ziel_db).laden(ziel_kontext, projekt_id)
     assert nach_neustart.schritt == 7
     assert nach_neustart.abgeschlossene_unterschritte[6:] == (0, 0, 0, 0)

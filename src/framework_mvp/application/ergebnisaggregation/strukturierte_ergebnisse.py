@@ -289,7 +289,9 @@ def analysiere_warteschlangen(
     regel = (
         "Potenzielle Wartezeit je unmittelbar aufeinanderfolgendem Ereignispaar in der "
         "kanonischen Reihenfolge E*.timestamp (Gleichstand: stabile Quellreihenfolge): "
-        "Start(B) − Ende(A). Negative Werte sind Überlappungen und werden ausgeschlossen."
+        "Start(B) − Ende(A). Nur positive Zeitdifferenzen werden als potenzielle "
+        "Wartezeiten ausgewiesen; negative Werte sind Überlappungen und Nullwerte "
+        "belegen keine Wartezeit."
     )
     erforderlich = {"case_id", "activity", "timestamp", "start_timestamp", "end_timestamp"}
     if not erforderlich <= set(event_log.columns):
@@ -338,6 +340,9 @@ def analysiere_warteschlangen(
             )
             if sekunden < 0:
                 negativ += 1
+                continue
+            if sekunden == 0:
+                nicht_auswertbar += 1
                 continue
             gruppiert.setdefault((von, zu), []).append(sekunden)
     potentiale = tuple(

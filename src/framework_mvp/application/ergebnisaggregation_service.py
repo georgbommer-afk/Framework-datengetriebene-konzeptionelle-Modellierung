@@ -1234,6 +1234,12 @@ class ErgebnisaggregationService:
         etl_abstraktionen = (
             abstraktionen_laden(basis.zwischendatensatz) if callable(abstraktionen_laden) else ()
         )
+        historie_laden = getattr(
+            self._transformationen, "fachliche_transformationshistorie_laden", None
+        )
+        transformationshistorie = (
+            historie_laden(basis.zwischendatensatz) if callable(historie_laden) else ()
+        )
         ressourcenentscheidung = vorschau.ressourcenanalyse
         sollmodell_entscheidung = SollmodellEntscheidung.KEIN_SOLLMODELL
         if vorschau.sollmodell is not None:
@@ -1279,7 +1285,7 @@ class ErgebnisaggregationService:
                 },
             },
             "ausgewaehlte_kpi_ids": list(basis.projekt.untersuchungsauftrag.ausgewaehlte_kpi_ids),
-            "kpi_definitionen_version": 1,
+            "kpi_definitionen_version": 2,
             "kpi_konfigurationsversion": 2,
             "kpi_konfigurationen": vorschau.kpi_konfigurationen,
             "kpi_ergebnisse": vorschau.kpi_ergebnisse,
@@ -1340,6 +1346,20 @@ class ErgebnisaggregationService:
             },
             "strukturierte_ergebnisse": {
                 "ergebnisversion": STRUKTURIERTE_ERGEBNISVERSION,
+                "datenaufbereitung": {
+                    "ausgang": "ursprüngliche Datenquelle D",
+                    "transformationshistorie": transformationshistorie,
+                    "aktiver_zwischendatensatz_t": {
+                        "id": str(basis.zwischendatensatz.zwischendatensatz_id),
+                        "zeilenanzahl": basis.zwischendatensatz.zeilenanzahl,
+                        "spaltenanzahl": basis.zwischendatensatz.spaltenanzahl,
+                        "sha256": basis.zwischendatensatz.sha256,
+                    },
+                    "fachliche_bedeutung": (
+                        "Alle Transformationen bilden eine geordnete Aufbereitungskette; "
+                        "fachlich gültig ist genau der aktuelle Zwischendatensatz T."
+                    ),
+                },
                 "vereinfachungen": {
                     "etl_abstraktionen": etl_abstraktionen,
                 },

@@ -15,6 +15,7 @@ from framework_mvp.application.ergebnisaggregation import (
     berechne_ausgewaehlte_kpis,
     kompatible_tabellenspalten,
     kpi_definition,
+    kpi_erlaubt_direkten_profilmittelwert,
     profilkennzahlen_fuer_operand,
     zulaessige_quellen_fuer_operand,
 )
@@ -57,6 +58,7 @@ from framework_mvp.domain.models import (
     SollmodellEntscheidung,
     Vorkommensregel,
 )
+from framework_mvp.formatierung import formatiere_messwert
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.ui.components.mathematische_formeln import (
     zeige_performance_formeln,
@@ -342,14 +344,7 @@ def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
                 if wert.kennzahltyp is Profilkennzahltyp.ARITHMETISCHES_MITTEL
             )
             if (
-                kpi_id
-                in {
-                    "mittlere_dlz_warenausgang",
-                    "mittlere_dlz_wareneingang",
-                    "mittlere_transportzeit_je_warensendung",
-                    "mittlere_reaktionszeit",
-                    "mittlere_kosten_produktionslogistik_pro_produktionsauftrag",
-                }
+                kpi_erlaubt_direkten_profilmittelwert(kpi_id)
                 and mittelwerte
                 and st.checkbox(
                     "Diese KPI entspricht exakt einem in R gespeicherten arithmetischen Mittelwert",
@@ -371,7 +366,8 @@ def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
             for operand in definition.operanden:
                 if direkte_profilkennzahl is not None:
                     break
-                st.write(f"**{operand.bezeichnung}** ({operand.operandentyp.value})")
+                st.write(f"**Erforderliche Eingangsgröße: {operand.bezeichnung}**")
+                st.caption(f"Erwarteter Datentyp: {operand.erwarteter_datentyp}")
                 quellen = [
                     wert.value for wert in zulaessige_quellen_fuer_operand(operand, kpi_basis)
                 ]
@@ -527,9 +523,12 @@ def _kpi_konfigurationen(basis: object) -> tuple[KpiKonfiguration, ...]:
                 for operand in vorschau.zugeordnete_operanden:
                     st.caption(
                         f"Rechengröße {operand.get('bezeichnung', '')}: verwendeter Wert "
-                        f"{operand.get('ermittelter_wert', '—')}"
+                        f"{formatiere_messwert(operand.get('ermittelter_wert', '—'))}"
                     )
-                st.success(f"Vorschau des KPI-Ergebnisses: {vorschau.ergebnis} {vorschau.einheit}")
+                st.success(
+                    "Vorschau des KPI-Ergebnisses: "
+                    + formatiere_messwert(vorschau.ergebnis, vorschau.einheit)
+                )
             else:
                 st.caption(
                     "Noch nicht berechenbar: " + "; ".join(vorschau.fehlende_voraussetzungen)
@@ -1444,7 +1443,7 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
     st.write("**Status der ausgewählten KPIs**")
     for wert in vorschau.kpi_ergebnisse:
         if wert.status is KpiStatus.BERECHNET:
-            st.success(f"{wert.bezeichnung}: {wert.ergebnis} {wert.einheit}")
+            st.success(f"{wert.bezeichnung}: {formatiere_messwert(wert.ergebnis, wert.einheit)}")
         else:
             st.warning(
                 f"{wert.bezeichnung}: nicht berechenbar – "
@@ -1489,7 +1488,10 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
         fall_spalten[1].metric("Konforme Fälle", conformance.konforme_faelle)
         fall_spalten[2].metric("Abweichende Fälle", conformance.abweichende_faelle)
         if conformance.fitness_plausibilisierung_pm4py is not None:
-            st.caption(f"PM4Py-Plausibilisierung: {conformance.fitness_plausibilisierung_pm4py}")
+            st.caption(
+                "PM4Py-Plausibilisierung: "
+                + formatiere_messwert(conformance.fitness_plausibilisierung_pm4py)
+            )
             if (
                 conformance.fitness is not None
                 and abs(conformance.fitness - conformance.fitness_plausibilisierung_pm4py) > 0.01
@@ -1535,7 +1537,8 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
                 "**dT · Fertigstellungsabweichung (Gl. 3.1):** "
                 f"n={wert.anzahl}, verspätet={wert.verspaetet}, "
                 f"planmäßig={wert.planmaessig}, vorzeitig={wert.vorzeitig}, "
-                f"Mittelwert={wert.mittelwert_sekunden} s, Median={wert.median_sekunden} s"
+                f"Mittelwert={formatiere_messwert(wert.mittelwert_sekunden, 's')}, "
+                f"Median={formatiere_messwert(wert.median_sekunden, 's')}"
             )
         if performance.db_statistik is not None:
             wert = performance.db_statistik
@@ -1543,7 +1546,8 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
                 "**dB · Bearbeitungszeitabweichung (Gl. 3.2):** "
                 f"n={wert.anzahl}, länger={wert.laenger_als_geplant}, "
                 f"gleich={wert.gleich_geplant}, kürzer={wert.kuerzer_als_geplant}, "
-                f"Mittelwert={wert.mittelwert_sekunden} s, Median={wert.median_sekunden} s"
+                f"Mittelwert={formatiere_messwert(wert.mittelwert_sekunden, 's')}, "
+                f"Median={formatiere_messwert(wert.median_sekunden, 's')}"
             )
         with st.expander("Einzelwerte dT und dB"):
             st.dataframe(
@@ -1644,8 +1648,10 @@ def _vorschau_anzeigen(vorschau: Aggregationsvorschau) -> None:
                             "Aktivität": wert.aktivitaet,
                             "Ressource": wert.ressource or "kein Ressourcenbezug",
                             "n": wert.statistik.anzahl,
-                            "Mittelwert (s)": wert.statistik.mittelwert_sekunden,
-                            "Median (s)": wert.statistik.median_sekunden,
+                            "Mittelwert": formatiere_messwert(
+                                wert.statistik.mittelwert_sekunden, "s"
+                            ),
+                            "Median": formatiere_messwert(wert.statistik.median_sekunden, "s"),
                         }
                         for wert in datenauswahl.bearbeitungszeiten
                     ]

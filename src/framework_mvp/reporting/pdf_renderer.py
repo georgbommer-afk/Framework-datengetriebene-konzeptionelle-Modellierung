@@ -7,6 +7,8 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 from weasyprint import HTML
 
+from framework_mvp.formatierung import formatiere_fachwert
+
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates" / "conceptual_model" / "V1"
 
 _PDF_TEMPLATE = "report_pdf.html"
@@ -30,6 +32,7 @@ def render_report_pdf(
             loader=FileSystemLoader(str(_TEMPLATE_DIR)),
             autoescape=select_autoescape(["html", "xml"]),
             undefined=StrictUndefined,
+            finalize=formatiere_fachwert,
         )
 
         template = environment.get_template(_PDF_TEMPLATE)

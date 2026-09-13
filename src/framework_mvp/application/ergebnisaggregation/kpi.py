@@ -3,7 +3,7 @@
 # ruff: noqa: E501 -- Die zentralen LaTeX-Formeln bleiben jeweils atomar lesbar.
 
 from dataclasses import asdict, dataclass
-from math import sqrt
+from math import isfinite, sqrt
 from typing import Any, cast
 
 import pandas as pd
@@ -45,22 +45,35 @@ def _operand(
 
 
 KPI_FORMELN_LATEX = {
+    "einhaltung_lagerbandbreite": r"\frac{n_{\mathrm{Tage\ innerhalb\ Bestandsgrenzen}}}{t_{\mathrm{Betrachtungszeitraum}}}\cdot 100",
     "servicegrad": r"\frac{n_{\mathrm{befriedigte\ Kundenauftragspositionen}}}{n_{\mathrm{Kundenauftragspositionen}}}\cdot 100",
     "verfuegbarkeit_planstarttermin": r"\frac{n_{\mathrm{startbare\ Produktionsauftraege}}}{n_{\mathrm{Produktionsauftraege}}}\cdot 100",
+    "bestaetigungsquote_kundenwunschtermin": r"\frac{n_{\mathrm{zum\ Kundenwunschtermin\ bestaetigte\ Kundenauftragspositionen}}}{n_{\mathrm{Kundenauftragspositionen}}}\cdot 100",
     "liefertreue": r"\frac{n_{\mathrm{liefertreue\ Produktionsauftraege}}}{n_{\mathrm{Produktionsauftraege}}}\cdot 100",
+    "liefertreue_intralogistik": r"\frac{n_{\mathrm{befriedigte\ Kundenauftragspositionen}}}{n_{\mathrm{Kundenauftragspositionen}}}\cdot 100",
+    "mittlere_durchfuehrungszeit": r"\frac{\sum_{i=1}^{n}t_{\mathrm{Durchfuehrung},i}}{n}",
     "mittlere_dlz_warenausgang": r"\frac{\sum_i DLZ_{\mathrm{Warenausgang},i}}{n_{\mathrm{Lieferscheinpositionen}}}",
+    "mittlerer_durchfuehrungszeitanteil": r"\frac{\sum_{i=1}^{n}t_{\mathrm{Durchfuehrung},i}}{\sum_{i=1}^{n}t_{\mathrm{Durchlauf},i}}\cdot 100",
     "mittlere_dlz_wareneingang": r"\frac{\sum_i DLZ_{\mathrm{Wareneingang},i}}{n_{\mathrm{Wareneingangspositionen}}}",
     "tatsaechliche_wartezeit_aqt": r"t_{\mathrm{Auftragsausfuehrung}}-t_{\mathrm{Belegung}}-t_{\mathrm{Transport}}-t_{\mathrm{Verzoegerung}}",
+    "mittlere_wartezeit_je_foerdereinheit": r"\overline{t}_{W}=\frac{\sum_{i=1}^{n}t_{W,i}}{n}",
+    "tatsaechliche_transportzeit_att": r"t_{\mathrm{Auftragsausfuehrung}}-t_{\mathrm{Belegung}}-t_{\mathrm{Wartezeit}}-t_{\mathrm{Verzoegerung}}",
     "mittlere_transportzeit_je_warensendung": r"\frac{\sum_i t_{\mathrm{Transport},i}}{n_{\mathrm{Warensendungen}}}",
     "mittlere_reaktionszeit": r"\frac{\sum_i(t_{\mathrm{erste\ Reaktion},i}-t_{\mathrm{Ausloesung},i})}{n}",
-    "standardabweichung_dlz_warenausgang": r"\sqrt{\frac{\sum_i(DLZ_i-\overline{DLZ})^2}{n_{\mathrm{Lieferscheinpositionen}}}}",
+    "standardabweichung_bearbeitungszeit": r"\sqrt{\frac{\sum_{i=1}^{n}(t_i-\overline{t})^2}{n}}",
+    "standardabweichung_dlz_warenausgang": r"\frac{\sum_{i=1}^{n}(DLZ_i-\overline{DLZ})^2}{n_{\mathrm{Lieferscheinpositionen}}}",
     "anteil_regulaer_abgeschlossener_faelle": r"\frac{n_{\mathrm{regulaer\ abgeschlossen}}}{n_{\mathrm{betrachtete\ Faelle}}}\cdot 100",
+    "first_time_quality_ftq": r"\frac{GQ}{PQF}\cdot 100",
     "lieferqualitaetstreue": r"\frac{n_{\mathrm{qualitaetsgerechte\ Wareneingangspositionen}}}{n_{\mathrm{Wareneingangspositionen}}}\cdot 100",
-    "nacharbeitsquote_rr": r"\frac{n_{\mathrm{Nacharbeiten}}}{n_{\mathrm{verarbeitete\ Menge}}}\cdot 100",
+    "nacharbeitsquote_rr": r"\frac{RQ}{PQ}\cdot 100",
+    "reklamationsquote": r"\frac{n_{\mathrm{berechtigte\ Kundenreklamationen}}}{n_{\mathrm{Lieferscheinpositionen}}}\cdot 100",
     "nutzungseffizienz_ue": r"\frac{t_{\mathrm{Produktionszeit}}}{t_{\mathrm{Auslastung\ der\ Einheit}}}\cdot 100",
+    "kommissionierauftragspositionen_pro_mitarbeiterstunde": r"\frac{n_{\mathrm{Kommissionierauftragspositionen}}}{t_{\mathrm{Mitarbeiterstunden\ Distribution}}}",
     "ruestzeitanteil": r"\frac{\sum_i t_{\mathrm{Ruest},i}}{\sum_i t_{\mathrm{Durchfuehrung},i}}\cdot 100",
+    "setupzeit_je_kommissionierliste": r"t_{Sep}=t_{Se}\quad\forall p=1,\ldots,P",
     "bewertete_umschlagshaeufigkeit": r"\frac{A_{\mathrm{Untersuchungsobjekt}}}{\overline{B}_{\mathrm{Zugang}}+\overline{B}_{\mathrm{Umlauf}}}",
     "mittlere_kosten_produktionslogistik_pro_produktionsauftrag": r"\frac{K_{\mathrm{Produktionslogistik}}}{n_{\mathrm{Produktionsauftraege}}}",
+    "mittlere_kosten_distributionstaetigkeiten_je_kommissionierauftragsposition": r"\frac{K_{\mathrm{Distributionstaetigkeiten}}}{n_{\mathrm{Kommissionierauftragspositionen}}}",
 }
 
 
@@ -73,6 +86,7 @@ def _definition(
     bezugsmenge: str,
     *,
     einheit_eingeben: bool = False,
+    definitionsversion: int = 1,
 ) -> KpiDefinition:
     return KpiDefinition(
         kpi_id,
@@ -83,11 +97,31 @@ def _definition(
         einheit,
         einheit_eingeben,
         bezugsmenge,
+        definitionsversion=definitionsversion,
         formel_latex=KPI_FORMELN_LATEX[kpi_id],
     )
 
 
 KPI_DEFINITIONEN: dict[str, KpiDefinition] = {
+    "einhaltung_lagerbandbreite": _definition(
+        "einhaltung_lagerbandbreite",
+        "Einhaltung Lagerbandbreite",
+        "Anzahl Tage innerhalb Bestandsgrenzen / Betrachtungszeitraum · 100",
+        (
+            _operand(
+                "tage_innerhalb_bestandsgrenzen",
+                "Tage innerhalb der Bestandsgrenzen",
+                Operandentyp.ANZAHL,
+            ),
+            _operand(
+                "betrachtungszeitraum_tage",
+                "Tage im Betrachtungszeitraum",
+                Operandentyp.ANZAHL,
+            ),
+        ),
+        "%",
+        "Betrachtungszeitraum in Tagen",
+    ),
     "servicegrad": _definition(
         "servicegrad",
         "Servicegrad",
@@ -118,6 +152,22 @@ KPI_DEFINITIONEN: dict[str, KpiDefinition] = {
         "%",
         "Produktionsaufträge",
     ),
+    "bestaetigungsquote_kundenwunschtermin": _definition(
+        "bestaetigungsquote_kundenwunschtermin",
+        "Bestätigungsquote Kundenwunschtermin",
+        "Anzahl zum Kundenwunschtermin bestätigter Kundenauftragspositionen / "
+        "Anzahl Kundenauftragspositionen · 100",
+        (
+            _operand(
+                "bestaetigte_kundenauftragspositionen",
+                "zum Kundenwunschtermin bestätigte Kundenauftragspositionen",
+                Operandentyp.ANZAHL,
+            ),
+            _operand("kundenauftragspositionen", "Kundenauftragspositionen", Operandentyp.ANZAHL),
+        ),
+        "%",
+        "Kundenauftragspositionen",
+    ),
     "liefertreue": _definition(
         "liefertreue",
         "Liefertreue",
@@ -133,6 +183,37 @@ KPI_DEFINITIONEN: dict[str, KpiDefinition] = {
         "%",
         "Produktionsaufträge",
     ),
+    "liefertreue_intralogistik": _definition(
+        "liefertreue_intralogistik",
+        "Liefertreue",
+        "Anzahl befriedigter Kundenauftragspositionen / Anzahl Kundenauftragspositionen · 100",
+        (
+            _operand(
+                "befriedigte_kundenauftragspositionen",
+                "befriedigte Kundenauftragspositionen",
+                Operandentyp.ANZAHL,
+            ),
+            _operand("kundenauftragspositionen", "Kundenauftragspositionen", Operandentyp.ANZAHL),
+        ),
+        "%",
+        "Kundenauftragspositionen",
+    ),
+    "mittlere_durchfuehrungszeit": _definition(
+        "mittlere_durchfuehrungszeit",
+        "Mittlere Durchführungszeit",
+        "Σ Durchführungszeit_i / n",
+        (
+            _operand(
+                "summe_durchfuehrungszeiten",
+                "Summe der Durchführungszeiten",
+                Operandentyp.SUMME,
+            ),
+            _operand("produktionsauftraege", "Produktionsaufträge n", Operandentyp.ANZAHL),
+        ),
+        "fachlich festzulegen",
+        "Produktionsaufträge n",
+        einheit_eingeben=True,
+    ),
     "mittlere_dlz_warenausgang": _definition(
         "mittlere_dlz_warenausgang",
         "Mittlere DLZ Warenausgang",
@@ -144,6 +225,25 @@ KPI_DEFINITIONEN: dict[str, KpiDefinition] = {
         "fachlich festzulegen",
         "Lieferscheinpositionen",
         einheit_eingeben=True,
+    ),
+    "mittlerer_durchfuehrungszeitanteil": _definition(
+        "mittlerer_durchfuehrungszeitanteil",
+        "Mittlerer Durchführungszeitanteil",
+        "Σ Durchführungszeit_i / Σ Durchlaufzeit_i · 100",
+        (
+            _operand(
+                "summe_durchfuehrungszeiten",
+                "Summe der Durchführungszeiten",
+                Operandentyp.SUMME,
+            ),
+            _operand(
+                "summe_durchlaufzeiten",
+                "Summe der Durchlaufzeiten",
+                Operandentyp.SUMME,
+            ),
+        ),
+        "%",
+        "Produktionsaufträge n",
     ),
     "mittlere_dlz_wareneingang": _definition(
         "mittlere_dlz_wareneingang",
@@ -175,6 +275,46 @@ KPI_DEFINITIONEN: dict[str, KpiDefinition] = {
                 Operandentyp.MITTELWERT,
             ),
             _operand("transportzeit", "tatsächliche Transportzeit", Operandentyp.MITTELWERT),
+            _operand(
+                "verzoegerungszeit_arbeitseinheit",
+                "tatsächliche Verzögerungszeit der Arbeitseinheit",
+                Operandentyp.MITTELWERT,
+            ),
+        ),
+        "fachlich festzulegen",
+        "betrachtete Auftragsausführungen",
+        einheit_eingeben=True,
+    ),
+    "mittlere_wartezeit_je_foerdereinheit": _definition(
+        "mittlere_wartezeit_je_foerdereinheit",
+        "Mittlere Wartezeit je Fördereinheit",
+        "Σ Wartezeit_i / Anzahl Fördereinheiten n",
+        (
+            _operand("summe_wartezeiten", "Summe der Wartezeiten", Operandentyp.SUMME),
+            _operand("foerdereinheiten", "Fördereinheiten n", Operandentyp.ANZAHL),
+        ),
+        "fachlich festzulegen",
+        "Fördereinheiten n",
+        einheit_eingeben=True,
+    ),
+    "tatsaechliche_transportzeit_att": _definition(
+        "tatsaechliche_transportzeit_att",
+        "Tatsächliche (tats.) Transportzeit (ATT)",
+        "tatsächliche Auftragsausführungszeit − tatsächliche Belegungszeit der "
+        "Arbeitseinheit − tatsächliche Wartezeit − tatsächliche Verzögerungszeit "
+        "der Arbeitseinheit",
+        (
+            _operand(
+                "auftragsausfuehrungszeit",
+                "tatsächliche Auftragsausführungszeit",
+                Operandentyp.MITTELWERT,
+            ),
+            _operand(
+                "belegungszeit_arbeitseinheit",
+                "tatsächliche Belegungszeit der Arbeitseinheit",
+                Operandentyp.MITTELWERT,
+            ),
+            _operand("wartezeit", "tatsächliche Wartezeit", Operandentyp.MITTELWERT),
             _operand(
                 "verzoegerungszeit_arbeitseinheit",
                 "tatsächliche Verzögerungszeit der Arbeitseinheit",
@@ -218,7 +358,7 @@ KPI_DEFINITIONEN: dict[str, KpiDefinition] = {
     "standardabweichung_dlz_warenausgang": _definition(
         "standardabweichung_dlz_warenausgang",
         "Standardabweichung DLZ Warenausgang",
-        "√(Σ (DLZ_i − Mittlere DLZ)² / Anzahl Lieferscheinpositionen)",
+        "Σ (DLZ_i − Mittlere DLZ)² / Anzahl Lieferscheinpositionen",
         (
             _operand(
                 "dlz_warenausgang_werte",
@@ -229,6 +369,23 @@ KPI_DEFINITIONEN: dict[str, KpiDefinition] = {
         ),
         "fachlich festzulegen",
         "Lieferscheinpositionen",
+        einheit_eingeben=True,
+        definitionsversion=2,
+    ),
+    "standardabweichung_bearbeitungszeit": _definition(
+        "standardabweichung_bearbeitungszeit",
+        "Standardabweichung der Bearbeitungszeit",
+        "√(Σ (Bearbeitungszeit_i − mittlere Bearbeitungszeit)² / n)",
+        (
+            _operand(
+                "bearbeitungszeit_werte",
+                "Bearbeitungszeiten t_i",
+                Operandentyp.MESSWERTE,
+                quellen=_TABELLEN_QUELLEN,
+            ),
+        ),
+        "fachlich festzulegen",
+        "Bearbeitungszeiten n",
         einheit_eingeben=True,
     ),
     "anteil_regulaer_abgeschlossener_faelle": _definition(
@@ -261,16 +418,47 @@ KPI_DEFINITIONEN: dict[str, KpiDefinition] = {
         "%",
         "Wareneingangspositionen",
     ),
+    "first_time_quality_ftq": _definition(
+        "first_time_quality_ftq",
+        "First Time Quality (FTQ)",
+        "Gutmenge GQ / produzierte Fertigungsmenge PQF · 100",
+        (
+            _operand("gutmenge_gq", "Gutmenge (GQ)", Operandentyp.SUMME),
+            _operand(
+                "produzierte_fertigungsmenge_pqf",
+                "produzierte Fertigungsmenge (PQF)",
+                Operandentyp.SUMME,
+            ),
+        ),
+        "%",
+        "produzierte Fertigungsmenge (PQF)",
+    ),
     "nacharbeitsquote_rr": _definition(
         "nacharbeitsquote_rr",
         "Nacharbeitsquote (RR)",
-        "Anzahl Nacharbeiten / Anzahl verarbeitete Menge · 100",
+        "Nacharbeitsmenge RQ / Produktionsmenge PQ · 100",
         (
-            _operand("nacharbeiten", "Nacharbeiten", Operandentyp.ANZAHL),
-            _operand("verarbeitete_menge", "verarbeitete Menge", Operandentyp.SUMME),
+            _operand("nacharbeiten", "Nacharbeitsmenge (RQ)", Operandentyp.SUMME),
+            _operand("verarbeitete_menge", "Produktionsmenge (PQ)", Operandentyp.SUMME),
         ),
         "%",
-        "verarbeitete Menge",
+        "Produktionsmenge (PQ)",
+        definitionsversion=2,
+    ),
+    "reklamationsquote": _definition(
+        "reklamationsquote",
+        "Reklamationsquote",
+        "Anzahl berechtigter Kundenreklamationen / Anzahl Lieferscheinpositionen · 100",
+        (
+            _operand(
+                "berechtigte_kundenreklamationen",
+                "berechtigte Kundenreklamationen",
+                Operandentyp.ANZAHL,
+            ),
+            _operand("lieferscheinpositionen", "Lieferscheinpositionen", Operandentyp.ANZAHL),
+        ),
+        "%",
+        "Lieferscheinpositionen",
     ),
     "nutzungseffizienz_ue": _definition(
         "nutzungseffizienz_ue",
@@ -285,6 +473,25 @@ KPI_DEFINITIONEN: dict[str, KpiDefinition] = {
         "%",
         "betrachtete Einheit",
     ),
+    "kommissionierauftragspositionen_pro_mitarbeiterstunde": _definition(
+        "kommissionierauftragspositionen_pro_mitarbeiterstunde",
+        "Kommissionierauftragspositionen pro Mitarbeiterstunde",
+        "Anzahl Kommissionierauftragspositionen / Mitarbeiterstunden Distribution",
+        (
+            _operand(
+                "kommissionierauftragspositionen",
+                "Kommissionierauftragspositionen",
+                Operandentyp.ANZAHL,
+            ),
+            _operand(
+                "mitarbeiterstunden_distribution",
+                "Mitarbeiterstunden Distribution",
+                Operandentyp.SUMME,
+            ),
+        ),
+        "1/h",
+        "Mitarbeiterstunden Distribution",
+    ),
     "ruestzeitanteil": _definition(
         "ruestzeitanteil",
         "Rüstzeitanteil",
@@ -295,6 +502,22 @@ KPI_DEFINITIONEN: dict[str, KpiDefinition] = {
         ),
         "%",
         "Produktionsaufträge n",
+    ),
+    "setupzeit_je_kommissionierliste": _definition(
+        "setupzeit_je_kommissionierliste",
+        "Setupzeit je Kommissionierliste",
+        "Setupzeit t_Se für jede Kommissionierliste p = 1, …, P",
+        (
+            _operand(
+                "setupzeit_kommissionierliste",
+                "für alle Kommissionierlisten gleiche Setupzeit t_Se",
+                Operandentyp.EINDEUTIGER_WERT,
+                quellen=_TABELLEN_QUELLEN,
+            ),
+        ),
+        "fachlich festzulegen",
+        "Kommissionierliste p",
+        einheit_eingeben=True,
     ),
     "bewertete_umschlagshaeufigkeit": _definition(
         "bewertete_umschlagshaeufigkeit",
@@ -325,15 +548,42 @@ KPI_DEFINITIONEN: dict[str, KpiDefinition] = {
         "EUR",
         "Produktionsaufträge",
     ),
+    "mittlere_kosten_distributionstaetigkeiten_je_kommissionierauftragsposition": _definition(
+        "mittlere_kosten_distributionstaetigkeiten_je_kommissionierauftragsposition",
+        "Mittlere Kosten Distributionstätigkeiten je Kommissionierauftragsposition",
+        "Kosten Distributionstätigkeiten / Anzahl Kommissionierauftragspositionen",
+        (
+            _operand(
+                "kosten_distributionstaetigkeiten",
+                "Kosten Distributionstätigkeiten",
+                Operandentyp.SUMME,
+            ),
+            _operand(
+                "kommissionierauftragspositionen",
+                "Kommissionierauftragspositionen",
+                Operandentyp.ANZAHL,
+            ),
+        ),
+        "EUR",
+        "Kommissionierauftragspositionen",
+    ),
 }
 
 _DIREKT_AUS_R_UEBERNEHMBARE_MITTELWERTE = {
+    "mittlere_durchfuehrungszeit",
     "mittlere_dlz_warenausgang",
     "mittlere_dlz_wareneingang",
+    "mittlere_wartezeit_je_foerdereinheit",
     "mittlere_transportzeit_je_warensendung",
     "mittlere_reaktionszeit",
     "mittlere_kosten_produktionslogistik_pro_produktionsauftrag",
+    "mittlere_kosten_distributionstaetigkeiten_je_kommissionierauftragsposition",
 }
+
+
+def kpi_erlaubt_direkten_profilmittelwert(kpi_id: str) -> bool:
+    """Kennzeichnet Formeln, deren Ergebnis exakt ein bestätigter Mittelwert aus R sein kann."""
+    return kpi_id in _DIREKT_AUS_R_UEBERNEHMBARE_MITTELWERTE
 
 
 @dataclass(frozen=True, slots=True)
@@ -371,6 +621,7 @@ _KOMPATIBLE_PROFILKENNZAHLEN: dict[Operandentyp, frozenset[Profilkennzahltyp]] =
     Operandentyp.MITTELWERT: frozenset({Profilkennzahltyp.ARITHMETISCHES_MITTEL}),
     Operandentyp.MESSWERTE: frozenset(),
     Operandentyp.ZEITDIFFERENZ_SUMME: frozenset({Profilkennzahltyp.ZEITDIFFERENZ_SUMME}),
+    Operandentyp.EINDEUTIGER_WERT: frozenset(),
 }
 
 
@@ -449,13 +700,15 @@ def zulaessige_quellen_fuer_operand(
 
 
 def kpi_definition(kpi_id: str) -> KpiDefinition:
-    """Liefert ausschließlich eine der 16 festen Definitionen."""
+    """Liefert ausschließlich eine Definition der systemspezifischen KPI-Matrix."""
     if kpi_id not in KPI_DEFINITIONEN:
         raise KeyError(f"Die KPI-ID {kpi_id} ist nicht in A.7 bis A.10 definiert.")
     return KPI_DEFINITIONEN[kpi_id]
 
 
 def _dividiere(zaehler: float, nenner: float, faktor: float = 1.0) -> float:
+    if not isfinite(zaehler) or not isfinite(nenner):
+        raise ValueError("Die fachlichen Rechengrößen müssen endliche Zahlen sein.")
     if nenner == 0:
         raise ZeroDivisionError("Die fachliche Bezugsmenge im Nenner ist null.")
     return zaehler / nenner * faktor
@@ -464,12 +717,18 @@ def _dividiere(zaehler: float, nenner: float, faktor: float = 1.0) -> float:
 def berechne_kpi_formel(kpi_id: str, operanden: dict[str, Any]) -> tuple[float, str]:
     """Berechnet die mathematische Bedeutung der festen Tabellenformel unverändert."""
     if kpi_id in {
+        "einhaltung_lagerbandbreite",
         "servicegrad",
         "verfuegbarkeit_planstarttermin",
+        "bestaetigungsquote_kundenwunschtermin",
         "liefertreue",
+        "liefertreue_intralogistik",
+        "mittlerer_durchfuehrungszeitanteil",
         "anteil_regulaer_abgeschlossener_faelle",
+        "first_time_quality_ftq",
         "lieferqualitaetstreue",
         "nacharbeitsquote_rr",
+        "reklamationsquote",
         "nutzungseffizienz_ue",
         "ruestzeitanteil",
     }:
@@ -477,11 +736,15 @@ def berechne_kpi_formel(kpi_id: str, operanden: dict[str, Any]) -> tuple[float, 
         ids = [operand.operand_id for operand in definition.operanden]
         ergebnis = _dividiere(float(operanden[ids[0]]), float(operanden[ids[1]]), 100.0)
     elif kpi_id in {
+        "mittlere_durchfuehrungszeit",
         "mittlere_dlz_warenausgang",
         "mittlere_dlz_wareneingang",
+        "mittlere_wartezeit_je_foerdereinheit",
         "mittlere_transportzeit_je_warensendung",
         "mittlere_reaktionszeit",
+        "kommissionierauftragspositionen_pro_mitarbeiterstunde",
         "mittlere_kosten_produktionslogistik_pro_produktionsauftrag",
+        "mittlere_kosten_distributionstaetigkeiten_je_kommissionierauftragsposition",
     }:
         definition = kpi_definition(kpi_id)
         ids = [operand.operand_id for operand in definition.operanden]
@@ -493,12 +756,38 @@ def berechne_kpi_formel(kpi_id: str, operanden: dict[str, Any]) -> tuple[float, 
             - float(operanden["transportzeit"])
             - float(operanden["verzoegerungszeit_arbeitseinheit"])
         )
-    elif kpi_id == "standardabweichung_dlz_warenausgang":
-        werte = tuple(float(wert) for wert in operanden["dlz_warenausgang_werte"])
+    elif kpi_id == "tatsaechliche_transportzeit_att":
+        ergebnis = (
+            float(operanden["auftragsausfuehrungszeit"])
+            - float(operanden["belegungszeit_arbeitseinheit"])
+            - float(operanden["wartezeit"])
+            - float(operanden["verzoegerungszeit_arbeitseinheit"])
+        )
+    elif kpi_id in {
+        "standardabweichung_bearbeitungszeit",
+        "standardabweichung_dlz_warenausgang",
+    }:
+        operand_id = (
+            "bearbeitungszeit_werte"
+            if kpi_id == "standardabweichung_bearbeitungszeit"
+            else "dlz_warenausgang_werte"
+        )
+        werte = tuple(float(wert) for wert in operanden[operand_id])
         if not werte:
-            raise ZeroDivisionError("Es liegen keine gültigen DLZ-Werte vor.")
+            raise ZeroDivisionError("Es liegen keine gültigen Messwerte vor.")
+        if not all(isfinite(wert) for wert in werte):
+            raise ValueError("Die fachlichen Messwerte müssen endliche Zahlen sein.")
         mittelwert = sum(werte) / len(werte)
-        ergebnis = sqrt(sum((wert - mittelwert) ** 2 for wert in werte) / len(werte))
+        mittlere_quadratische_abweichung = sum((wert - mittelwert) ** 2 for wert in werte) / len(
+            werte
+        )
+        ergebnis = (
+            sqrt(mittlere_quadratische_abweichung)
+            if kpi_id == "standardabweichung_bearbeitungszeit"
+            else mittlere_quadratische_abweichung
+        )
+    elif kpi_id == "setupzeit_je_kommissionierliste":
+        ergebnis = float(operanden["setupzeit_kommissionierliste"])
     elif kpi_id == "bewertete_umschlagshaeufigkeit":
         ergebnis = _dividiere(
             float(operanden["abgang_untersuchungsobjekt"]),
@@ -508,6 +797,8 @@ def berechne_kpi_formel(kpi_id: str, operanden: dict[str, Any]) -> tuple[float, 
     else:
         kpi_definition(kpi_id)
         raise AssertionError("Für die definierte KPI-ID fehlt die feste Rechenregel.")
+    if not isfinite(ergebnis):
+        raise ValueError("Das KPI-Ergebnis ist keine endliche Zahl.")
     return ergebnis, kpi_definition(kpi_id).formel
 
 
@@ -523,8 +814,11 @@ def _numerische_serie(daten: pd.DataFrame, spalte: str) -> tuple[pd.Series, int]
     if not spalte or spalte not in daten.columns:
         raise ValueError(f"Die zugeordnete Spalte '{spalte}' ist nicht vorhanden.")
     original = cast("pd.Series", daten[spalte])
-    numerisch = pd.to_numeric(original, errors="coerce")
-    gueltig = cast("pd.Series", numerisch.dropna())
+    numerisch = cast("pd.Series", pd.to_numeric(original, errors="coerce"))
+    endlich = cast(
+        "pd.Series", numerisch.map(lambda wert: pd.notna(wert) and isfinite(float(wert)))
+    )
+    gueltig = cast("pd.Series", numerisch.where(endlich).dropna())
     return gueltig, int(len(original) - len(gueltig))
 
 
@@ -639,11 +933,25 @@ def _operand_ermitteln(
                 vergleich = ~vergleich
             gueltig &= vergleich
         wert = float(gueltig.sum())
-    elif definition.operandentyp in {Operandentyp.SUMME, Operandentyp.MITTELWERT}:
+    elif definition.operandentyp in {
+        Operandentyp.SUMME,
+        Operandentyp.MITTELWERT,
+        Operandentyp.EINDEUTIGER_WERT,
+    }:
         serie, ausgeschlossen = _numerische_serie(daten, zuordnung.spalte)
         if serie.empty:
             raise ValueError("Die zugeordnete Spalte enthält keine gültigen numerischen Werte.")
-        wert = float(serie.sum() if definition.operandentyp is Operandentyp.SUMME else serie.mean())
+        if definition.operandentyp is Operandentyp.SUMME:
+            wert = float(serie.sum())
+        elif definition.operandentyp is Operandentyp.MITTELWERT:
+            wert = float(serie.mean())
+        else:
+            eindeutige_werte = tuple(float(eintrag) for eintrag in serie.unique())
+            if len(eindeutige_werte) != 1:
+                raise ValueError(
+                    "Die Setupzeit ist nicht für alle betrachteten Kommissionierlisten gleich."
+                )
+            wert = eindeutige_werte[0]
     elif definition.operandentyp is Operandentyp.MESSWERTE:
         serie, ausgeschlossen = _numerische_serie(daten, zuordnung.spalte)
         if serie.empty:
@@ -712,6 +1020,7 @@ def _nicht_berechenbar(
         {},
         None,
         tuple(gruende),
+        definitionsversion=definition.definitionsversion,
     )
 
 
@@ -740,7 +1049,7 @@ def berechne_ausgewaehlte_kpis(
                 _nicht_berechenbar(
                     definition,
                     konfiguration,
-                    ["Die fachlich erforderliche Zeiteinheit wurde nicht angegeben."],
+                    ["Die fachlich erforderliche Einheit wurde nicht angegeben."],
                 )
             )
             continue
@@ -780,6 +1089,15 @@ def berechne_ausgewaehlte_kpis(
                 if strukturierte_referenz is not None
                 else basis.profilwerte[referenz]
             )
+            if not isfinite(wert):
+                ergebnisse.append(
+                    _nicht_berechenbar(
+                        definition,
+                        konfiguration,
+                        ["Die direkt gewählte Profilkennzahl ist keine endliche Zahl."],
+                    )
+                )
+                continue
             profilreferenz = (
                 strukturierte_referenz.referenz_id
                 if strukturierte_referenz is not None
@@ -828,6 +1146,7 @@ def berechne_ausgewaehlte_kpis(
                     "ausdrücklicher fachlicher Bestätigung direkt übernommen.",
                     {"profilmittelwert": wert},
                     wert,
+                    definitionsversion=definition.definitionsversion,
                 )
             )
             continue
@@ -924,6 +1243,7 @@ def berechne_ausgewaehlte_kpis(
                 f"Feste Formel angewandt: {formel}",
                 werte,
                 ergebnis,
+                definitionsversion=definition.definitionsversion,
             )
         )
     return tuple(ergebnisse)

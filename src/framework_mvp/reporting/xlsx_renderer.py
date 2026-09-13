@@ -16,6 +16,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from framework_mvp.formatierung import formatiere_fachwert
 from framework_mvp.reporting.report_data import REPORT_DATA_VERSION
 
 LOGGER = logging.getLogger(__name__)
@@ -82,7 +83,7 @@ def _anzeige(wert: Any) -> str:
         if not wert:
             return "Nicht im finalen Modell ausgewiesen"
         return "\n".join(f"• {_anzeige(inhalt)}" for inhalt in wert)
-    return str(wert)
+    return str(formatiere_fachwert(wert))
 
 
 def _kurz(wert: Any, laenge: int = 240) -> str:
@@ -753,6 +754,34 @@ def _daten(ws: Worksheet, report: Mapping[str, Any]) -> None:
             ("Event Log", daten.get("event_log")),
         ),
     )
+    aufbereitung = _mapping(daten.get("datenaufbereitung"))
+    transformationshistorie = [
+        dict(wert)
+        for wert in _liste(aufbereitung.get("transformationshistorie"))
+        if isinstance(wert, Mapping)
+    ]
+    if aufbereitung:
+        zeile += 1
+        zeile = _abschnitt(ws, zeile, "Transformationshistorie D → aktiver Datensatz T")
+        zeile = _paare(
+            ws,
+            zeile,
+            (("Fachliche Bedeutung", aufbereitung.get("fachliche_bedeutung")),),
+        )
+        zeile = _tabelle(
+            ws,
+            zeile,
+            (
+                ("Reihenfolge", "reihenfolge"),
+                ("Transformationsart", "transformationsart"),
+                ("Spalten", "betroffene_spalten"),
+                ("Regel", "regel"),
+                ("Ersatz-/Abstraktionswert", "ersatz_oder_abstraktionswert"),
+                ("Wirkung", "wirkung"),
+                ("Ergebnis", "ergebnis"),
+            ),
+            transformationshistorie,
+        )
     zeile += 1
     zeile = _abschnitt(ws, zeile, "Datenprofile")
     zeile = _tabelle(

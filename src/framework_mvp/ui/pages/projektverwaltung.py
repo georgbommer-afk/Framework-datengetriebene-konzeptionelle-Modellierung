@@ -713,7 +713,7 @@ def _schritt_auswertungen(daten: dict[str, Any]) -> None:
         "Die Auswahl beschreibt den Analysebedarf. Ob eine Kennzahl berechnet werden "
         "kann, wird später anhand der verfügbaren Ereignisdaten geprüft."
     )
-    kandidaten = leite_kpi_kandidaten_ab(tuple(daten["zielgroessen"]))
+    kandidaten = leite_kpi_kandidaten_ab(tuple(daten["zielgroessen"]), daten["systemtyp"])
     gueltige_ids = {kandidat.kpi_id for kandidat in kandidaten}
     gewaehlt = set(daten["kpis"]) & gueltige_ids
     kopf = st.columns((3, 3, 3, 1))
@@ -858,7 +858,10 @@ def _schritt_auftrag(daten: dict[str, Any]) -> None:
     ]
     if individuelle_zwecke:
         st.markdown("**Individueller Untersuchungszweck:** " + ", ".join(individuelle_zwecke))
-    kandidaten = {k.zielgroesse: k for k in leite_kpi_kandidaten_ab(tuple(daten["zielgroessen"]))}
+    kandidaten = {
+        k.zielgroesse: k
+        for k in leite_kpi_kandidaten_ab(tuple(daten["zielgroessen"]), daten["systemtyp"])
+    }
     ausgewaehlte_kpis = set(daten["kpis"])
     if daten["zielgroessen"]:
         st.markdown("**Ausgewählte logistische Zielgrößen und KPI-Kandidaten:**")

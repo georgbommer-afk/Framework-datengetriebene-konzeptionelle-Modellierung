@@ -103,6 +103,7 @@ class _Transformationen:
         self.profil = profil
         self.raw_sha256 = raw_sha256
         self.abstraktionen: tuple[dict[str, object], ...] = ()
+        self.fachhistorie: tuple[dict[str, object], ...] = ()
 
     def zwischendatensatz_laden(self, datensatz_id: UUID):  # type: ignore[no-untyped-def]
         assert datensatz_id == self.datensatz.zwischendatensatz_id
@@ -121,6 +122,10 @@ class _Transformationen:
     def regelbasierte_abstraktionen_laden(self, datensatz):  # type: ignore[no-untyped-def]
         assert datensatz == self.datensatz
         return self.abstraktionen
+
+    def fachliche_transformationshistorie_laden(self, datensatz):  # type: ignore[no-untyped-def]
+        assert datensatz == self.datensatz
+        return self.fachhistorie
 
 
 class _ProcessMining:
@@ -344,6 +349,18 @@ def test_a_g_ohne_optionale_bestandteile_ist_idempotent_und_uebergabefaehig(tmp_
             "originalwerte_erhalten": True,
         },
     )
+    service._transformationen.fachhistorie = (  # type: ignore[attr-defined]
+        {
+            "reihenfolge": 1,
+            "transformationsart": "Werte regelbasiert abstrahieren",
+            "betroffene_spalten": ["Von"],
+            "regel": {"vergleichsart": "Beginnt mit", "suchwert": "HRL-04"},
+            "ersatz_oder_abstraktionswert": "HRL-04",
+            "eingang": "ursprüngliche Datenquelle D",
+            "ergebnis": "aktiver Zwischendatensatz T",
+            "wirkung": "185 Werte regelbasiert abstrahiert",
+        },
+    )
     t_vorher, e_vorher = tabelle.copy(deep=True), event_log.copy(deep=True)
     config = KpiKonfiguration(
         "servicegrad",
@@ -401,6 +418,9 @@ def test_a_g_ohne_optionale_bestandteile_ist_idempotent_und_uebergabefaehig(tmp_
             "originalwerte_erhalten": True,
         }
     ]
+    assert a_g["strukturierte_ergebnisse"]["datenaufbereitung"]["transformationshistorie"] == list(
+        cast(Any, service._transformationen).fachhistorie
+    )
     assert a_g["conformance_checking"] == {
         "sollprozess_vorhanden": False,
         "durchgefuehrt": False,
@@ -498,7 +518,7 @@ def test_r_indikator_wird_auch_als_summe_operand_e2e_persistiert(tmp_path) -> No
             OperandZuordnung(
                 "nacharbeiten",
                 Datenartefakt.ZWISCHENDATENSATZ_T,
-                spalte="position",
+                spalte="wert",
             ),
             OperandZuordnung(
                 "verarbeitete_menge",
@@ -518,8 +538,8 @@ def test_r_indikator_wird_auch_als_summe_operand_e2e_persistiert(tmp_path) -> No
     )
     ergebnis = vorschau.kpi_ergebnisse[0]
     assert ergebnis.status is KpiStatus.BERECHNET
-    assert ergebnis.zwischensummen == {"nacharbeiten": 3.0, "verarbeitete_menge": 2.0}
-    assert ergebnis.ergebnis == pytest.approx(150)
+    assert ergebnis.zwischensummen == {"nacharbeiten": 6.0, "verarbeitete_menge": 2.0}
+    assert ergebnis.ergebnis == pytest.approx(300)
     assert ergebnis.zugeordnete_operanden[1]["wert_aus_gespeichertem_r_uebernommen"] is True
 
     aggregation = service.speichern(uuid4(), vorschau, menschlich_bestaetigt=True)
