@@ -10,6 +10,7 @@ import pandas as pd
 
 from framework_mvp.domain.models import (
     Datenartefakt,
+    KpiBehandlungsart,
     KpiDefinition,
     KpiErgebnis,
     KpiKonfiguration,
@@ -1024,6 +1025,32 @@ def _nicht_berechenbar(
     )
 
 
+def _spaeter_manuell_berechnen(
+    definition: KpiDefinition,
+    konfiguration: KpiKonfiguration,
+) -> KpiErgebnis:
+    """Dokumentiert eine geplante Ausgabe ohne Operandenzuordnung oder erfundenen Wert."""
+    return KpiErgebnis(
+        definition.kpi_id,
+        definition.bezeichnung,
+        KpiStatus.FUER_SPAETERE_MANUELLE_BERECHNUNG,
+        definition.formel,
+        (),
+        (),
+        (),
+        konfiguration.bezugsmenge or definition.bezugsmenge,
+        konfiguration.einheit or definition.einheit,
+        0,
+        "Formel wird in das konzeptionelle Modell übernommen; keine numerische "
+        "Berechnung in Schritt 7.",
+        {},
+        None,
+        (),
+        definitionsversion=definition.definitionsversion,
+        behandlungsart=KpiBehandlungsart.SPAETER_MANUELL_BERECHNEN,
+    )
+
+
 def berechne_ausgewaehlte_kpis(
     ausgewaehlte_kpi_ids: tuple[str, ...],
     konfigurationen: tuple[KpiKonfiguration, ...],
@@ -1043,6 +1070,9 @@ def berechne_ausgewaehlte_kpis(
                     ["Für die ausgewählte Kennzahl wurden keine Operanden zugeordnet."],
                 )
             )
+            continue
+        if konfiguration.behandlungsart is KpiBehandlungsart.SPAETER_MANUELL_BERECHNEN:
+            ergebnisse.append(_spaeter_manuell_berechnen(definition, konfiguration))
             continue
         if definition.einheiteneingabe_erforderlich and not konfiguration.einheit.strip():
             ergebnisse.append(

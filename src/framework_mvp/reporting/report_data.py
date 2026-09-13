@@ -53,6 +53,9 @@ _ANZEIGETEXTE = {
     "offen": "Offen",
     "nicht_berechenbar": "Nicht berechenbar",
     "berechnet": "Berechnet",
+    "fuer_spaetere_manuelle_berechnung_vorgesehen": ("Für spätere manuelle Berechnung vorgesehen"),
+    "automatisch_berechnen": "Aus den Daten berechnen",
+    "spaeter_manuell_berechnen": "Später manuell berechnen",
     "qualitaet_erhoehen": "Qualität erhöhen",
     "petrinetz": "Petrinetz",
     "prozessbaum": "Prozessbaum",
@@ -409,6 +412,9 @@ def _kpi_aufbereiten(wert: Any) -> dict[str, Any]:
         "zwischensummen": _normalisieren(wert.get("zwischensummen", {})),
         "ausgeschlossene_werte": _normalisieren(wert.get("ausgeschlossene_werte")),
         "quellenreferenzen": _normalisieren(wert.get("quellenreferenzen", [])),
+        "definitionsversion": _normalisieren(wert.get("definitionsversion")),
+        "behandlungsart": _normalisieren(wert.get("behandlungsart")),
+        "behandlungsart_anzeige": _anzeigetext(wert.get("behandlungsart")),
     }
 
 
@@ -681,6 +687,34 @@ def build_report_data(
     )
     if not isinstance(zeitbezogene_datenauswahl, Mapping):
         zeitbezogene_datenauswahl = {}
+    conformance_ausgabe = _info_wert(ausgaben_eingaben, "conformance_checking", {})
+    if not isinstance(conformance_ausgabe, Mapping):
+        conformance_ausgabe = {}
+    performance_ausgabe = _info_wert(
+        ausgaben_eingaben,
+        "strukturierte_ergebnisse.performance_und_engpassanalyse",
+        {},
+    )
+    if not isinstance(performance_ausgabe, Mapping):
+        performance_ausgabe = {}
+    vereinfachte_zeitspannen = _listenwert(
+        zeitbezogene_datenauswahl.get("vereinfachte_zeitspannen")
+    )
+    zeitvereinfachung: dict[str, Any] = {}
+    if (
+        zeitbezogene_datenauswahl.get("vereinfachte_zeitspannen_bestaetigt")
+        or vereinfachte_zeitspannen
+    ):
+        zeitvereinfachung = {
+            "status": "Menschlich bestätigt",
+            "entscheidung": zeitbezogene_datenauswahl.get("vereinfachungsentscheidung"),
+            "betroffene_uebergaenge": len(vereinfachte_zeitspannen),
+            "fachliche_grenze": (
+                "Gemeinsame Zeitspanne aus Bearbeitung, Transport, Warten und sonstigen "
+                "Zwischenzeiten; keine zusätzliche Bearbeitungs- oder Wartezeit für "
+                "denselben Abschnitt."
+            ),
+        }
     datenaufbereitung = _info_wert(
         daten,
         "strukturierte_ergebnisse.datenaufbereitung",
@@ -786,6 +820,8 @@ def build_report_data(
                     "kpi_ergebnisse[",
                 )
             ],
+            "conformance_checking": _normalisieren(conformance_ausgabe),
+            "performance_und_engpassanalyse": _normalisieren(performance_ausgabe),
         },
         "modellumfang": {
             **_abschnitt_metadaten(k_stern, umfang),
@@ -887,6 +923,7 @@ def build_report_data(
         },
         "vereinfachungen": {
             "etl_abstraktionen": etl_abstraktionen,
+            "vereinfachte_zeitspannen": _normalisieren(zeitvereinfachung),
         },
         "daten": {
             **_abschnitt_metadaten(k_stern, daten),

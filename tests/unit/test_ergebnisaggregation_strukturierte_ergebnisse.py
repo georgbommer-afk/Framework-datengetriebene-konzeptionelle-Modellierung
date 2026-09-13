@@ -286,6 +286,27 @@ def test_bearbeitungszeit_nach_ressource_und_ungueltige_getrennt_gezaehlt() -> N
     assert ergebnis.ausgeschlossene_nicht_auswertbare_bearbeitungszeiten == 2
 
 
+def test_bearbeitungszeit_ohne_ressourcenspalte_wird_je_aktivitaet_gruppiert() -> None:
+    event_log = pd.DataFrame(
+        {
+            "case_id": ["1", "2"],
+            "activity": ["A", "A"],
+            "timestamp": pd.to_datetime(["2026-01-01 08:00", "2026-01-01 09:00"], utc=True),
+            "start_timestamp": pd.to_datetime(["2026-01-01 08:00", "2026-01-01 09:00"], utc=True),
+            "end_timestamp": pd.to_datetime(["2026-01-01 08:10", "2026-01-01 09:20"], utc=True),
+        }
+    )
+
+    ergebnis = analysiere_zeitbezogene_datenauswahl(pd.DataFrame(), event_log)
+
+    assert len(ergebnis.bearbeitungszeiten) == 1
+    bearbeitung = ergebnis.bearbeitungszeiten[0]
+    assert bearbeitung.aktivitaet == "A"
+    assert bearbeitung.ressource == ""
+    assert bearbeitung.statistik.anzahl == 2
+    assert bearbeitung.statistik.mittelwert_sekunden == 900.0
+
+
 def _iat_event_log() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -306,13 +327,93 @@ def _iat_event_log() -> pd.DataFrame:
     )
 
 
-def test_ohne_bestaetigten_ankunftsstrom_entsteht_keine_automatische_iat() -> None:
-    event_log = _iat_event_log()
+def test_system_iat_nutzt_fruehesten_start_genau_einmal_je_case() -> None:
+    event_log = _iat_event_log().iloc[[4, 5, 0, 1, 2, 3]].reset_index(drop=True)
     event_log["start_timestamp"] = event_log["timestamp"]
     ergebnis = analysiere_zeitbezogene_datenauswahl(pd.DataFrame(), event_log)
     assert ergebnis.zwischenankunftszeiten == ()
-    assert ergebnis.zwischenankunftszeit is None
+    assert ergebnis.system_zwischenankunftszeit is not None
+    assert ergebnis.system_zwischenankunftszeit.anzahl_entitaeten == 3
+    assert ergebnis.zwischenankunftszeit is not None
+    assert ergebnis.zwischenankunftszeit.anzahl == 2
+    assert ergebnis.zwischenankunftszeit.mittelwert_sekunden == 750.0
+    assert ergebnis.zwischenankunftszeit.median_sekunden == 750.0
     assert "T" not in ergebnis.bestaetigte_datenbasis
+
+
+def test_system_iat_ohne_eindeutigen_kanonischen_start_bleibt_offen() -> None:
+    ergebnis = analysiere_zeitbezogene_datenauswahl(pd.DataFrame(), _iat_event_log())
+
+    assert ergebnis.system_zwischenankunftszeit is not None
+    assert ergebnis.system_zwischenankunftszeit.statistik is None
+    assert "nicht eindeutig bestimmbar" in ergebnis.system_zwischenankunftszeit.begruendung
+
+
+def test_vereinfachte_start_zu_start_zeitspanne_benoetigt_globale_bestaetigung() -> None:
+    event_log = pd.DataFrame(
+        {
+            "case_id": ["1", "1", "2", "2"],
+            "activity": ["A", "B", "A", "B"],
+            "timestamp": pd.to_datetime(
+                ["2026-01-01 08:00", "2026-01-01 08:10", "2026-01-01 09:00", "2026-01-01 09:20"],
+                utc=True,
+            ),
+            "start_timestamp": pd.to_datetime(
+                ["2026-01-01 08:00", "2026-01-01 08:10", "2026-01-01 09:00", "2026-01-01 09:20"],
+                utc=True,
+            ),
+        }
+    )
+
+    offen = analysiere_zeitbezogene_datenauswahl(pd.DataFrame(), event_log)
+    bestaetigt = analysiere_zeitbezogene_datenauswahl(
+        pd.DataFrame(), event_log, vereinfachte_zeitspannen_bestaetigt=True
+    )
+
+    assert offen.vereinfachte_zeitspannen == ()
+    assert not offen.vereinfachte_zeitspannen_bestaetigt
+    assert bestaetigt.vereinfachte_zeitspannen_bestaetigt
+    assert len(bestaetigt.vereinfachte_zeitspannen) == 1
+    statistik = bestaetigt.vereinfachte_zeitspannen[0].statistik
+    assert statistik.anzahl == 2
+    assert statistik.mittelwert_sekunden == 900.0
+    assert statistik.median_sekunden == 900.0
+    assert bestaetigt.bearbeitungszeiten == ()
+    assert bestaetigt.potenzielle_wartezeiten == ()
+    assert (
+        "Start(B) - Start(A)"
+        in bestaetigt.lineage_pro_zeitgroesse["vereinfachte_zeitspannen"]["bedeutung"]
+    )
+
+
+def test_gemischte_zeitlage_zerlegt_nur_abschnitte_mit_endzeit() -> None:
+    event_log = pd.DataFrame(
+        {
+            "case_id": ["mit-ende", "mit-ende", "ohne-ende", "ohne-ende"],
+            "activity": ["A", "B", "A", "B"],
+            "timestamp": pd.to_datetime(
+                ["2026-01-01 08:00", "2026-01-01 08:10", "2026-01-01 09:00", "2026-01-01 09:20"],
+                utc=True,
+            ),
+            "start_timestamp": pd.to_datetime(
+                ["2026-01-01 08:00", "2026-01-01 08:10", "2026-01-01 09:00", "2026-01-01 09:20"],
+                utc=True,
+            ),
+            "end_timestamp": pd.to_datetime(
+                ["2026-01-01 08:05", "2026-01-01 08:15", None, None],
+                utc=True,
+            ),
+        }
+    )
+
+    ergebnis = analysiere_zeitbezogene_datenauswahl(
+        pd.DataFrame(), event_log, vereinfachte_zeitspannen_bestaetigt=True
+    )
+
+    assert ergebnis.potenzielle_wartezeiten[0].statistik.anzahl == 1
+    assert ergebnis.potenzielle_wartezeiten[0].statistik.mittelwert_sekunden == 300.0
+    assert ergebnis.vereinfachte_zeitspannen[0].statistik.anzahl == 1
+    assert ergebnis.vereinfachte_zeitspannen[0].statistik.mittelwert_sekunden == 1200.0
 
 
 def test_zwei_ankunftsstroeme_werden_getrennt_und_explizit_berechnet() -> None:

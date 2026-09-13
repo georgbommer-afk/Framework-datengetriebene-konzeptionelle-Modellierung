@@ -14,8 +14,10 @@ from framework_mvp.application.ergebnisaggregation.kpi import (
     profilkennzahlen_fuer_operand,
     zulaessige_quellen_fuer_operand,
 )
+from framework_mvp.domain.exceptions import Domaenenfehler
 from framework_mvp.domain.models import (
     Datenartefakt,
+    KpiBehandlungsart,
     KpiKonfiguration,
     KpiOperandDefinition,
     KpiStatus,
@@ -978,3 +980,45 @@ def test_zeitbezogene_kpi_verwendet_explizite_aktivitaeten_und_vorkommensregel()
     assert ergebnis.einheit == "Sekunden"
     assert ergebnis.zugeordnete_operanden[0]["startaktivitaet"] == "A"
     assert ergebnis.zugeordnete_operanden[0]["endaktivitaet"] == "B"
+
+
+def test_kpi_kann_ohne_operand_als_spaeter_manuell_behandelt_werden() -> None:
+    konfiguration = KpiKonfiguration(
+        "servicegrad",
+        (),
+        "%",
+        "Kundenauftragspositionen",
+        behandlungsart=KpiBehandlungsart.SPAETER_MANUELL_BERECHNEN,
+    )
+
+    (ergebnis,) = berechne_ausgewaehlte_kpis(
+        ("servicegrad",),
+        (konfiguration,),
+        _basis(),
+    )
+
+    assert ergebnis.status is KpiStatus.FUER_SPAETERE_MANUELLE_BERECHNUNG
+    assert ergebnis.behandlungsart is KpiBehandlungsart.SPAETER_MANUELL_BERECHNEN
+    assert ergebnis.ergebnis is None
+    assert ergebnis.zugeordnete_operanden == ()
+    assert ergebnis.quellenreferenzen == ()
+    assert ergebnis.fehlende_voraussetzungen == ()
+    assert ergebnis.formel
+    assert ergebnis.einheit == "%"
+    assert ergebnis.bezugsmenge == "Kundenauftragspositionen"
+    assert ergebnis.definitionsversion >= 1
+
+
+def test_spaeter_manuelle_kpi_schliesst_automatische_zuordnung_aus() -> None:
+    with pytest.raises(Domaenenfehler, match="keine automatische Operandenzuordnung"):
+        KpiKonfiguration(
+            "servicegrad",
+            (
+                OperandZuordnung(
+                    "kundenauftragspositionen",
+                    Datenartefakt.ZWISCHENDATENSATZ_T,
+                    spalte="position",
+                ),
+            ),
+            behandlungsart=KpiBehandlungsart.SPAETER_MANUELL_BERECHNEN,
+        )

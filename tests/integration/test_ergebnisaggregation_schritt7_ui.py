@@ -42,6 +42,7 @@ FREIGABE = Qualitaetsfreigabe(
 EVENTS = pd.DataFrame({
     "case_id": ["1", "1"], "activity": ["A", "B"],
     "timestamp": pd.to_datetime(["2026-01-01", "2026-01-02"], utc=True),
+    "start_timestamp": pd.to_datetime(["2026-01-01", "2026-01-02"], utc=True),
 })
 if st.session_state.get("test_ressourcen_vollstaendig"):
     EVENTS["resource"] = ["M1", "M2"]
@@ -100,6 +101,50 @@ class Aggregation:
     def laden(self, aggregations_id):
         if st.session_state.get("test_veraltetes_a_g"):
             raise ValueError("U-Hash stimmt nicht mehr überein")
+        a_g = {}
+        if st.session_state.get("test_gespeichertes_a_g"):
+            a_g = {
+                "kpi_ergebnisse": [
+                    {
+                        "bezeichnung": "Servicegrad", "status": "berechnet",
+                        "ergebnis": 95.0, "einheit": "%",
+                    },
+                    {
+                        "bezeichnung": "Liefertreue",
+                        "status": "fuer_spaetere_manuelle_berechnung_vorgesehen",
+                        "ergebnis": None, "formel": "treu / gesamt", "einheit": "%",
+                        "bezugsmenge": "Aufträge",
+                    },
+                ],
+                "conformance_checking": {"durchgefuehrt": True, "ergebnis": {"fitness": 0.9}},
+                "strukturierte_ergebnisse": {
+                    "ressourcen": {"modus": "automatisch", "zuordnungen": [{"aktivitaet": "A"}]},
+                    "entitaetsinstanzen_und_attribute": {"instanzen": [{"instanz_id": "1"}]},
+                    "zeitbezogene_datenauswahl": {
+                        "bearbeitungszeiten": [{
+                            "aktivitaet": "A", "ressource": "M1",
+                            "statistik": {
+                                "anzahl": 1, "mittelwert_sekunden": 60.0,
+                                "median_sekunden": 60.0,
+                            },
+                        }],
+                        "potenzielle_wartezeiten": [{
+                            "von_aktivitaet": "A", "zu_aktivitaet": "B",
+                            "statistik": {
+                                "anzahl": 1, "mittelwert_sekunden": 30.0,
+                                "median_sekunden": 30.0,
+                            },
+                        }],
+                        "system_zwischenankunftszeit": {
+                            "anzahl_entitaeten": 2,
+                            "statistik": {
+                                "anzahl": 1, "mittelwert_sekunden": 120.0,
+                                "median_sekunden": 120.0,
+                            },
+                        },
+                    },
+                },
+            }
         return SimpleNamespace(
             aggregations_id=aggregations_id,
             projekt_id=P,
@@ -107,9 +152,37 @@ class Aggregation:
             analyse_id=A,
             eingabefingerabdruck="5" * 64,
             konfigurationsfingerabdruck="6" * 64,
-        ), {}
+        ), a_g
+    def grundlage_fuer_aggregation(self, aggregations_id): return BASIS
     def a_g_download_laden(self, aggregations_id): return b"{}"
-    def gespeicherte_ergebnisdetails_laden(self, aggregations_id): return {}
+    def gespeicherte_ergebnisdetails_laden(self, aggregations_id):
+        if not st.session_state.get("test_gespeichertes_a_g"):
+            return {}
+        return {
+            "conformance": {"ergebnis": {
+                "fitness": 0.9, "produzierte_tokens": 10, "konsumierte_tokens": 9,
+                "fehlende_tokens": 1, "verbleibende_tokens": 2,
+                "konforme_faelle": 1, "abweichende_faelle": 1,
+            }},
+            "performance": {
+                "fertigstellungs_und_bearbeitungszeitabweichungen": {
+                    "dt_statistik": {
+                        "anzahl": 2, "mittelwert_sekunden": 10.0,
+                        "median_sekunden": 10.0,
+                    },
+                    "db_statistik": {
+                        "anzahl": 2, "mittelwert_sekunden": 5.0,
+                        "median_sekunden": 5.0,
+                    },
+                },
+                "ressourcenbezogene_busy_ratio": {
+                    "ressourcenstatistiken": [
+                        {"ressource": "M1", "mittelwert_busy_ratio": 0.8}
+                    ],
+                    "potenzieller_engpass": "M1",
+                },
+            },
+        }
     def rekonfiguration_vorbereiten(self, projekt_id, freigabe_id, analyse_id):
         assert (projekt_id, freigabe_id, analyse_id) == (P, F, A)
         st.session_state["test_rekonfiguration_persistiert"] = True
@@ -148,6 +221,7 @@ def _app(
     ressourcen_vollstaendig: bool = False,
     veraltetes_a_g: bool = False,
     vorlage: bool = False,
+    gespeichertes_a_g: bool = False,
 ) -> AppTest:
     app = AppTest.from_string(APP, default_timeout=10)
     if aktiv:
@@ -161,6 +235,9 @@ def _app(
         app.session_state["aktuelle_aggregations_id"] = "77777777-7777-7777-7777-777777777777"
     if vorlage:
         app.session_state["test_vorlage"] = True
+    if gespeichertes_a_g:
+        app.session_state["test_gespeichertes_a_g"] = True
+        app.session_state["aktuelle_aggregations_id"] = "66666666-6666-6666-6666-666666666666"
     return app.run()
 
 
@@ -193,8 +270,18 @@ def test_aktive_kette_hat_keine_lokale_auswahl_und_nur_kpis_aus_u() -> None:
     assert "B. Bearbeitungszeitabweichung dB – Gleichung 3.2" in checkboxen
     assert "C. Ressourcenbezogene Busy Ratio – Gleichungen 3.3 bis 3.5" in checkboxen
     assert "Ressourcen, Entitäten, Warteschlangen und Zeitgrößen" in untertitel
-    assert any(wert.label == "Anzahl bestätigter Ankunftsströme q" for wert in app.number_input)
+    assert not any(wert.label == "Anzahl bestätigter Ankunftsströme q" for wert in app.number_input)
+    fallback = [
+        wert for wert in app.checkbox if wert.label.startswith("Mangels separatem Endzeitpunkt")
+    ]
+    assert len(fallback) == 1
+    assert not any("Ankunftsstrom q" in wert.label for wert in app.expander)
     assert not any("erster gültiger Ereigniszeitstempel" in wert.label for wert in app.selectbox)
+    kpi_behandlung = next(wert for wert in app.radio if wert.label == "Behandlung dieser Kennzahl")
+    assert kpi_behandlung.options == [
+        "Aus den Daten berechnen",
+        "Kennzahl später manuell berechnen – Formel in das konzeptionelle Modell übernehmen",
+    ]
 
 
 def test_r_profilkennzahlen_werden_fachlich_statt_als_technische_ids_angezeigt() -> None:
@@ -207,6 +294,22 @@ def test_r_profilkennzahlen_werden_fachlich_statt_als_technische_ids_angezeigt()
     assert "befriedigt = ja" in optionen
     assert "Wert: 1" in optionen
     assert "profilkennzahl:befriedigt-ja" not in optionen
+
+
+def test_spaeter_manuelle_kpi_benoetigt_keine_operandenzuordnung() -> None:
+    app = _app()
+    behandlung = next(wert for wert in app.radio if wert.label == "Behandlung dieser Kennzahl")
+
+    app = behandlung.set_value(
+        "Kennzahl später manuell berechnen – Formel in das konzeptionelle Modell übernehmen"
+    ).run()
+
+    assert not app.exception
+    assert not any(wert.label == "Zulässige Datenquelle" for wert in app.selectbox)
+    assert any("Für spätere manuelle Berechnung vorgesehen" in wert.value for wert in app.info)
+    assert not next(
+        wert for wert in app.button if wert.label == "Ergebnisaggregation berechnen und speichern"
+    ).disabled
 
 
 def test_vollstaendige_ressourcenspalte_zeigt_automatische_schreibgeschuetzte_zuordnung() -> None:
@@ -239,6 +342,25 @@ def test_a_g_speichern_setzt_id_uebergabe_und_zeigt_ergebnis() -> None:
     assert app.session_state["aktuelle_aggregations_id"] == ("66666666-6666-6666-6666-666666666666")
     assert app.session_state["test_uebergabe_schritt8"] is True
     assert any("Ergebnisse stehen unten" in wert.value for wert in app.success)
+
+
+def test_gespeichertes_a_g_zeigt_fachliche_ergebnisse_statt_json_hauptansicht() -> None:
+    app = _app(gespeichertes_a_g=True)
+
+    assert not app.exception
+    assert any(wert.value == "Ergebnisübersicht A_G" for wert in app.subheader)
+    assert any("Servicegrad: 95" in wert.value for wert in app.success)
+    assert any("Für spätere manuelle Berechnung vorgesehen" in wert.value for wert in app.info)
+    metric_labels = {wert.label for wert in app.metric}
+    assert "Fitness nach Gleichung 3.14" in metric_labels
+    assert "pT · produzierte Tokens" in metric_labels
+    assert "Entitäten" in metric_labels
+    markdown = "\n".join(wert.value for wert in app.markdown)
+    assert "Performance- und Engpassanalyse" in markdown
+    assert "Bearbeitungszeiten nach Gleichung 3.3" in markdown
+    assert "Potenzielle Wartestellen nach Gleichung 3.15" in markdown
+    assert "Zwischenankunftszeit am Systemeintritt · Gleichung 3.16" in markdown
+    assert [wert.label for wert in app.expander].count("Technische Details") == 1
 
 
 def test_unveraenderte_a_g_konfiguration_bewahrt_aktive_folgeartefakte() -> None:
@@ -327,8 +449,13 @@ def test_kpi_ui_zeigt_formel_fachliche_operanden_quelle_einheit_und_status() -> 
     assert "Erforderliche Eingangsgröße: {operand.bezeichnung}" in quelle
     assert "Zulässige Datenquelle" in quelle
     assert "Fachlich bestätigte Einheit" in quelle
-    assert "Vorschau des KPI-Ergebnisses" in quelle
-    assert "Noch nicht berechenbar" in quelle
+    assert "Ergebnis:" in quelle
+    assert "Mit der aktuellen Datenbasis nicht automatisch berechenbar." in quelle
+    assert "Für spätere manuelle Berechnung vorgesehen" in quelle
+    assert "Token-Based Replay wird durchgeführt …" in quelle
+    assert 'st.subheader("Ergebnisübersicht A_G")' in quelle
+    assert 'with st.expander("Technische Details", expanded=False)' in quelle
+    assert quelle.count('key="ag_vereinfachte_zeitspannen_bestaetigt"') == 1
 
 
 def test_neukonfigurationsaktion_oeffnet_editierbaren_modus_ohne_hinweis_loop() -> None:

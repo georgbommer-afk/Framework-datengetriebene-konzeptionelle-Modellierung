@@ -804,6 +804,14 @@ body {
     border-bottom: none;
 }
 
+.pdf-kpi-row-manual {
+    flex-wrap: wrap;
+}
+
+.pdf-kpi-row-manual .pdf-kpi-note {
+    flex: 1 0 100%;
+}
+
 .pdf-kpi-name {
     flex:
         1
@@ -1320,6 +1328,11 @@ body {
 
 .pdf-technical-card {
     overflow: visible;
+}
+
+.pdf-technical-section {
+    break-before: page;
+    page-break-before: always;
 }
 
 

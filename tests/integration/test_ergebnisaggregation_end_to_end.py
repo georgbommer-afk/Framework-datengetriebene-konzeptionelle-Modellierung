@@ -28,6 +28,7 @@ from framework_mvp.domain.models import (
     Datenartefakt,
     DiscoveryVerfahren,
     Freigabestatus,
+    KpiBehandlungsart,
     KpiKonfiguration,
     KpiStatus,
     LogistischeZielgroesse,
@@ -402,10 +403,10 @@ def test_a_g_ohne_optionale_bestandteile_ist_idempotent_und_uebergabefaehig(tmp_
     assert a_g["discovery_ergebnisse_a_d"]["sha256"]
     assert "schwellwert_k" in a_g["discovery_ergebnisse_a_d"]
     assert "miner_variante" in a_g["discovery_ergebnisse_a_d"]
-    assert a_g["artefaktversion"] == 6
-    assert a_g["kpi_konfigurationsversion"] == 2
-    assert a_g["konfiguration"]["version"] == 1
-    assert a_g["strukturierte_ergebnisse"]["ergebnisversion"] == 3
+    assert a_g["artefaktversion"] == 7
+    assert a_g["kpi_konfigurationsversion"] == 3
+    assert a_g["konfiguration"]["version"] == 2
+    assert a_g["strukturierte_ergebnisse"]["ergebnisversion"] == 4
     assert a_g["strukturierte_ergebnisse"]["vereinfachungen"]["etl_abstraktionen"] == [
         {
             "quellspalte": "Von",
@@ -426,6 +427,7 @@ def test_a_g_ohne_optionale_bestandteile_ist_idempotent_und_uebergabefaehig(tmp_
         "durchgefuehrt": False,
         "status": "Kein Sollprozess vorhanden; Conformance Checking entfällt ohne Fehler.",
         "a_c_referenz": None,
+        "ergebnis": None,
     }
     assert "entitaetsinstanzen_und_attribute" in a_g["strukturierte_ergebnisse"]
     assert a_g["optionale_artefakte"] == {}
@@ -739,7 +741,7 @@ def test_dt_db_busy_ratio_und_a_v_werden_vollstaendig_in_a_g_persistiert(tmp_pat
     assert details["performance"] == a_v
 
 
-def test_a_g_v1_bleibt_lesbar_waehrend_neue_speicherungen_v5_schreiben(tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_a_g_v1_bleibt_lesbar_waehrend_neue_speicherungen_v7_schreiben(tmp_path) -> None:  # type: ignore[no-untyped-def]
     service, repository, _, speicher, projekt, freigabe, analyse, _, _, _ = _umgebung(tmp_path)
     vorschau = service.vorschau(
         projekt_id=projekt.projekt_id,
@@ -821,8 +823,8 @@ def test_a_g_v2_bleibt_ohne_umdeutung_alter_uebergangswartezeiten_lesbar(tmp_pat
     assert "bestaetigte_warteschlangen" not in alt
 
 
-@pytest.mark.parametrize("alte_version", (3, 4))
-def test_a_g_v3_und_v4_bleiben_ohne_umdeutung_lesbar(tmp_path, alte_version: int) -> None:  # type: ignore[no-untyped-def]
+@pytest.mark.parametrize("alte_version", (3, 4, 5, 6))
+def test_a_g_v3_bis_v6_bleiben_ohne_umdeutung_lesbar(tmp_path, alte_version: int) -> None:  # type: ignore[no-untyped-def]
     service, repository, _, speicher, projekt, freigabe, analyse, _, _, _ = _umgebung(tmp_path)
     vorschau = service.vorschau(
         projekt_id=projekt.projekt_id,
@@ -993,6 +995,18 @@ def test_a_c_p_soll_mapping_sollzeitdaten_und_a_v_werden_reproduzierbar_referenz
     aggregation = service.speichern(uuid4(), vorschau, menschlich_bestaetigt=True)
     _, a_g = service.laden(aggregation.aggregations_id)
     optionen = a_g["optionale_artefakte"]
+    assert a_g["conformance_checking"]["ergebnis"] == {
+        "fitness": pytest.approx(1.0),
+        "produzierte_tokens": 6,
+        "konsumierte_tokens": 6,
+        "fehlende_tokens": 0,
+        "verbleibende_tokens": 0,
+        "ausgewertete_faelle": 2,
+        "konforme_faelle": 2,
+        "abweichende_faelle": 0,
+        "ausgeschlossene_faelle": 0,
+        "artefaktversion": 1,
+    }
     assert optionen["prozessmodell_p_soll"]["original_sha256"] == sollmodell.metadaten.sha256
     assert optionen["aktivitaetsmapping"]["sha256"]
     assert optionen["conformance_ergebnisse_a_c"]["sha256"]
@@ -1281,3 +1295,63 @@ def test_vorlage_ohne_kpis_bleibt_nutzbar_aber_nicht_nach_neuer_p_grundlage(tmp_
         )
         is None
     )
+
+
+def test_manuelle_kpi_und_globale_zeitvereinfachung_werden_persistiert_und_restauriert(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    service, _, projekte, _, projekt, freigabe, analyse, _, _, _ = _umgebung(tmp_path)
+    manuell = KpiKonfiguration(
+        "servicegrad",
+        (),
+        "%",
+        "Kundenauftragspositionen",
+        behandlungsart=KpiBehandlungsart.SPAETER_MANUELL_BERECHNEN,
+    )
+    ohne_vereinfachung = service.konfigurationsfingerabdruck(
+        kpi_konfigurationen=(manuell,),
+        sollmodell=None,
+        aktivitaetsmapping=None,
+        conformance_ausfuehren=False,
+        sollzeitdaten=None,
+        zeitvergleich_konfiguration=None,
+        zeitvergleich_ausfuehren=False,
+        vereinfachte_zeitspannen_bestaetigt=False,
+    )
+    vorschau = service.vorschau(
+        projekt_id=projekt.projekt_id,
+        freigabe_id=freigabe.freigabe_id,
+        analyse_id=analyse.analyse_id,
+        kpi_konfigurationen=(manuell,),
+        vereinfachte_zeitspannen_bestaetigt=True,
+    )
+
+    assert vorschau.konfigurationsfingerabdruck != ohne_vereinfachung
+    assert vorschau.kpi_ergebnisse[0].status is KpiStatus.FUER_SPAETERE_MANUELLE_BERECHNUNG
+    assert vorschau.kpi_ergebnisse[0].ergebnis is None
+    gespeichert = service.speichern(uuid4(), vorschau, menschlich_bestaetigt=True)
+    _, a_g = service.laden(gespeichert.aggregations_id)
+    assert a_g["kpi_konfigurationen"][0]["behandlungsart"] == "spaeter_manuell_berechnen"
+    assert a_g["kpi_ergebnisse"][0]["status"] == ("fuer_spaetere_manuelle_berechnung_vorgesehen")
+    assert a_g["kpi_ergebnisse"][0]["ergebnis"] is None
+    assert a_g["kpi_ergebnisse"][0]["formel"]
+    assert a_g["konfiguration"]["vereinfachte_zeitspannen_bestaetigt"] is True
+
+    projekte.projekt = replace(
+        projekt,
+        untersuchungsauftrag=replace(
+            projekt.untersuchungsauftrag,
+            ausgewaehlte_kpi_ids=("servicegrad", "nacharbeitsquote_rr"),
+        ),
+        geaendert_am=projekt.geaendert_am + timedelta(minutes=1),
+    )
+    vorlage = service.kompatible_konfigurationsvorlage_laden(
+        projekt.projekt_id, freigabe.freigabe_id, analyse.analyse_id
+    )
+
+    assert vorlage is not None
+    assert vorlage.kpi_konfigurationen == (manuell,)
+    assert (
+        vorlage.kpi_konfigurationen[0].behandlungsart is KpiBehandlungsart.SPAETER_MANUELL_BERECHNEN
+    )
+    assert vorlage.vereinfachte_zeitspannen_bestaetigt is True

@@ -23,6 +23,7 @@ from framework_mvp.domain.models import (
     Ressourcenzuordnungsmodus,
     RobusteZeitstatistik,
     StrukturiertesErgebnisStatus,
+    VereinfachteZeitspanne,
     Vorkommensregel,
     WarteschlangenanalyseErgebnis,
     ZeitbezogeneDatenauswahlErgebnis,
@@ -416,6 +417,54 @@ def _bearbeitungszeiten(
     )
 
 
+def vereinfachte_zeitspannen_sind_ableitbar(event_log: pd.DataFrame) -> bool:
+    """Prüft, ob mindestens ein Start-zu-Start-Fallback fachlich in Betracht kommt."""
+    return bool(_vereinfachte_start_zu_start_zeitspannen(event_log))
+
+
+def _vereinfachte_start_zu_start_zeitspannen(
+    event_log: pd.DataFrame,
+) -> tuple[VereinfachteZeitspanne, ...]:
+    """Aggregiert nur Abschnitte ohne Ende des Vorgängers und damit ohne Wartezeit."""
+    erforderlich = {"case_id", "activity", "timestamp", "start_timestamp"}
+    if not erforderlich <= set(event_log.columns):
+        return ()
+    spalten = ["case_id", "activity", "timestamp", "start_timestamp"]
+    if "end_timestamp" in event_log.columns:
+        spalten.append("end_timestamp")
+    daten = event_log.loc[:, spalten].copy(deep=True)
+    daten["timestamp"] = pd.to_datetime(daten["timestamp"], errors="coerce", utc=True)
+    daten["start_timestamp"] = pd.to_datetime(daten["start_timestamp"], errors="coerce", utc=True)
+    if "end_timestamp" in daten.columns:
+        daten["end_timestamp"] = pd.to_datetime(daten["end_timestamp"], errors="coerce", utc=True)
+    else:
+        daten["end_timestamp"] = pd.NaT
+    daten["_reihenfolge"] = range(len(daten))
+    gruppiert: dict[tuple[str, str], list[float]] = {}
+    for case_id, fall in daten.groupby("case_id", sort=False, dropna=False):
+        if not _text(case_id):
+            continue
+        sortiert = fall.sort_values(
+            ["timestamp", "_reihenfolge"], kind="stable", na_position="last"
+        )
+        for position in range(len(sortiert) - 1):
+            aktuell, folgend = sortiert.iloc[position], sortiert.iloc[position + 1]
+            if not pd.isna(aktuell["end_timestamp"]):
+                continue
+            von, zu = _text(aktuell["activity"]), _text(folgend["activity"])
+            start_a, start_b = aktuell["start_timestamp"], folgend["start_timestamp"]
+            if not von or not zu or pd.isna(start_a) or pd.isna(start_b):
+                continue
+            sekunden = float((start_b - start_a).total_seconds())
+            if sekunden <= 0:
+                continue
+            gruppiert.setdefault((von, zu), []).append(sekunden)
+    return tuple(
+        VereinfachteZeitspanne(von, zu, _statistik(werte))
+        for (von, zu), werte in sorted(gruppiert.items())
+    )
+
+
 def _zwischenankunftszeit(
     definition: AnkunftsstromDefinition,
     zwischendaten: pd.DataFrame,
@@ -526,6 +575,54 @@ def _zwischenankunftszeit(
             else "",
         },
         regel,
+        (
+            ""
+            if differenzen
+            else "Für die bestätigte Definition liegen weniger als zwei eindeutig "
+            "auswertbare Entitätseintritte vor."
+        ),
+        len(ankuenfte),
+    )
+
+
+def _system_zwischenankunftszeit(
+    event_log: pd.DataFrame,
+    datenbasis_referenzen: Mapping[str, Any],
+) -> ZwischenankunftszeitErgebnis:
+    """Bestimmt Gl. 3.16 automatisch aus dem frühesten Ist-Start genau einmal je Case."""
+    definition = AnkunftsstromDefinition(
+        "Systemeintritt",
+        Datenartefakt.EVENT_LOG_E_STERN,
+        "case_id",
+        "start_timestamp",
+        vorkommensregel=Vorkommensregel.ERSTES,
+    )
+    fehlend = sorted({"case_id", "start_timestamp"} - set(event_log.columns))
+    if fehlend:
+        return ZwischenankunftszeitErgebnis(
+            definition,
+            StrukturiertesErgebnisStatus.NICHT_MOEGLICH,
+            None,
+            0,
+            {"fehlende_kanonische_spalten": len(fehlend)},
+            {
+                "quelle": "E*",
+                "quellenreferenz": datenbasis_referenzen.get("E*", {}),
+                "entitaetsspalte": "case_id",
+                "zeitspalte": "start_timestamp",
+            },
+            "Frühester gültiger kanonischer Ist-Start je Case; chronologisch sortierte "
+            "Differenzen gemäß Gleichung 3.16.",
+            "System-IAT nicht eindeutig bestimmbar: Erforderliche kanonische Spalten fehlen: "
+            + ", ".join(fehlend)
+            + ".",
+            0,
+        )
+    return _zwischenankunftszeit(
+        definition,
+        pd.DataFrame(),
+        event_log,
+        datenbasis_referenzen,
     )
 
 
@@ -534,6 +631,7 @@ def analysiere_zeitbezogene_datenauswahl(
     event_log: pd.DataFrame,
     *,
     ankunftsstroeme: Sequence[AnkunftsstromDefinition] = (),
+    vereinfachte_zeitspannen_bestaetigt: bool = False,
     datenbasis_referenzen: Mapping[str, Any] | None = None,
 ) -> ZeitbezogeneDatenauswahlErgebnis:
     """Berechnet Zeitgrößen getrennt und speichert ihre tatsächliche Lineage."""
@@ -543,6 +641,12 @@ def analysiere_zeitbezogene_datenauswahl(
     zwischenankuenfte = tuple(
         _zwischenankunftszeit(definition, zwischendaten, event_log, referenzen)
         for definition in ankunftsstroeme
+    )
+    system_zwischenankunft = _system_zwischenankunftszeit(event_log, referenzen)
+    vereinfachte_zeitspannen = (
+        _vereinfachte_start_zu_start_zeitspannen(event_log)
+        if vereinfachte_zeitspannen_bestaetigt
+        else ()
     )
     fallanzahl = (
         len(cast(pd.Series, event_log["case_id"]).dropna().unique())
@@ -556,6 +660,11 @@ def analysiere_zeitbezogene_datenauswahl(
     )
     verwendete_quellen: set[str] = set()
     if bearbeitung or warten.potenzielle_wartezeiten:
+        verwendete_quellen.add("E*")
+    if (
+        system_zwischenankunft.status is StrukturiertesErgebnisStatus.ABLEITBAR
+        or vereinfachte_zeitspannen
+    ):
         verwendete_quellen.add("E*")
     verwendete_quellen.update(definition.quelle.value for definition in ankunftsstroeme)
     lineage = {
@@ -580,10 +689,22 @@ def analysiere_zeitbezogene_datenauswahl(
             "berechenbar": bool(warten.potenzielle_wartezeiten),
         },
         "zwischenankunftszeiten": [wert.lineage for wert in zwischenankuenfte],
+        "system_zwischenankunftszeit": system_zwischenankunft.lineage,
+        "vereinfachte_zeitspannen": {
+            "quelle": "E*",
+            "spalten": ["case_id", "activity", "start_timestamp"],
+            "bestaetigt": vereinfachte_zeitspannen_bestaetigt,
+            "bedeutung": (
+                "Start(B) - Start(A); gemeinsame, nicht weiter zerlegte Zeitspanne und keine "
+                "Bearbeitungs- oder Wartezeit nach Gleichung 3.3 beziehungsweise 3.15."
+            ),
+        },
     }
     ableitbar = bool(
         bearbeitung
         or warten.potenzielle_wartezeiten
+        or vereinfachte_zeitspannen
+        or system_zwischenankunft.status is StrukturiertesErgebnisStatus.ABLEITBAR
         or any(wert.status is StrukturiertesErgebnisStatus.ABLEITBAR for wert in zwischenankuenfte)
     )
     return ZeitbezogeneDatenauswahlErgebnis(
@@ -618,4 +739,14 @@ def analysiere_zeitbezogene_datenauswahl(
         negativ,
         nicht_auswertbar,
         "" if ableitbar else "Aus den bestätigten Spalten war keine Zeitgröße ableitbar.",
+        ergebnisversion=3,
+        system_zwischenankunftszeit=system_zwischenankunft,
+        vereinfachte_zeitspannen=vereinfachte_zeitspannen,
+        vereinfachte_zeitspannen_bestaetigt=vereinfachte_zeitspannen_bestaetigt,
+        vereinfachungsentscheidung=(
+            "Mangels separatem Endzeitpunkt als vereinfachte Zeitspanne für die Modellierung "
+            "übernehmen."
+            if vereinfachte_zeitspannen_bestaetigt
+            else ""
+        ),
     )

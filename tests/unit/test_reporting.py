@@ -51,20 +51,91 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
                 _information("untersuchungsauftrag.problemstellung", "Materialfluss prüfen", "U")
             )
         elif bestandteil_id == "ausgaben" and neue_felder:
-            informationen.append(
-                _information(
-                    "kpi_ergebnisse[0]",
-                    {
-                        "kpi_id": "mittlere_durchfuehrungszeit",
-                        "bezeichnung": "Mittlere Durchführungszeit",
-                        "status": "berechnet",
-                        "ergebnis": 1850.1799999999998,
-                        "einheit": "s",
-                        "bezugsmenge": "Produktionsaufträge n",
-                        "formel": "Σ Durchführungszeit_i / n",
-                    },
-                    "A_G",
-                )
+            informationen.extend(
+                [
+                    _information(
+                        "kpi_ergebnisse[0]",
+                        {
+                            "kpi_id": "mittlere_durchfuehrungszeit",
+                            "bezeichnung": "Mittlere Durchführungszeit",
+                            "status": "berechnet",
+                            "ergebnis": 1850.1799999999998,
+                            "einheit": "s",
+                            "bezugsmenge": "Produktionsaufträge n",
+                            "formel": "Σ Durchführungszeit_i / n",
+                            "definitionsversion": 2,
+                            "behandlungsart": "automatisch_berechnen",
+                        },
+                        "A_G",
+                    ),
+                    _information(
+                        "kpi_ergebnisse[1]",
+                        {
+                            "kpi_id": "servicegrad",
+                            "bezeichnung": "Servicegrad",
+                            "status": "fuer_spaetere_manuelle_berechnung_vorgesehen",
+                            "ergebnis": None,
+                            "einheit": "%",
+                            "bezugsmenge": "Kundenauftragspositionen",
+                            "formel": "befriedigte Positionen / Positionen · 100",
+                            "definitionsversion": 1,
+                            "behandlungsart": "spaeter_manuell_berechnen",
+                        },
+                        "A_G",
+                    ),
+                    _information(
+                        "conformance_checking",
+                        {
+                            "durchgefuehrt": True,
+                            "ergebnis": {
+                                "fitness": 0.95,
+                                "produzierte_tokens": 20,
+                                "konsumierte_tokens": 19,
+                                "fehlende_tokens": 1,
+                                "verbleibende_tokens": 2,
+                                "ausgewertete_faelle": 3,
+                                "konforme_faelle": 2,
+                                "abweichende_faelle": 1,
+                            },
+                        },
+                        "A_G",
+                    ),
+                    _information(
+                        "strukturierte_ergebnisse.performance_und_engpassanalyse",
+                        {
+                            "dt_db_ergebnis": {
+                                "dt_statistik": {
+                                    "anzahl": 3,
+                                    "verspaetet": 1,
+                                    "planmaessig": 1,
+                                    "vorzeitig": 1,
+                                    "mittelwert_sekunden": 20.0,
+                                    "median_sekunden": 0.0,
+                                },
+                                "db_statistik": {
+                                    "anzahl": 2,
+                                    "laenger_als_geplant": 1,
+                                    "gleich_geplant": 0,
+                                    "kuerzer_als_geplant": 1,
+                                    "mittelwert_sekunden": 10.0,
+                                    "median_sekunden": 10.0,
+                                },
+                            },
+                            "busy_ratio_ergebnis": {
+                                "ressourcenstatistiken": [
+                                    {
+                                        "ressource": "M1",
+                                        "anzahl_gueltige_busy_ratios": 2,
+                                        "mittelwert_busy_ratio": 0.8,
+                                        "median_busy_ratio": 0.8,
+                                    }
+                                ],
+                                "potenzieller_engpass": "M1",
+                            },
+                        },
+                        "A_G",
+                    ),
+                ]
             )
         elif bestandteil_id == "aktivitaeten":
             informationen.append(_information("sichtbare_aktivitaeten", ["A", "B"], "P"))
@@ -131,6 +202,15 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
                         "ankunftsregel": (
                             "Erster gültiger kanonischer Ereigniszeitstempel je Fall."
                         ),
+                        "system_zwischenankunftszeit": {
+                            "anzahl_entitaeten": 3,
+                            "status": "ableitbar",
+                            "statistik": {
+                                "anzahl": 2,
+                                "mittelwert_sekunden": 120.0,
+                                "median_sekunden": 120.0,
+                            },
+                        },
                         "zwischenankunftszeiten": [
                             {
                                 "definition": {"bezeichnung": "Auftragseingang"},
@@ -148,6 +228,21 @@ def _k_stern(*, neue_felder: bool = True) -> dict[str, object]:
                                     "anzahl": 2,
                                     "mittelwert_sekunden": 60.0,
                                     "median_sekunden": 60.0,
+                                },
+                            }
+                        ],
+                        "vereinfachte_zeitspannen_bestaetigt": True,
+                        "vereinfachungsentscheidung": (
+                            "Mangels separatem Endzeitpunkt als vereinfachte Zeitspanne übernehmen."
+                        ),
+                        "vereinfachte_zeitspannen": [
+                            {
+                                "von_aktivitaet": "B",
+                                "zu_aktivitaet": "C",
+                                "statistik": {
+                                    "anzahl": 1,
+                                    "mittelwert_sekunden": 180.0,
+                                    "median_sekunden": 180.0,
                                 },
                             }
                         ],
@@ -263,12 +358,44 @@ def test_build_report_data_projiziert_neue_felder_ohne_k_stern_mutation() -> Non
     assert report["ressourcen"]["zuordnungsmodus"] == "manuell"
     assert report["ressourcen"]["zuordnungsherkunft"].endswith("Schritt 7")
     assert report["ausgaben_und_eingaben"]["kpi_ergebnisse"][0]["ergebnis_anzeige"] == "1850,18 s"
+    assert report["ausgaben_und_eingaben"]["kpi_ergebnisse"][1]["ergebnis_anzeige"] == (
+        "Für spätere manuelle Berechnung vorgesehen"
+    )
+    assert report["ausgaben_und_eingaben"]["conformance_checking"]["ergebnis"]["fitness"] == 0.95
+    assert (
+        report["ausgaben_und_eingaben"]["performance_und_engpassanalyse"]["dt_db_ergebnis"][
+            "dt_statistik"
+        ]["anzahl"]
+        == 3
+    )
     assert (
         report["daten"]["zeitbezogene_datenauswahl"]["zwischenankunftszeiten"][0]["statistik"][
             "median_sekunden"
         ]
         == 120.0
     )
+    assert (
+        report["daten"]["zeitbezogene_datenauswahl"]["system_zwischenankunftszeit"]["statistik"][
+            "anzahl"
+        ]
+        == 2
+    )
+    assert (
+        report["daten"]["zeitbezogene_datenauswahl"]["vereinfachte_zeitspannen"][0]["statistik"][
+            "median_sekunden"
+        ]
+        == 180.0
+    )
+    assert report["vereinfachungen"]["vereinfachte_zeitspannen"] == {
+        "status": "Menschlich bestätigt",
+        "entscheidung": ("Mangels separatem Endzeitpunkt als vereinfachte Zeitspanne übernehmen."),
+        "betroffene_uebergaenge": 1,
+        "fachliche_grenze": (
+            "Gemeinsame Zeitspanne aus Bearbeitung, Transport, Warten und sonstigen "
+            "Zwischenzeiten; keine zusätzliche Bearbeitungs- oder Wartezeit für "
+            "denselben Abschnitt."
+        ),
+    }
     assert (
         report["daten"]["datenaufbereitung"]["transformationshistorie"][0]["ergebnis"]
         == "aktiver Zwischendatensatz T"
@@ -454,11 +581,20 @@ def test_xlsx_renderer_erzeugt_zehn_geordnete_lesbare_arbeitsblaetter() -> None:
             min_row=cast(int, kopfzeile[0].row) + 1,
             values_only=False,
         )
-        if zeile[0].value in {"Zwischenankunftszeit", "Bearbeitungszeit", "Wartezeit"}
+        if zeile[0].value
+        in {
+            "System-IAT nach Gl. 3.16",
+            "Zwischenankunftszeit",
+            "Bearbeitungszeit",
+            "Vereinfachte Start-zu-Start-Zeitspanne",
+            "Wartezeit",
+        }
     ]
     assert {cast(str, zeile[0].value) for zeile in statistikwerte} == {
+        "System-IAT nach Gl. 3.16",
         "Zwischenankunftszeit",
         "Bearbeitungszeit",
+        "Vereinfachte Start-zu-Start-Zeitspanne",
         "Wartezeit",
     }
     assert all(isinstance(zeile[2].value, int) for zeile in statistikwerte)
@@ -467,6 +603,20 @@ def test_xlsx_renderer_erzeugt_zehn_geordnete_lesbare_arbeitsblaetter() -> None:
     assert any(
         zelle.value == "Transformationshistorie D → aktiver Datensatz T"
         for zeile in datenblatt.iter_rows()
+        for zelle in zeile
+    )
+    analysewerte = {
+        str(zelle.value)
+        for zeile in arbeitsmappe["Analyseergebnisse"].iter_rows()
+        for zelle in zeile
+        if zelle.value is not None
+    }
+    assert "Token-Based Replay · Gleichung 3.14" in analysewerte
+    assert "Soll-/Ist-Abweichungen" in analysewerte
+    assert "Ergänzende Performance · Busy Ratio" in analysewerte
+    assert any(
+        zelle.value == "Vereinfachte Start-zu-Start-Zeitspannen"
+        for zeile in arbeitsmappe["Annahmen & offene Punkte"].iter_rows()
         for zelle in zeile
     )
     assert (
@@ -514,7 +664,12 @@ def test_aelteres_k_stern_ohne_optionale_felder_bleibt_renderbar(tmp_path: Path)
     assert report["warteschlangen"]["wartestellenhinweise"] == []
     assert report["ressourcen"]["aktivitaet_ressourcen"] == []
     assert report["ressourcen"]["manuelle_aktivitaet_ressourcen"] == []
-    assert "<!DOCTYPE html>" in render_report_html(report)
+    html = render_report_html(report)
+    assert "<!DOCTYPE html>" in html
+    assert "Conformance Checking · Gleichung 3.14" not in html
+    assert "Soll-/Ist-Abweichungen" not in html
+    assert "Ergänzende Performance · Busy Ratio" not in html
+    assert "Vereinfachte Start-zu-Start-Zeitspannen" not in html
     ziel = render_report_pdf(report, tmp_path / "alt.pdf")
     assert ziel.read_bytes().startswith(b"%PDF-")
 
@@ -638,7 +793,14 @@ def test_html_renderer_bettet_die_einzige_css_quelle_und_svgs_ein(tmp_path: Path
     assert "Aktivität-Ressourcen-Zuordnungen" in html
     assert "menschlich bestätigte Zuordnung in Schritt 7" in html
     assert "Zwischenankunftszeit" in html
-    assert "Ende(A) − Start(A)" in html
+    assert "Ist-Ende(A) − Ist-Start(A)" in html
+    assert "Für spätere manuelle Berechnung vorgesehen" in html
+    assert "Conformance Checking" in html
+    assert "Produzierte Tokens pT" in html
+    assert "dT · Fertigstellungsabweichung" in html
+    assert "Ergänzende Performance · Busy Ratio" in html
+    assert "Vereinfachte Start-zu-Start-Zeitspannen" in html
+    assert "Potenzielle Wartestellen · Gleichung 3.15" in html
 
 
 def test_pdf_renderer_verwendet_pdf_template_und_css(tmp_path: Path) -> None:

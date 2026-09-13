@@ -1,7 +1,7 @@
 """Fachliche Unit-Tests der festen Zuordnung aus Tabelle 3.15."""
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -341,6 +341,71 @@ def test_ableitung_bleibt_belegt_offen_und_schliesst_p_soll_aus(tmp_path: Path) 
     assert any(wert.bestandteil_id is ModellbestandteilId.EINGABEN for wert in offen)
 
 
+def test_tatsaechliche_schritt_7_ergebnisse_werden_ohne_zieltext_keywords_uebernommen(
+    tmp_path: Path,
+) -> None:
+    basis = _basis(tmp_path)
+    basis.projekt = replace(
+        basis.projekt,
+        untersuchungsauftrag=replace(
+            basis.projekt.untersuchungsauftrag,
+            individuelles_ziel="Bestände verstehen",
+            untersuchungszwecke=("Bestände verstehen",),
+        ),
+    )
+    basis.a_g["kpi_ergebnisse"][0] = {
+        "kpi_id": "tatsaechliche_wartezeit_aqt",
+        "bezeichnung": "Tatsächliche Wartezeit AQT",
+        "status": "fuer_spaetere_manuelle_berechnung_vorgesehen",
+        "formel": "Auftragsausführung − Belegung − Transport − Verzögerung",
+        "einheit": "s",
+        "ergebnis": None,
+    }
+    basis.a_g["conformance_checking"] = {
+        "durchgefuehrt": True,
+        "ergebnis": {"fitness": 0.95, "produzierte_tokens": 10},
+    }
+    basis.a_g["strukturierte_ergebnisse"]["performance_und_engpassanalyse"] = {
+        "dt_db_ergebnis": {
+            "dt_statistik": {"anzahl": 2, "mittelwert_sekunden": 30.0},
+            "db_statistik": None,
+        },
+        "busy_ratio_ergebnis": {
+            "ressourcenstatistiken": [{"ressource": "M1", "mittelwert_busy_ratio": 0.8}]
+        },
+    }
+
+    bestandteile, _ = leite_modellbestandteile_ab(basis)
+    ausgaben = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.AUSGABEN
+    )
+    referenzen = {wert.strukturreferenz for wert in ausgaben.informationen}
+
+    assert "kpi_ergebnisse[0]" in referenzen
+    assert "conformance_checking" in referenzen
+    assert "strukturierte_ergebnisse.performance_und_engpassanalyse" in referenzen
+
+
+def test_nicht_erzeugte_optionale_analyse_wird_nicht_als_ausgabe_erfunden(tmp_path: Path) -> None:
+    basis = _basis(tmp_path)
+    basis.a_g["conformance_checking"] = {"durchgefuehrt": False}
+    basis.a_g["strukturierte_ergebnisse"]["performance_und_engpassanalyse"] = {
+        "dt_db_konfiguration": {"fertigstellungsabweichung_aktiv": True},
+        "dt_db_ergebnis": None,
+        "busy_ratio_konfiguration": {"ressourcenspalte": "resource"},
+        "busy_ratio_ergebnis": None,
+    }
+
+    bestandteile, _ = leite_modellbestandteile_ab(basis)
+    ausgaben = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.AUSGABEN
+    )
+    referenzen = {wert.strukturreferenz for wert in ausgaben.informationen}
+
+    assert "conformance_checking" not in referenzen
+    assert "strukturierte_ergebnisse.performance_und_engpassanalyse" not in referenzen
+
+
 def test_etl_abstraktion_wird_aus_a_g_als_vereinfachung_uebernommen(tmp_path: Path) -> None:
     basis = _basis(tmp_path)
     abstraktion = {
@@ -369,6 +434,45 @@ def test_etl_abstraktion_wird_aus_a_g_als_vereinfachung_uebernommen(tmp_path: Pa
     assert etl.wert == [abstraktion]
     assert any(
         wert.strukturreferenz == "discovery_ergebnisse_a_d.schwellwert_k.auswirkung"
+        for wert in vereinfachungen.informationen
+    )
+
+
+def test_bestaetigte_start_zu_start_zeitspanne_geht_in_datenauswahl_und_vereinfachung(
+    tmp_path: Path,
+) -> None:
+    basis = _basis(tmp_path)
+    zeitdaten = basis.a_g["strukturierte_ergebnisse"]["zeitbezogene_datenauswahl"]
+    zeitdaten["vereinfachte_zeitspannen_bestaetigt"] = True
+    zeitdaten["vereinfachungsentscheidung"] = "Start-zu-Start gemeinsam übernehmen"
+    zeitdaten["vereinfachte_zeitspannen"] = [
+        {
+            "von_aktivitaet": "A",
+            "zu_aktivitaet": "B",
+            "statistik": {
+                "anzahl": 2,
+                "mittelwert_sekunden": 600.0,
+                "median_sekunden": 600.0,
+            },
+        }
+    ]
+
+    bestandteile, _ = leite_modellbestandteile_ab(basis)
+    datenauswahl = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.DATENAUSWAHL
+    )
+    datenauswahl_info = next(
+        wert.wert
+        for wert in datenauswahl.informationen
+        if wert.strukturreferenz == "strukturierte_ergebnisse.zeitbezogene_datenauswahl"
+    )
+    vereinfachungen = next(
+        wert for wert in bestandteile if wert.bestandteil_id is ModellbestandteilId.VEREINFACHUNGEN
+    )
+
+    assert datenauswahl_info["vereinfachte_zeitspannen"][0]["statistik"]["anzahl"] == 2
+    assert any(
+        wert.strukturreferenz.endswith("vereinfachte_zeitspannen")
         for wert in vereinfachungen.informationen
     )
 

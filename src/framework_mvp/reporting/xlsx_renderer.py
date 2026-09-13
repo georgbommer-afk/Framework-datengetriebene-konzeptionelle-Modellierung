@@ -249,8 +249,16 @@ def _statistikzeilen(report: Mapping[str, Any]) -> list[dict[str, Any]]:
             }
         )
 
+    system_iat = _mapping(zeitwahl.get("system_zwischenankunftszeit"))
+    system_statistik = _mapping(system_iat.get("statistik"))
+    if system_statistik:
+        aufnehmen(
+            "System-IAT nach Gl. 3.16",
+            "Systemeintritt · frühester Ist-Start je Case",
+            system_statistik,
+        )
     einzelwert = zeitwahl.get("zwischenankunftszeit")
-    if isinstance(einzelwert, Mapping) and einzelwert:
+    if not system_statistik and isinstance(einzelwert, Mapping) and einzelwert:
         aufnehmen("Zwischenankunftszeit", "Gesamt", einzelwert.get("statistik", einzelwert))
     for eintrag in _liste(zeitwahl.get("zwischenankunftszeiten")):
         mapping = _mapping(eintrag)
@@ -276,6 +284,13 @@ def _statistikzeilen(report: Mapping[str, Any]) -> list[dict[str, Any]]:
                 or "Gesamt"
             )
             aufnehmen(titel, bezug, mapping.get("statistik", mapping))
+    for eintrag in _liste(zeitwahl.get("vereinfachte_zeitspannen")):
+        mapping = _mapping(eintrag)
+        aufnehmen(
+            "Vereinfachte Start-zu-Start-Zeitspanne",
+            f"{mapping.get('von_aktivitaet', '')} → {mapping.get('zu_aktivitaet', '')}",
+            mapping.get("statistik", mapping),
+        )
     for hinweis in _liste(_mapping(report.get("warteschlangen")).get("wartestellenhinweise")):
         mapping = _mapping(hinweis)
         uebergang = _mapping(mapping.get("uebergang"))
@@ -692,6 +707,7 @@ def _systemelemente(ws: Worksheet, report: Mapping[str, Any]) -> None:
 
 def _annahmen(ws: Worksheet, report: Mapping[str, Any]) -> None:
     annahmen = _mapping(report.get("annahmen"))
+    vereinfachungen = _mapping(report.get("vereinfachungen"))
     zeile = _sheet_start(ws, SHEET_NAMES[5], "Annahmen, Vereinfachungen und fachliche Restpunkte")
     zeile = _abschnitt(ws, zeile, "Modellierungsannahmen")
     zeile = _paare(
@@ -701,6 +717,10 @@ def _annahmen(ws: Worksheet, report: Mapping[str, Any]) -> None:
             ("Modellierungsentscheidungen", annahmen.get("modellierungsentscheidungen")),
             ("Prozessnotation", annahmen.get("prozessnotation_anzeige")),
             ("Schwellwert-Auswirkung", annahmen.get("schwellwert_auswirkung")),
+            (
+                "Vereinfachte Start-zu-Start-Zeitspannen",
+                vereinfachungen.get("vereinfachte_zeitspannen"),
+            ),
         ),
     )
     zeile += 1
@@ -863,6 +883,25 @@ def _analyse(ws: Worksheet, report: Mapping[str, Any]) -> None:
             ),
         ),
     )
+    conformance = _mapping(ausgaben.get("conformance_checking"))
+    conformance_ergebnis = _mapping(conformance.get("ergebnis"))
+    if conformance_ergebnis:
+        zeile += 1
+        zeile = _abschnitt(ws, zeile, "Token-Based Replay · Gleichung 3.14")
+        zeile = _paare(
+            ws,
+            zeile,
+            (
+                ("Fitness", conformance_ergebnis.get("fitness")),
+                ("Produzierte Tokens pT", conformance_ergebnis.get("produzierte_tokens")),
+                ("Konsumierte Tokens cT", conformance_ergebnis.get("konsumierte_tokens")),
+                ("Fehlende Tokens mT", conformance_ergebnis.get("fehlende_tokens")),
+                ("Verbleibende Tokens rT", conformance_ergebnis.get("verbleibende_tokens")),
+                ("Ausgewertete Fälle", conformance_ergebnis.get("ausgewertete_faelle")),
+                ("Konforme Fälle", conformance_ergebnis.get("konforme_faelle")),
+                ("Abweichende Fälle", conformance_ergebnis.get("abweichende_faelle")),
+            ),
+        )
     zeile += 1
     zeile = _abschnitt(ws, zeile, "Kennzahlen- und Ressourcenbefunde")
     kpi_zeilen = [
@@ -891,6 +930,59 @@ def _analyse(ws: Worksheet, report: Mapping[str, Any]) -> None:
         autofilter=True,
         zahlenformate={"ergebnis": "0.00"},
     )
+    performance = _mapping(ausgaben.get("performance_und_engpassanalyse"))
+    dt_db = _mapping(performance.get("dt_db_ergebnis"))
+    performance_zeilen = []
+    for art, schluessel in (
+        ("dT · Fertigstellungsabweichung", "dt_statistik"),
+        ("dB · Bearbeitungszeitabweichung", "db_statistik"),
+    ):
+        statistik = _mapping(dt_db.get(schluessel))
+        if statistik:
+            performance_zeilen.append({"art": art, **statistik})
+    if performance_zeilen:
+        zeile += 1
+        zeile = _abschnitt(ws, zeile, "Soll-/Ist-Abweichungen")
+        zeile = _tabelle(
+            ws,
+            zeile,
+            (
+                ("Analyse", "art"),
+                ("n", "anzahl"),
+                ("Mittelwert (s)", "mittelwert_sekunden"),
+                ("Median (s)", "median_sekunden"),
+                ("Verspätet", "verspaetet"),
+                ("Planmäßig", "planmaessig"),
+                ("Vorzeitig", "vorzeitig"),
+                ("Länger", "laenger_als_geplant"),
+                ("Gleich", "gleich_geplant"),
+                ("Kürzer", "kuerzer_als_geplant"),
+            ),
+            performance_zeilen,
+            zahlenformate={"mittelwert_sekunden": "0.00", "median_sekunden": "0.00"},
+        )
+    busy = _mapping(performance.get("busy_ratio_ergebnis"))
+    busy_zeilen = [
+        dict(wert)
+        for wert in _liste(busy.get("ressourcenstatistiken"))
+        if isinstance(wert, Mapping)
+    ]
+    if busy_zeilen:
+        zeile += 1
+        zeile = _abschnitt(ws, zeile, "Ergänzende Performance · Busy Ratio")
+        zeile = _tabelle(
+            ws,
+            zeile,
+            (
+                ("Ressource", "ressource"),
+                ("n", "anzahl_gueltige_busy_ratios"),
+                ("Mittelwert", "mittelwert_busy_ratio"),
+                ("Median", "median_busy_ratio"),
+                ("Minimum", "minimum_busy_ratio"),
+                ("Maximum", "maximum_busy_ratio"),
+            ),
+            busy_zeilen,
+        )
     zeile += 1
     zeile = _abschnitt(ws, zeile, "Aktivitäts-/Ressourcenzuordnung")
     _tabelle(

@@ -53,6 +53,7 @@ from framework_mvp.domain.models import (
     Datenartefakt,
     EntitaetsanalyseErgebnis,
     Ergebnisaggregation,
+    KpiBehandlungsart,
     KpiErgebnis,
     KpiKonfiguration,
     OperandZuordnung,
@@ -79,10 +80,10 @@ from framework_mvp.domain.models import (
 from framework_mvp.infrastructure.exceptions import Importintegritaetsfehler
 from framework_mvp.infrastructure.importartefakte import ImportartefaktSpeicher
 
-AG_ARTEFAKTVERSION = 6
-AG_LESBARE_ARTEFAKTVERSIONEN = frozenset({1, 2, 3, 4, 5, AG_ARTEFAKTVERSION})
+AG_ARTEFAKTVERSION = 7
+AG_LESBARE_ARTEFAKTVERSIONEN = frozenset({1, 2, 3, 4, 5, 6, AG_ARTEFAKTVERSION})
 AG_ARTEFAKTART = "aggregierte_analyseergebnisse_a_g"
-STRUKTURIERTE_ERGEBNISVERSION = 3
+STRUKTURIERTE_ERGEBNISVERSION = 4
 
 
 def _normalisieren(wert: Any) -> Any:
@@ -169,6 +170,7 @@ class Aggregationsvorschau:
     zeitvergleich_ausfuehren: bool = False
     performance_zeitvergleich_ausfuehren: bool = False
     busy_ratio_ausfuehren: bool = False
+    vereinfachte_zeitspannen_bestaetigt: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +194,7 @@ class Aggregationskonfigurationsvorlage:
     busy_ratio_ausfuehren: bool = False
     sollzeitdaten: Sollzeitdaten | None = None
     sollzeit_tabelle: pd.DataFrame | None = None
+    vereinfachte_zeitspannen_bestaetigt: bool = False
 
 
 class ErgebnisaggregationService:
@@ -515,6 +518,7 @@ class ErgebnisaggregationService:
         performance_zeitvergleich_ausfuehren: bool = False,
         busy_ratio_konfiguration: BusyRatioKonfiguration | None = None,
         busy_ratio_ausfuehren: bool = False,
+        vereinfachte_zeitspannen_bestaetigt: bool = False,
     ) -> str:
         return _sha(
             {
@@ -537,6 +541,7 @@ class ErgebnisaggregationService:
                 "performance_zeitvergleich_ausfuehren": (performance_zeitvergleich_ausfuehren),
                 "busy_ratio_konfiguration": busy_ratio_konfiguration,
                 "busy_ratio_ausfuehren": busy_ratio_ausfuehren,
+                "vereinfachte_zeitspannen_bestaetigt": (vereinfachte_zeitspannen_bestaetigt),
             }
         )
 
@@ -562,6 +567,7 @@ class ErgebnisaggregationService:
         performance_zeitvergleich_ausfuehren: bool = False,
         busy_ratio_konfiguration: BusyRatioKonfiguration | None = None,
         busy_ratio_ausfuehren: bool = False,
+        vereinfachte_zeitspannen_bestaetigt: bool = False,
     ) -> str:
         """Erlaubt der UI, geänderte Entscheidungen vor dem Speichern zu erkennen."""
         return self._konfigurationsfingerabdruck(
@@ -582,6 +588,7 @@ class ErgebnisaggregationService:
             performance_zeitvergleich_ausfuehren,
             busy_ratio_konfiguration,
             busy_ratio_ausfuehren,
+            vereinfachte_zeitspannen_bestaetigt,
         )
 
     def vorschau(
@@ -610,6 +617,7 @@ class ErgebnisaggregationService:
         performance_zeitvergleich_ausfuehren: bool = False,
         busy_ratio_konfiguration: BusyRatioKonfiguration | None = None,
         busy_ratio_ausfuehren: bool = False,
+        vereinfachte_zeitspannen_bestaetigt: bool = False,
     ) -> Aggregationsvorschau:
         """Berechnet die drei unabhängigen Bestandteile auf tiefen Arbeitskopien."""
         basis = self.grundlage_laden(projekt_id, freigabe_id, analyse_id)
@@ -791,6 +799,7 @@ class ErgebnisaggregationService:
             basis.zwischendaten,
             basis.event_log,
             ankunftsstroeme=ankunftsstroeme,
+            vereinfachte_zeitspannen_bestaetigt=vereinfachte_zeitspannen_bestaetigt,
             datenbasis_referenzen={
                 "Q": {"datenquellen_ids": list(basis.datenquellen_ids)},
                 "R": {
@@ -830,6 +839,7 @@ class ErgebnisaggregationService:
             performance_zeitvergleich_ausfuehren,
             busy_ratio_konfiguration,
             busy_ratio_ausfuehren,
+            vereinfachte_zeitspannen_bestaetigt,
         )
         pd.testing.assert_frame_equal(basis.zwischendaten, t_original, check_dtype=True)
         pd.testing.assert_frame_equal(basis.event_log, e_original, check_dtype=True)
@@ -862,6 +872,7 @@ class ErgebnisaggregationService:
             zeitvergleich_ausfuehren,
             performance_zeitvergleich_ausfuehren,
             busy_ratio_ausfuehren,
+            vereinfachte_zeitspannen_bestaetigt,
         )
 
     def speichern(
@@ -941,6 +952,7 @@ class ErgebnisaggregationService:
             basis.zwischendaten,
             basis.event_log,
             ankunftsstroeme=vorschau.ankunftsstroeme,
+            vereinfachte_zeitspannen_bestaetigt=(vorschau.vereinfachte_zeitspannen_bestaetigt),
             datenbasis_referenzen={
                 "Q": {"datenquellen_ids": list(basis.datenquellen_ids)},
                 "R": {
@@ -1286,11 +1298,11 @@ class ErgebnisaggregationService:
             },
             "ausgewaehlte_kpi_ids": list(basis.projekt.untersuchungsauftrag.ausgewaehlte_kpi_ids),
             "kpi_definitionen_version": 2,
-            "kpi_konfigurationsversion": 2,
+            "kpi_konfigurationsversion": 3,
             "kpi_konfigurationen": vorschau.kpi_konfigurationen,
             "kpi_ergebnisse": vorschau.kpi_ergebnisse,
             "konfiguration": {
-                "version": 1,
+                "version": 2,
                 "kpi_konfigurationen": vorschau.kpi_konfigurationen,
                 "sollmodell_entscheidung": sollmodell_entscheidung,
                 "conformance_ausfuehren": vorschau.conformance_ausfuehren,
@@ -1319,6 +1331,9 @@ class ErgebnisaggregationService:
                 "entitaetstyp": vorschau.entitaetstyp,
                 "bestaetigte_warteschlangen": vorschau.bestaetigte_warteschlangen,
                 "ankunftsstroeme": vorschau.ankunftsstroeme,
+                "vereinfachte_zeitspannen_bestaetigt": (
+                    vorschau.vereinfachte_zeitspannen_bestaetigt
+                ),
                 "zeitvergleich_konfiguration": vorschau.zeitvergleich_konfiguration,
                 "zeitvergleich_ausfuehren": vorschau.zeitvergleich_ausfuehren,
                 "performance_zeitvergleich_konfiguration": (
@@ -1343,6 +1358,27 @@ class ErgebnisaggregationService:
                     )
                 ),
                 "a_c_referenz": referenzen.get("conformance_ergebnisse_a_c"),
+                "ergebnis": (
+                    {
+                        "fitness": vorschau.conformance_ergebnis.fitness,
+                        "produzierte_tokens": (vorschau.conformance_ergebnis.produzierte_tokens),
+                        "konsumierte_tokens": (vorschau.conformance_ergebnis.konsumierte_tokens),
+                        "fehlende_tokens": vorschau.conformance_ergebnis.fehlende_tokens,
+                        "verbleibende_tokens": (vorschau.conformance_ergebnis.verbleibende_tokens),
+                        "ausgewertete_faelle": (
+                            vorschau.conformance_ergebnis.konforme_faelle
+                            + vorschau.conformance_ergebnis.abweichende_faelle
+                        ),
+                        "konforme_faelle": vorschau.conformance_ergebnis.konforme_faelle,
+                        "abweichende_faelle": (vorschau.conformance_ergebnis.abweichende_faelle),
+                        "ausgeschlossene_faelle": len(
+                            vorschau.conformance_ergebnis.ausgeschlossene_faelle
+                        ),
+                        "artefaktversion": vorschau.conformance_ergebnis.artefaktversion,
+                    }
+                    if vorschau.conformance_ergebnis is not None
+                    else None
+                ),
             },
             "strukturierte_ergebnisse": {
                 "ergebnisversion": STRUKTURIERTE_ERGEBNISVERSION,
@@ -1571,6 +1607,14 @@ class ErgebnisaggregationService:
                 direkte_profilreferenz=str(wert.get("direkte_profilreferenz", "")),
                 direkte_profilkennzahl=cls._profilkennzahl_wiederherstellen(
                     wert.get("direkte_profilkennzahl")
+                ),
+                behandlungsart=KpiBehandlungsart(
+                    str(
+                        wert.get(
+                            "behandlungsart",
+                            KpiBehandlungsart.AUTOMATISCH_BERECHNEN.value,
+                        )
+                    )
                 ),
             )
         except (KeyError, TypeError, ValueError):
@@ -2011,6 +2055,14 @@ class ErgebnisaggregationService:
             ),
             sollzeitdaten=sollzeitdaten,
             sollzeit_tabelle=sollzeit_tabelle,
+            vereinfachte_zeitspannen_bestaetigt=bool(
+                konfiguration.get(
+                    "vereinfachte_zeitspannen_bestaetigt",
+                    datenauswahl.get("vereinfachte_zeitspannen_bestaetigt", False)
+                    if isinstance(datenauswahl, dict)
+                    else False,
+                )
+            ),
         )
 
     def kompatible_konfigurationsvorlage_laden(
