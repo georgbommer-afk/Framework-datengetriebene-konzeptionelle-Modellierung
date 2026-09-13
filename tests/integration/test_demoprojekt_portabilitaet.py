@@ -122,6 +122,8 @@ def test_vollstaendiges_demo_bleibt_nach_export_import_und_leerer_session_nutzba
     ).entscheidungen_der_freigabe(freigabe_id)
     assert {wert.kriterium_id for wert in entscheidungen} == {
         "q_nachvollziehbar",
+        "t_verwendbar",
+        "m_verstaendlich",
         "e_interpretierbar",
     }
     assert all(not wert.ist_mangel and wert.begruendung for wert in entscheidungen)

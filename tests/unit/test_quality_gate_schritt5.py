@@ -186,8 +186,10 @@ def _kontext(
 
 def _bestaetigungen() -> tuple[FachlicheEntscheidung, ...]:
     return (
-        FachlicheEntscheidung("q_nachvollziehbar", False, "Herkunft ist nachvollziehbar."),
-        FachlicheEntscheidung("e_interpretierbar", False, "Mindestbestandteile sind eindeutig."),
+        FachlicheEntscheidung("q_nachvollziehbar", False, ""),
+        FachlicheEntscheidung("t_verwendbar", False, ""),
+        FachlicheEntscheidung("m_verstaendlich", False, ""),
+        FachlicheEntscheidung("e_interpretierbar", False, ""),
     )
 
 
@@ -233,6 +235,12 @@ def test_vollstaendige_kette_wird_ohne_score_und_ohne_mutation_freigabefaehig() 
 
     assert ergebnis.freigabe_moeglich
     assert {wert.bereich for wert in ergebnis.befunde} == set(QualityGateBereich)
+    assert {
+        wert.kriterium_id
+        for wert in ergebnis.befunde
+        if wert.status is QualityGateStatus.FACHLICH_BEGRUENDET_KEIN_MANGEL
+    } == {"q_nachvollziehbar", "t_verwendbar", "m_verstaendlich", "e_interpretierbar"}
+    assert all(not wert.anmerkung for wert in ergebnis.entscheidungen)
     assert not ergebnis.rueckspruenge
     assert not hasattr(ergebnis, "score")
     pd.testing.assert_frame_equal(kontext.event_log.zwischendaten, t_vorher)
@@ -266,7 +274,7 @@ def test_fehlende_und_uninterpretierbare_e_werte_bleiben_getrennt_und_blockieren
     assert nach_id["e_zeit_fehlt"].betroffene_ereignisse == 1
     assert nach_id["e_zeit_uninterpretierbar"].betroffene_ereignisse == 1
     assert nach_id["e_wert_fehlt:case_id"].nicht_uebersteuerbar
-    assert 2 in ergebnis.rueckspruenge
+    assert ergebnis.rueckspruenge == (4,)
 
 
 def test_unbewertete_oder_als_mangel_bewertete_fachfrage_verhindert_freigabe() -> None:
@@ -287,7 +295,7 @@ def test_unbewertete_oder_als_mangel_bewertete_fachfrage_verhindert_freigabe() -
     assert mangel.rueckspruenge == (1,)
 
 
-def test_fachlich_nicht_interpretierbares_e_verwendet_begruendete_ursachenauswahl() -> None:
+def test_fachlich_nicht_interpretierbares_e_fuehrt_zur_korrektur_von_e() -> None:
     ergebnis, _ = pruefe_quality_gate(
         _kontext(),
         (
@@ -300,7 +308,7 @@ def test_fachlich_nicht_interpretierbares_e_verwendet_begruendete_ursachenauswah
             ),
         ),
     )
-    assert ergebnis.rueckspruenge == (3,)
+    assert ergebnis.rueckspruenge == (4,)
     assert (
         next(
             wert for wert in ergebnis.befunde if wert.kriterium_id == "e_interpretierbar"

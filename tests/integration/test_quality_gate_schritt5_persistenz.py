@@ -1,6 +1,8 @@
 """Persistenz-, Integritäts- und Legacy-Tests der unveränderten E*-Freigabe."""
 
+import hashlib
 import json
+import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -258,8 +260,10 @@ def _umgebung(
 
 def _entscheidungen() -> tuple[FachlicheEntscheidung, ...]:
     return (
-        FachlicheEntscheidung("q_nachvollziehbar", False, "Q ist nachvollziehbar."),
-        FachlicheEntscheidung("e_interpretierbar", False, "E ist interpretierbar."),
+        FachlicheEntscheidung("q_nachvollziehbar", False, ""),
+        FachlicheEntscheidung("t_verwendbar", False, ""),
+        FachlicheEntscheidung("m_verstaendlich", False, ""),
+        FachlicheEntscheidung("e_interpretierbar", False, ""),
     )
 
 
@@ -283,8 +287,13 @@ def test_e_wird_idempotent_ohne_qualitaets_csv_als_identische_referenz_freigegeb
     qualitaetsordner = tmp_path / "workspace" / "projects" / str(projekt_id) / "quality"
     assert [wert.suffix for wert in qualitaetsordner.iterdir()] == [".json"]
     report = json.loads(speicher.lesen(freigabe.relativer_report_pfad))
+    assert report["artefaktversion"] == 3
     assert report["artefaktart"] == "quality_gate_freigabe_e_stern"
     assert report["bedeutung"].startswith("E* verweist unverändert auf E")
+    assert len(report["quality_gate_ergebnis"]["entscheidungen"]) == 4
+    assert all(
+        not wert["begruendung"] for wert in report["quality_gate_ergebnis"]["entscheidungen"]
+    )
     assert repository.fuer_projekt(projekt_id) == []
     assert repository.freigaben_fuer_projekt(projekt_id) == [freigabe]
 
@@ -310,6 +319,61 @@ def test_manipulierter_bericht_oder_geaendertes_q_entwertet_freigabe(tmp_path: P
     with pytest.raises(Importintegritaetsfehler, match="Artefaktkette wurde"):
         service.freigabe_laden(zweite_id)
     assert service.freigaben_fuer_projekt(projekt_id) == []
+
+
+def test_v2_freigabe_ohne_neue_t_und_m_bewertungen_bleibt_ladbar(tmp_path: Path) -> None:
+    service, event_logs, _, _, speicher = _umgebung(tmp_path)
+    projekt_id = event_logs.kontext.artefakt.projekt_id
+    event_id = event_logs.kontext.artefakt.event_log_id
+    freigabe = service.freigeben(uuid4(), projekt_id, event_id, _entscheidungen())
+    report = json.loads(speicher.lesen(freigabe.relativer_report_pfad))
+    report["artefaktversion"] = 2
+    report["quality_gate_ergebnis"]["entscheidungen"] = [
+        wert
+        for wert in report["quality_gate_ergebnis"]["entscheidungen"]
+        if wert["kriterium_id"] in {"q_nachvollziehbar", "e_interpretierbar"}
+    ]
+    report["quality_gate_ergebnis"]["befunde"] = [
+        wert
+        for wert in report["quality_gate_ergebnis"]["befunde"]
+        if wert["kriterium_id"] not in {"t_verwendbar", "m_verstaendlich"}
+    ]
+    report_bytes = json.dumps(
+        report, ensure_ascii=False, sort_keys=True, indent=2, default=str
+    ).encode("utf-8")
+    report_sha256 = hashlib.sha256(report_bytes).hexdigest()
+    speicher.artefakt_ersetzen(freigabe.relativer_report_pfad, report_bytes)
+    with sqlite3.connect(tmp_path / "framework.sqlite") as verbindung, verbindung:
+        verbindung.execute(
+            "UPDATE qualitaetspruefungen SET report_json=?, vergleich_json=? "
+            "WHERE quality_run_id=?",
+            (
+                json.dumps(report, ensure_ascii=False, default=str),
+                json.dumps(
+                    {
+                        "artefaktart": "quality_gate_freigabe_e_stern",
+                        "report_sha256": report_sha256,
+                    },
+                    ensure_ascii=False,
+                ),
+                str(freigabe.freigabe_id),
+            ),
+        )
+
+    geladen, e_stern = service.freigabe_laden(freigabe.freigabe_id)
+    entscheidungen = service.entscheidungen_der_freigabe(freigabe.freigabe_id)
+
+    assert geladen.freigabe_id == freigabe.freigabe_id
+    pd.testing.assert_frame_equal(e_stern, event_logs.kontext.ereignisse)
+    assert {wert.kriterium_id for wert in entscheidungen} == {
+        "q_nachvollziehbar",
+        "t_verwendbar",
+        "m_verstaendlich",
+        "e_interpretierbar",
+    }
+    assert not next(
+        wert for wert in entscheidungen if wert.kriterium_id == "t_verwendbar"
+    ).anmerkung
 
 
 def test_legacy_qualitaetskopie_bleibt_lesbar_aber_ist_keine_e_stern_freigabe(

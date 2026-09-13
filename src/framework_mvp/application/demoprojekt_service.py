@@ -366,6 +366,10 @@ class DemoProjektService:
                 "Datenherkunft, Arbeitsblätter und Verantwortungsbereiche sind im "
                 "Demoprojekt vollständig dokumentiert."
             ),
+            "t_verwendbar": (
+                "Die für den Event Log verwendeten Daten in T sind fachlich vollständig "
+                "und für die weitere Analyse verwendbar."
+            ),
             "m_verstaendlich": (
                 "Die bestätigte leere Mappingtabelle ist fachlich plausibel, weil die "
                 "technischen Spaltenbezeichnungen bereits eindeutig verständlich sind."
